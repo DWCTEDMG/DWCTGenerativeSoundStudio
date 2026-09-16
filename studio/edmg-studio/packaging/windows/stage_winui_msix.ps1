@@ -4,7 +4,10 @@ param(
   [switch]$RequireSigning,
   [string]$StoreIdentityFile = "",
   [string]$SideloadPublisher = "",
-  [switch]$IncludeProductionBackend
+  [switch]$IncludeProductionBackend,
+  [ValidateSet("developer", "production", "store")]
+  [string]$ReleaseMode = "developer",
+  [string]$CandidateManifest = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,8 +59,16 @@ $winUiDirectory = Join-Path $repositoryRoot "studio\edmg-studio-winui"
 $projectPath = Join-Path $winUiDirectory "EdmgStudio.WinUI.csproj"
 $manifestPath = Join-Path $winUiDirectory "Package.appxmanifest"
 $signingScript = Join-Path $PSScriptRoot "sign_release.ps1"
+$candidateScript = Join-Path $StudioDir "scripts\release-candidate.mjs"
+$storeValidator = Join-Path $StudioDir "scripts\validate-store-submission.mjs"
+if (-not $CandidateManifest) {
+  $CandidateManifest = Join-Path $StudioDir "release\candidate\release-candidate.json"
+} elseif (-not [IO.Path]::IsPathRooted($CandidateManifest)) {
+  $CandidateManifest = Join-Path $StudioDir $CandidateManifest
+}
+$CandidateManifest = [IO.Path]::GetFullPath($CandidateManifest)
 
-foreach ($requiredFile in @($projectPath, $manifestPath, $signingScript)) {
+foreach ($requiredFile in @($projectPath, $manifestPath, $signingScript, $candidateScript, $storeValidator)) {
   if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
     throw "Required WinUI packaging input was not found: $requiredFile"
   }
@@ -79,12 +90,15 @@ if ($StoreIdentityFile -and $SideloadPublisher) {
 }
 
 if ($StoreIdentityFile) {
+  if ($ReleaseMode -ne "store") { throw "StoreIdentityFile requires -ReleaseMode store." }
   if (-not [IO.Path]::IsPathRooted($StoreIdentityFile)) {
     $StoreIdentityFile = Join-Path (Get-Location) $StoreIdentityFile
   }
   if (-not (Test-Path -LiteralPath $StoreIdentityFile -PathType Leaf)) {
     throw "StoreIdentityFile was not found: $StoreIdentityFile"
   }
+  & node $storeValidator $StoreIdentityFile
+  if ($LASTEXITCODE -ne 0) { throw "Store submission metadata validation failed." }
 
   try {
     $storeIdentity = Get-Content -Raw -LiteralPath $StoreIdentityFile | ConvertFrom-Json
@@ -92,7 +106,7 @@ if ($StoreIdentityFile) {
     throw "StoreIdentityFile is not valid JSON: $($_.Exception.Message)"
   }
 
-  foreach ($property in @("identityName", "publisher", "version")) {
+  foreach ($property in @("identityName", "publisher", "version", "displayName", "publisherDisplayName")) {
     $value = [string]$storeIdentity.$property
     if ([string]::IsNullOrWhiteSpace($value) -or $value -match "(?i)<|>|replace|todo") {
       throw "StoreIdentityFile.$property must contain the exact value from Partner Center, not a placeholder."
@@ -122,8 +136,16 @@ if ($StoreIdentityFile) {
   $sourceManifest.Package.Identity.Name = [string]$storeIdentity.identityName
   $sourceManifest.Package.Identity.Publisher = [string]$storeIdentity.publisher
   $sourceManifest.Package.Identity.Version = [string]$storeIdentity.version
+  $sourceManifest.Package.Properties.DisplayName = [string]$storeIdentity.displayName
+  $sourceManifest.Package.Properties.PublisherDisplayName = [string]$storeIdentity.publisherDisplayName
 }
 
+if ($ReleaseMode -eq "production" -and -not $RequireSigning) {
+  throw "Production mode requires -RequireSigning."
+}
+if ($ReleaseMode -ne "developer" -and -not $IncludeProductionBackend) {
+  throw "$ReleaseMode mode requires -IncludeProductionBackend."
+}
 if ($RequireSigning -and -not $StoreIdentityFile -and -not $SideloadPublisher) {
   $SideloadPublisher = Get-SigningCertificateSubject ([string]$env:EDMG_CODE_SIGN_CERT) $StudioDir
 }
@@ -177,6 +199,26 @@ if ($IncludeProductionBackend) {
   }
 }
 
+$node = Get-Command "node" -ErrorAction Stop | Select-Object -First 1
+$candidateArguments = @(
+  "create", "--manifest", $CandidateManifest, "--mode", $ReleaseMode,
+  "--package-name", $expectedName, "--package-publisher", $expectedPublisher,
+  "--package-version", $expectedVersion, "--application-id", $expectedApplicationId
+)
+if ($IncludeProductionBackend) { $candidateArguments += @("--backend-manifest", (Join-Path $backendPayloadPath "backend-bundle-manifest.json")) }
+if ($StoreIdentityFile) { $candidateArguments += @("--store-metadata", $StoreIdentityFile) }
+& $node.Source $candidateScript @candidateArguments
+if ($LASTEXITCODE -ne 0) { throw "Release candidate provenance creation failed." }
+$candidate = Get-Content -Raw -LiteralPath $CandidateManifest | ConvertFrom-Json
+$candidateId = [string]$candidate.candidateId
+if ($IncludeProductionBackend) {
+  & $node.Source $candidateScript bind-backend --manifest $CandidateManifest --backend-manifest (Join-Path $backendPayloadPath "backend-bundle-manifest.json")
+  if ($LASTEXITCODE -ne 0) { throw "Backend candidate binding failed." }
+  $candidate = Get-Content -Raw -LiteralPath $CandidateManifest | ConvertFrom-Json
+}
+$candidatePayloadPath = Join-Path $buildDirectory "release-candidate.json"
+Copy-Item -LiteralPath $CandidateManifest -Destination $candidatePayloadPath -Force
+
 $dotnet = Get-Command "dotnet" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $dotnet) {
   throw "dotnet was not found. Install the required .NET SDK before staging WinUI."
@@ -197,7 +239,8 @@ $buildArguments = @(
   "-p:DebugType=None",
   "-p:DebugSymbols=false",
   "-p:AppxPackageDir=$buildDirectory\",
-  "-p:EdmgPackageManifestPath=$effectiveManifestPath"
+  "-p:EdmgPackageManifestPath=$effectiveManifestPath",
+  "-p:EdmgReleaseCandidatePath=$candidatePayloadPath"
 )
 if ($IncludeProductionBackend) {
   $buildArguments += "-p:EdmgPackagedBackendPath=$backendPayloadPath"
@@ -234,7 +277,8 @@ try {
   }
   $requiredPayloadEntries = @(
     "bin/ffmpeg.exe",
-    "bin/ffprobe.exe"
+    "bin/ffprobe.exe",
+    "release-candidate.json"
   )
   if ($IncludeProductionBackend) {
     $requiredPayloadEntries += @(
@@ -336,22 +380,10 @@ $stagedPath = Join-Path $OutputDirectory $stagedName
 Copy-Item -LiteralPath $artifact.FullName -Destination $stagedPath -Force
 
 if ($StoreIdentityFile) {
-  if ($RequireSigning) {
-    throw "Store upload artifacts are re-signed by Microsoft Store; do not request local Authenticode signing."
-  }
-  Write-Host "[stage_winui_msix] Store upload artifact is intentionally unsigned; Microsoft Store re-signs submitted MSIX/AppX packages." -ForegroundColor Yellow
-} else {
-  $signingArguments = @{
-    StudioDir = $StudioDir
-    ArtifactPaths = @($stagedPath)
-  }
-  if ($RequireSigning) {
-    $signingArguments.RequireSigning = $true
-  }
-  & $signingScript @signingArguments
-  if ($LASTEXITCODE -ne 0) {
-    throw "WinUI MSIX signing failed with exit code $LASTEXITCODE."
-  }
+  if ($RequireSigning) { throw "Store upload artifacts are re-signed by Microsoft Store; do not request local Authenticode signing." }
+  Write-Host "[stage_winui_msix] Store upload artifact is intentionally unsigned; Microsoft Store re-signs submitted packages." -ForegroundColor Yellow
+} elseif ($RequireSigning) {
+  Write-Host "[stage_winui_msix] Production bytes are intermediate; build_all.ps1 signs and finalizes both artifacts together." -ForegroundColor Yellow
 }
 
 $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -367,8 +399,12 @@ try {
 }
 
 $metadata = [ordered]@{
-  schemaVersion = 1
+  schemaVersion = 2
   createdAt = (Get-Date).ToUniversalTime().ToString("o")
+  candidateId = $candidateId
+  releaseMode = $ReleaseMode
+  distributable = $false
+  backend = if ($IncludeProductionBackend) { $candidate.candidateCore.backend } else { $null }
   package = [ordered]@{
     fileName = [IO.Path]::GetFileName($stagedPath)
     name = $expectedName
@@ -386,6 +422,10 @@ $metadataPath = Join-Path $OutputDirectory "winui-msix.json"
   (($metadata | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
   [Text.UTF8Encoding]::new($false)
 )
+Write-Host "[stage_winui_msix] Intermediate package is not candidate-bound or distributable until build_all finalization." -ForegroundColor Yellow
+if ($ReleaseMode -eq "developer") {
+  Write-Warning "Developer structural package is NON-DISTRIBUTABLE. It does not satisfy signing, timestamp, lifecycle, or Store gates."
+}
 
 Write-Host ("[stage_winui_msix] Staged: " + $stagedPath) -ForegroundColor Green
 Write-Host ("[stage_winui_msix] Metadata: " + $metadataPath) -ForegroundColor Green

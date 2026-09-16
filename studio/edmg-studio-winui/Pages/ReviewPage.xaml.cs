@@ -6,8 +6,8 @@ using System.Text.Json;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Controls;
+using EdmgStudio.WinUI.Services;
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -26,14 +26,13 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     private CancellationTokenSource? _pageCancellation;
     private CancellationTokenSource? _previewCancellation;
     private CancellationTokenSource? _synchronizedSeekCancellation;
-    private DispatcherQueueTimer? _pollTimer;
+    private IDisposable? _jobsActivityLease;
     private ProjectDto? _selectedProject;
     private ReviewArtifact? _primaryArtifact;
     private ReviewJobItem? _selectedJob;
     private ReviewReport? _selectedDirectorReport;
     private string? _referencePath;
     private bool _isBusy;
-    private bool _isPolling;
     private bool _isRestoringSelection;
     private bool _isSynchronizingTransport;
     private int _previewGeneration;
@@ -73,22 +72,17 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         _pageCancellation?.Dispose();
         _pageCancellation = new CancellationTokenSource();
 
-        _pollTimer = DispatcherQueue.CreateTimer();
-        _pollTimer.Interval = TimeSpan.FromSeconds(2.5);
-        _pollTimer.Tick += PollTimer_Tick;
-        _pollTimer.Start();
+        App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
+        _jobsActivityLease = App.Services.JobsActivity.Activate();
 
         await LoadProjectsAsync(_pageCancellation.Token);
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        if (_pollTimer is not null)
-        {
-            _pollTimer.Stop();
-            _pollTimer.Tick -= PollTimer_Tick;
-            _pollTimer = null;
-        }
+        App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
+        _jobsActivityLease?.Dispose();
+        _jobsActivityLease = null;
 
         CancelPreview();
         _synchronizedSeekCancellation?.Cancel();
@@ -370,6 +364,15 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
     private async Task LoadJobsAsync(string projectId, CancellationToken cancellationToken)
     {
+        await App.Services.JobsActivity.RefreshAsync(cancellationToken);
+        ApplyJobsSnapshot(projectId, App.Services.JobsActivity.Snapshot);
+    }
+
+    private void ApplyJobsSnapshot(string projectId, StudioJobsActivitySnapshot snapshot)
+    {
+        if (snapshot.Error is not null)
+            throw new InvalidOperationException("Studio job activity is unavailable.", snapshot.Error);
+
         string? desiredJobId = SelectedJob?.Job.Id;
         if (string.IsNullOrWhiteSpace(desiredJobId) &&
             string.Equals(App.Services.Session.SelectedJobProjectId, projectId, StringComparison.OrdinalIgnoreCase))
@@ -377,9 +380,10 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             desiredJobId = App.Services.Session.SelectedJobId;
         }
 
-        StudioJobListResponse response = await _apiClient.GetProjectJobsAsync(projectId, cancellationToken);
         Jobs.Clear();
-        foreach (StudioJob job in response.Jobs.OrderByDescending(item => item.UpdatedAt ?? item.CreatedAt))
+        foreach (StudioJob job in snapshot.Jobs
+                     .Where(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(item => item.UpdatedAt ?? item.CreatedAt))
         {
             Jobs.Add(new ReviewJobItem(job));
         }
@@ -648,6 +652,13 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     private async Task LoadComparisonPreviewsAsync(string projectId, CancellationToken pageToken)
     {
         CancelPreview();
+        PostProductionOperationGate gate = GetPostOperationGate(PostProductionOperation.Preview);
+        if (!gate.Allowed)
+        {
+            foreach (Direct3DPreviewControl preview in _comparisonPreviews.Values) preview.ShowUnsupported(gate.Explanation);
+            ShowStatus("Preview blocked", gate.Explanation, InfoBarSeverity.Error);
+            return;
+        }
         int generation = ++_previewGeneration;
         _previewCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageToken);
         CancellationToken cancellationToken = _previewCancellation.Token;
@@ -921,6 +932,14 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         }
     }
 
+    private PostProductionOperationGate GetPostOperationGate(PostProductionOperation operation)
+    {
+        if (_selectedProject is null)
+            return new(false, "Select a project before native media processing.", CompatibilityReport.Compatible);
+        return PostProductionCapabilities.Gate(
+            PostProductionContracts.Read(_selectedProject.CanonicalProject.Timeline), operation);
+    }
+
     private async Task ExportAdapterAsync(string adapter)
     {
         if (_selectedProject is null || _isBusy)
@@ -932,6 +951,8 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         SetBusy(true);
         try
         {
+            PostProductionOperationGate gate = GetPostOperationGate(PostProductionOperation.Export);
+            if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
             WorldAdapterExportResponse response = await _apiClient.ExportWorldAdapterAsync(
                 _selectedProject.Id,
                 new WorldAdapterExportRequest
@@ -1123,6 +1144,13 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         {
             try
             {
+                PostProductionOperationGate gate = GetPostOperationGate(PostProductionOperation.Preview);
+                if (!gate.Allowed)
+                {
+                    preview.ShowUnsupported(gate.Explanation);
+                    ShowStatus("Preview blocked", gate.Explanation, InfoBarSeverity.Error);
+                    return;
+                }
                 await LoadSingleComparisonPreviewAsync(
                     _selectedProject.Id,
                     artifact,
@@ -1506,32 +1534,22 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         App.Navigate(destination);
     }
 
-    private async void PollTimer_Tick(DispatcherQueueTimer sender, object args)
+    private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
     {
-        CancellationToken cancellationToken = _pageCancellation?.Token ?? new CancellationToken(canceled: true);
-        if (_isPolling || _isBusy || _selectedProject is null || cancellationToken.IsCancellationRequested)
+        if (!DispatcherQueue.TryEnqueue(() =>
         {
-            return;
-        }
-
-        string projectId = _selectedProject.Id;
-        _isPolling = true;
-        try
-        {
-            await LoadJobsAsync(projectId, cancellationToken);
-            await LoadPublishingAsync(projectId, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            ShowStatus("Background refresh paused", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Warning);
-        }
-        finally
-        {
-            _isPolling = false;
-        }
+            if (_selectedProject is null || _pageCancellation?.IsCancellationRequested != false) return;
+            try
+            {
+                ApplyJobsSnapshot(_selectedProject.Id, snapshot);
+            }
+            catch (Exception ex)
+            {
+                CrashLogger.Write("Review job activity update failed.", ex);
+                ShowStatus("Background refresh paused", StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Warning);
+            }
+        }))
+            CrashLogger.Write("Review job activity update could not be dispatched because the page dispatcher is unavailable.");
     }
 
     private void ShowStatus(string title, string message, InfoBarSeverity severity)

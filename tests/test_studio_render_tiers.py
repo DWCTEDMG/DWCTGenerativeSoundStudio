@@ -239,6 +239,15 @@ def test_internal_preflight_resolves_video_model_settings_without_mutating_froze
         ),
     }
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+    monkeypatch.setattr(
+        studio_app,
+        "_resolve_internal_video_model_selection",
+        lambda *_args, **_kwargs: (
+            "animatediff",
+            "hf_animatediff_motion_adapter_v15_2_internal",
+            installed["hf_animatediff_motion_adapter_v15_2_internal"],
+        ),
+    )
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
@@ -307,6 +316,15 @@ def test_internal_preflight_reports_motion_score_anchor_and_validation(tmp_path,
         ),
     }
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+    monkeypatch.setattr(
+        studio_app,
+        "_resolve_internal_video_model_selection",
+        lambda *_args, **_kwargs: (
+            "svd",
+            "hf_svd_xt_1_1_internal",
+            installed["hf_svd_xt_1_1_internal"],
+        ),
+    )
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,
@@ -364,6 +382,15 @@ def test_storyboard_full_motion_preflight_generates_anchor_shot_plan(tmp_path, m
         ),
     }
     monkeypatch.setattr(studio_app.models, "installed_path", lambda mid: installed.get(mid))
+    monkeypatch.setattr(
+        studio_app,
+        "_resolve_internal_video_model_selection",
+        lambda *_args, **_kwargs: (
+            "svd",
+            "hf_svd_xt_1_1_internal",
+            installed["hf_svd_xt_1_1_internal"],
+        ),
+    )
 
     preflight = studio_app._internal_render_preflight_data(
         proj.id,

@@ -46,7 +46,12 @@
     <Content Include="..\edmg-studio\electron-resources\bin\ffmpeg.exe" Condition="Exists('..\edmg-studio\electron-resources\bin\ffmpeg.exe')" Link="bin\ffmpeg.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\edmg-studio\electron-resources\bin\ffprobe.exe" Condition="Exists('..\edmg-studio\electron-resources\bin\ffprobe.exe')" Link="bin\ffprobe.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(EdmgPackagedBackendPath)\**\*" Condition="'$(EdmgPackagedBackendPath)' != ''" Exclude="$(EdmgPackagedBackendPath)\_internal\tcl86t.dll;$(EdmgPackagedBackendPath)\_internal\tk86t.dll" Link="backend\%(RecursiveDir)%(Filename)%(Extension)" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(EdmgReleaseCandidatePath)" Condition="'$(EdmgReleaseCandidatePath)' != ''" Link="release-candidate.json" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="ValidateEdmgReleaseCandidate" BeforeTargets="PrepareForBuild" Condition="'$(EdmgPackageManifestPath)' != ''">
+    <Error Condition="'$(EdmgReleaseCandidatePath)' == '' Or !Exists('$(EdmgReleaseCandidatePath)')" Text="Packaged builds require EdmgReleaseCandidatePath." />
+  </Target>
 
   <Target Name="ValidateEdmgPackagedBackend" BeforeTargets="PrepareForBuild" Condition="'$(RequireEdmgPackagedBackend)' == 'true'">
     <Error Condition="'$(EdmgPackagedBackendPath)' == ''" Text="RequireEdmgPackagedBackend=true requires EdmgPackagedBackendPath." />

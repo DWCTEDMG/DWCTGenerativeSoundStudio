@@ -277,3 +277,9 @@ Canonical packaged desktop version source:
 
 Review [KNOWN_ISSUES.md](KNOWN_ISSUES.md) before promoting any candidate; source-test success does
 not satisfy the signing, clean-machine, real-upgrade, hardware, or rollback gates.
+
+## Gate F operator evidence
+
+Before lifecycle testing, retain `release/candidate/release-candidate.json`, `release/winui-msix/winui-msix.json`, installer metadata, checksums/SBOM, and signing evidence together. Their candidate IDs, paths, byte counts, and hashes must agree. The candidate must explicitly bind install, upgrade, and rollback MSIX records (identity/version/hash/size) via `release-candidate.mjs attach-lifecycle`; these records remain outside the hashed candidate core to avoid circular hashes. Run `packaging/windows/invoke_msix_lifecycle.ps1` on a disposable clean Windows machine with the candidate manifest and signed packages. Supply `-ReceiptInput` containing real first-run native create/upload/analyze/plan/timeline/render, project persistence, and autosave/recovery observations. Select `-DataPolicy retain` or `remove`; no unrun receipt is promoted to passed.
+
+Partner Center identity, publisher, version/display values, certification result, known-issues review, and rollback evidence are supplied outside source and validated against `studio/edmg-studio-winui/StoreSubmission.schema.json`. The checked-in example is placeholder-only and intentionally fails qualification. Real signing/timestamping, clean-machine outcomes, and Partner Center certification remain external gates.

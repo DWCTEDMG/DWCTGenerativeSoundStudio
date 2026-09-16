@@ -829,22 +829,25 @@ public sealed partial class RenderPage : Page
 
         await RunBusyAsync("Running internal render preflight", async token =>
         {
-            JsonElement result = await App.Services.ApiClient.PreflightInternalRenderAsync(
+            InternalRenderPreflightResponse result = await App.Services.ApiClient.PreflightInternalRenderAsync(
                 projectId,
                 BuildInternalRenderRequest(),
                 token);
-            DisplayResult(PreflightResultBox, result);
+            DisplayResult(PreflightResultBox, JsonSerializer.SerializeToElement(result, StudioJson.Options));
             await ShowPreflightDialogAsync(result);
-            ShowStatus("Internal render preflight completed.", InfoBarSeverity.Success);
+            RenderButton.IsEnabled = result.Qualification.Ready;
+            ShowStatus(result.Qualification.Ready ? "Internal render preflight completed." : "Internal render is blocked by preflight.",
+                result.Qualification.Ready ? InfoBarSeverity.Success : InfoBarSeverity.Error);
             AppendLog("Internal render preflight completed.");
         });
     }
 
-    private async Task ShowPreflightDialogAsync(JsonElement result)
+    private async Task ShowPreflightDialogAsync(InternalRenderPreflightResponse result)
     {
-        IReadOnlyList<string> blockers = FindStringValues(result, "blockers", "errors");
-        IReadOnlyList<string> warnings = FindStringValues(result, "warnings");
-        bool blocked = blockers.Count > 0 || FindBoolean(result, "ready") == false;
+        RenderCapabilityEvidence qualification = result.Qualification;
+        IReadOnlyList<string> blockers = qualification.Blockers;
+        IReadOnlyList<string> warnings = qualification.Warnings;
+        bool blocked = !qualification.Ready;
         string state = blocked ? "Blocked" : warnings.Count > 0 ? "Warning" : "Ready";
 
         var content = new StackPanel { Spacing = 10, MaxWidth = 620 };
@@ -859,13 +862,13 @@ public sealed partial class RenderPage : Page
                 ? "Resolve the listed blockers before rendering."
                 : warnings.Count > 0 ? "Rendering can proceed after reviewing these warnings." : "This render path passed preflight."
         });
-        AddPreflightRows(content, "Blockers", blockers);
-        AddPreflightRows(content, "Warnings", warnings);
         content.Children.Add(new TextBlock
         {
-            Text = $"Engine: {ReadinessEngineText.Text}\nGPU: {RuntimeAcceleratorText.Text}\nModel: {ReadinessModelText.Text}\nEstimate: {ReadinessFrameText.Text}",
+            Text = $"Route: {qualification.Route}\nRenderer: {qualification.Renderer}\nModel: {qualification.ModelId ?? "not selected"}\nDevice: {qualification.Device ?? "unknown"}\nCapability: Level {qualification.CapabilityLevel}\nEvidence: {qualification.EvidenceReceipt ?? "none"}\nFallback: {qualification.FallbackPolicy}",
             TextWrapping = TextWrapping.Wrap
         });
+        AddPreflightRows(content, "Blockers", blockers);
+        AddPreflightRows(content, "Warnings", warnings);
 
         var dialog = new ContentDialog
         {
@@ -997,6 +1000,14 @@ public sealed partial class RenderPage : Page
                     : provider.Id == "edmg.internal"
                         ? BuildInternalRenderRequest()
                         : BuildHostedVideoRequest();
+                if (operation == "video" && provider.Id == "edmg.internal")
+                {
+                    InternalRenderPreflightResponse preflight = await App.Services.ApiClient.PreflightInternalRenderAsync(projectId, parameters, token);
+                    if (!preflight.Qualification.Ready)
+                    {
+                        throw new InvalidOperationException(string.Join(" ", preflight.Qualification.Blockers));
+                    }
+                }
                 GenerationSubmitResponse response = await App.Services.ApiClient.StartGenerationAsync(
                     projectId,
                     parameters,
@@ -1030,7 +1041,6 @@ public sealed partial class RenderPage : Page
                 BuildPipelineOptions(),
                 token);
             DisplayResult(GlobalResultBox, result);
-            await ShowPreflightDialogAsync(result);
             ShowStatus("Pipeline validation completed.", InfoBarSeverity.Success);
             AppendLog("Pipeline validation completed.");
         });
@@ -1629,12 +1639,31 @@ public sealed partial class RenderPage : Page
 
         await RunBusyAsync(action, async token =>
         {
+            PostProductionOperation? postOperation = ClassifyPostOperation(action);
+            if (postOperation is not null)
+            {
+                ProjectResponse projectResponse = await App.Services.ApiClient.GetProjectAsync(projectId, token);
+                PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+                    PostProductionContracts.Read(projectResponse.Project.CanonicalProject.Timeline), postOperation.Value);
+                if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
+            }
             JsonElement result = await operation(projectId, token);
             DisplayResult(target, result);
             ShowStatus(successMessage, InfoBarSeverity.Success);
             AppendLog(successMessage);
             await LoadQueueSummaryAsync(token);
         });
+    }
+
+    private static PostProductionOperation? ClassifyPostOperation(string action)
+    {
+        if (action.StartsWith("Exporting", StringComparison.OrdinalIgnoreCase)) return PostProductionOperation.Export;
+        if (action.Contains("preview", StringComparison.OrdinalIgnoreCase)) return PostProductionOperation.Preview;
+        string[] renderActions = ["Queueing", "Running pipeline", "Running automatic render", "Running performer workflow",
+            "Animating", "Rendering", "Running smart video", "Running standalone", "Assembling"];
+        return renderActions.Any(prefix => action.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            ? PostProductionOperation.Render
+            : null;
     }
 
     private async Task RunGlobalJsonAsync(

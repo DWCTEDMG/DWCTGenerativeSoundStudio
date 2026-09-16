@@ -388,3 +388,11 @@ Use the Studio runbook for install and recovery:
 - [docs/STUDIO_RELEASE_RUNBOOK.md](docs/STUDIO_RELEASE_RUNBOOK.md)
 - [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md)
 - [docs/PYTHON_TOOLCHAIN.md](docs/PYTHON_TOOLCHAIN.md)
+
+## Gate F candidate provenance
+
+Every Windows candidate is bound by `studio/edmg-studio/release/candidate/release-candidate.json` (`edmg-rc1-<sha256>`). The ID hashes the canonical source/build-input core; artifact hashes and evidence references are finalized afterward to avoid self-reference. The record includes commit/dirty-patch identity, x64 target, timestamp policy, tool and frozen-lock hashes, backend source/binary/payload identity, package identity, and MSIX/installer bindings. `pnpm run validate:release-candidate` verifies it.
+
+`pnpm run stage:winui:msix` is an unsigned **non-distributable developer structural** lane. Production uses `-ReleaseMode production -IncludeProductionBackend -RequireSigning`; it rejects dirty source, development identity, absent backend, candidate/hash drift, and missing signing. Store staging additionally requires externally supplied `StoreSubmission.schema.json` metadata validated by `validate:store-submission`; placeholders are rejected. Private keys and Partner Center credentials never belong in source.
+
+Repository checks cannot satisfy real Authenticode timestamping, clean-machine lifecycle execution, or Partner Center certification. Those remain blocked external gates and must have explicit receipts; planned or unrun checks are never passes.

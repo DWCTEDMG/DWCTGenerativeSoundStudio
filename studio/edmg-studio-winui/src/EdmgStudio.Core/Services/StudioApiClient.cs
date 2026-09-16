@@ -1050,13 +1050,15 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
             new JsonObject(),
             cancellationToken);
 
-    public Task<JsonElement> PreflightInternalRenderAsync(
+    public Task<InternalRenderPreflightResponse> PreflightInternalRenderAsync(
         string projectId,
         JsonElement request,
         CancellationToken cancellationToken = default) =>
-        PostJsonElementAsync(
+        SendJsonAsync<InternalRenderPreflightResponse>(
+            HttpMethod.Post,
             $"/v1/projects/{EscapeIdentifier(projectId)}/render/internal/preflight",
-            request,
+            JsonContent.Create(request),
+            true,
             cancellationToken);
 
     public Task<JsonElement> StartInternalRenderAsync(
@@ -1867,6 +1869,16 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
             new JsonObject { ["model_id"] = RequireValue(modelId, nameof(modelId)) },
             cancellationToken);
 
+    public Task<ModelRuntimeStatus> GetModelRuntimeReadinessAsync(
+        string modelId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ModelRuntimeStatus>(
+            HttpMethod.Get,
+            $"/v1/runtimes/{Uri.EscapeDataString(RequireValue(modelId, nameof(modelId)))}/readiness",
+            null,
+            true,
+            cancellationToken);
+
     public Task<ModelTaskActionResponse> SmokeTestModelRuntimeAsync(
         string modelId,
         CancellationToken cancellationToken = default) =>
@@ -1977,6 +1989,14 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
         JsonElement request,
         CancellationToken cancellationToken = default) =>
         PostJsonElementAsync("/v1/render/route/preferences", request, cancellationToken);
+
+    public Task<JsonElement> GetDirectorRuntimeSettingsAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/settings/director_runtime", null, true, cancellationToken);
+
+    public Task<JsonElement> SaveDirectorRuntimeSettingsAsync(
+        JsonElement request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync("/v1/settings/director_runtime", request, cancellationToken);
 
     public Task<JsonElement> GetTranscriptionSettingsAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/settings/transcription", null, true, cancellationToken);

@@ -282,7 +282,8 @@ def test_idempotent_generation_replay_skips_changed_preflight(tmp_path, monkeypa
     monkeypatch.setattr(
         backend_app,
         "_internal_render_preflight_data",
-        lambda _project_id, _payload: {"mode": "hosted", "model_id": "hosted", "estimated_frames": 1},
+        lambda _project_id, _payload: {"mode": "hosted", "model_id": "hosted", "estimated_frames": 1,
+                                       "provider_path": str(tmp_path / "private-provider")},
     )
 
     with TestClient(backend_app.app) as client:
@@ -291,6 +292,8 @@ def test_idempotent_generation_replay_skips_changed_preflight(tmp_path, monkeypa
             json={"idempotency_key": "accepted-request"},
         )
     existing_job_id = accepted.json()["generation"]["job_id"]
+    accepted_preflight = accepted.json()["preflight"]
+    assert "provider_path" not in accepted_preflight
 
     monkeypatch.setattr(
         backend_app,
@@ -306,7 +309,15 @@ def test_idempotent_generation_replay_skips_changed_preflight(tmp_path, monkeypa
 
     assert response.status_code == 200
     assert response.json()["generation"]["job_id"] == existing_job_id
-    assert response.json()["preflight"] == {}
+    assert response.json()["preflight"] == accepted_preflight
+    saved = jobs.get(project.id, existing_job_id)
+    assert saved.payload["_generation"]["accepted_preflight"] == accepted_preflight
+
+
+def test_empty_render_preflight_fails_closed():
+    qualification = backend_app._public_render_preflight({})["qualification"]
+    assert qualification["ready"] is False
+    assert qualification["blockers"]
 
 
 def test_hosted_generation_submission_is_durable_and_idempotent(tmp_path, monkeypatch) -> None:

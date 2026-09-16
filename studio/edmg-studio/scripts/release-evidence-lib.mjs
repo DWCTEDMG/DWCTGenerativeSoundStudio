@@ -246,7 +246,7 @@ export function readWindowsSignatureEvidence(root, artifactPaths = null) {
   const allowedPaths = Array.isArray(artifactPaths)
     ? new Set(
         artifactPaths
-          .filter((filePath) => /\.(exe|msi)$/i.test(filePath))
+          .filter((filePath) => /\.(exe|msi|msix)$/i.test(filePath))
           .map((filePath) => repoRelative(root, filePath).toLowerCase()),
       )
     : null;
@@ -497,6 +497,9 @@ export async function writeReleaseEvidence({
   }
   const evidenceDir = path.join(root, RELEASE_EVIDENCE_DIR);
   await fsp.mkdir(evidenceDir, { recursive: true });
+  const candidatePath = path.join(root, "release", "candidate", "release-candidate.json");
+  const candidate = fs.existsSync(candidatePath) ? JSON.parse(await fsp.readFile(candidatePath, "utf8")) : null;
+  if (phase === "dist" && !candidate?.candidateId) throw new Error("Distribution evidence requires release/candidate/release-candidate.json.");
 
   const resolvedProfile = resolveAcceleratorProfile({ argv: [`--profile=${profile}`], env, platform: process.platform });
   const sbomPath = path.join(evidenceDir, `python-backend-${resolvedProfile}.cyclonedx.json`);
@@ -540,6 +543,8 @@ export async function writeReleaseEvidence({
     metadata: {
       phase,
       artifactSet: artifactSet || undefined,
+      candidateId: candidate?.candidateId,
+      candidateManifestSha256: candidate ? await sha256File(candidatePath) : undefined,
       studioVersion: version || undefined,
       acceleratorProfile: resolvedProfile,
       sbom: {
@@ -580,6 +585,9 @@ export async function writeReleaseEvidence({
     updatedAt: new Date().toISOString(),
     phase,
     artifactSet: artifactSet || undefined,
+    candidateId: candidate?.candidateId,
+    candidateManifestPath: candidate ? repoRelative(root, candidatePath) : undefined,
+    candidateManifestSha256: candidate ? await sha256File(candidatePath) : undefined,
     studioVersion: version || undefined,
     acceleratorProfile: resolvedProfile,
     sbomPath: repoRelative(root, sbomPath),

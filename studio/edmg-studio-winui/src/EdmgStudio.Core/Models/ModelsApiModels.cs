@@ -81,21 +81,85 @@ public sealed class ModelCatalogueEntry
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
-public sealed record ModelRuntimeStatus(
-    [property: JsonPropertyName("package_id")] string PackageId,
-    [property: JsonPropertyName("runtime_state")] string RuntimeState,
-    [property: JsonPropertyName("installed")] bool Installed,
-    [property: JsonPropertyName("runtime_ready")] bool RuntimeReady,
-    [property: JsonPropertyName("validation_level")] int ValidationLevel,
-    [property: JsonPropertyName("adapter_ready")] bool AdapterReady,
-    [property: JsonPropertyName("smoke_test_supported")] bool SmokeTestSupported,
-    [property: JsonPropertyName("hardware_known")] bool HardwareKnown,
-    [property: JsonPropertyName("hardware_compatible")] bool HardwareCompatible,
-    [property: JsonPropertyName("error")] string? Error,
-    [property: JsonPropertyName("blockers")] IReadOnlyList<string>? Blockers)
+public sealed class ModelRuntimeStatus
 {
+    public ModelRuntimeStatus()
+    {
+    }
+
+    public ModelRuntimeStatus(
+        string packageId,
+        string runtimeState,
+        bool installed,
+        bool runtimeReady,
+        int validationLevel,
+        bool adapterReady,
+        bool smokeTestSupported,
+        bool hardwareKnown,
+        bool hardwareCompatible,
+        string? error,
+        IReadOnlyList<string>? blockers)
+    {
+        PackageId = packageId;
+        RuntimeState = runtimeState;
+        Installed = installed;
+        RuntimeReady = runtimeReady;
+        ValidationLevel = validationLevel;
+        AdapterReady = adapterReady;
+        SmokeTestSupported = smokeTestSupported;
+        HardwareKnown = hardwareKnown;
+        HardwareCompatible = hardwareCompatible;
+        Error = error;
+        Blockers = blockers;
+    }
+
+    [JsonPropertyName("package_id")]
+    public string PackageId { get; set; } = string.Empty;
+
+    [JsonPropertyName("runtime_state")]
+    public string RuntimeState { get; set; } = string.Empty;
+
+    [JsonPropertyName("installed")]
+    public bool Installed { get; set; }
+
+    [JsonPropertyName("runtime_ready")]
+    public bool RuntimeReady { get; set; }
+
+    [JsonPropertyName("validation_level")]
+    public int ValidationLevel { get; set; }
+
+    [JsonPropertyName("adapter_ready")]
+    public bool AdapterReady { get; set; }
+
+    [JsonPropertyName("smoke_test_supported")]
+    public bool SmokeTestSupported { get; set; }
+
+    [JsonPropertyName("hardware_known")]
+    public bool HardwareKnown { get; set; }
+
+    [JsonPropertyName("hardware_compatible")]
+    public bool HardwareCompatible { get; set; }
+
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+
+    [JsonPropertyName("blockers")]
+    public IReadOnlyList<string>? Blockers { get; set; }
+
     [JsonPropertyName("smoke_test_required")]
-    public bool SmokeTestRequired { get; init; } = true;
+    public bool SmokeTestRequired { get; set; } = true;
+
+    [JsonPropertyName("smoke_tested")]
+    public bool SmokeTested { get; set; }
+
+    [JsonPropertyName("device")]
+    public string? Device { get; set; }
+
+    [JsonPropertyName("fingerprint")]
+    public string? Fingerprint { get; set; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed class ModelPackEntry

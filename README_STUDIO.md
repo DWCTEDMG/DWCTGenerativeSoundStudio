@@ -96,3 +96,7 @@ they are not equal alternatives to the Studio product path:
 - `start.bat` / `start.sh` for the standalone engine UI
 - `desktop/electron/` legacy shell
 - archived prototype UI files in `examples/archive-ui/`
+
+## Native release candidate qualification
+
+Native Windows artifacts carry one canonical `release/candidate/release-candidate.json` candidate ID across backend, MSIX, installer, checksums, and lifecycle evidence. Local unsigned staging is structural and non-distributable. Public qualification is x64-only and fail-closed for a dirty tree, missing production backend, identity/hash drift, or absent signing/timestamp evidence. Exact Partner Center metadata is external; placeholder metadata, credentials, and unreturned certification cannot qualify a release.

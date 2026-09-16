@@ -14,11 +14,14 @@ import math
 import os
 import tempfile
 import wave
+from datetime import datetime, timezone
 import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+from .video_motion_quality import MIN_VIDEO_MODEL_NATIVE_FRAMES
 
 ValidationState = Literal[
     "not_installed",
@@ -29,6 +32,32 @@ ValidationState = Literal[
 
 RUNTIME_RECEIPT = "runtime-validation.json"
 REGISTRY_VERSION = 1
+_VIDEO_RUNTIME_PACKAGES = {"hf_hunyuan_video15_internal", "hf_ltx_25_distilled_internal"}
+
+
+def _valid_video_motion_evidence(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    failures = value.get("failures")
+    quartiles = value.get("motion_quartiles")
+    try:
+        frame_count = int(value["frame_count"])
+        unique_frames = int(value["perceptually_unique_frames"])
+        transitions = int(value["meaningful_transition_count"])
+        required_transitions = int(value["required_meaningful_transition_count"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    expected_transitions = max(3, math.ceil(max(0, frame_count - 1) * 0.25))
+    return bool(
+        value.get("status") == "pass"
+        and isinstance(failures, list) and not failures
+        and frame_count >= max(9, MIN_VIDEO_MODEL_NATIVE_FRAMES)
+        and unique_frames >= 4
+        and required_transitions == expected_transitions
+        and transitions >= expected_transitions
+        and isinstance(quartiles, list)
+        and len(set(quartiles)) >= 3
+    )
 
 
 @dataclass(frozen=True)
@@ -159,6 +188,7 @@ def _smoke_test_hunyuan(
     cancel_check: Callable[[], Any] | None = None, **_kwargs: Any,
 ) -> Mapping[str, Any]:
     from .internal_video_models import generate_video_model_frames
+    from .video_motion_quality import analyze_motion_images
 
     frames = generate_video_model_frames(
         engine="hunyuan_video15", video_model_dir=package_root, base_model_dir=package_root,
@@ -167,10 +197,12 @@ def _smoke_test_hunyuan(
         steps=2, cfg=1.0, seed=1, device=ModelRuntimeRegistry._device(hardware),
         dtype="bfloat16", cpu_offload=True, workspace=package_root, cancel_check=cancel_check,
     )
-    if len(frames) != 9:
-        raise RuntimeError(f"Hunyuan smoke test decoded {len(frames)} frames instead of 9")
+    motion = analyze_motion_images(frames, fps=24, minimum_frames=9)
+    if motion["status"] != "pass":
+        raise RuntimeError("Hunyuan smoke test did not demonstrate temporal motion: " + ", ".join(motion["failures"]))
     return {"success": True, "device": ModelRuntimeRegistry._device(hardware), "dtype": "bfloat16",
-            "frames": len(frames), "official_pipeline": "HunyuanVideo_1_5_Pipeline.create_pipeline"}
+            "frames": len(frames), "motion_evidence": motion,
+            "official_pipeline": "HunyuanVideo_1_5_Pipeline.create_pipeline"}
 
 
 def _validate_ltx(root: Path) -> list[str]:
@@ -202,6 +234,7 @@ def _smoke_test_ltx_25(
     **_kwargs: Any,
 ) -> Mapping[str, Any]:
     from .ltx_25_runtime import generate_ltx_frames, ltx_runtime_config
+    from .video_motion_quality import analyze_motion_images
 
     device = ModelRuntimeRegistry._device(hardware)
     frames = generate_ltx_frames(
@@ -218,9 +251,11 @@ def _smoke_test_ltx_25(
         cancel_check=cancel_check,
         timeout_s=ltx_runtime_config().smoke_timeout_s,
     )
-    if not frames:
-        raise RuntimeError("LTX-2.5 smoke test returned no decoded frames")
-    return {"success": True, "device": device, "dtype": "bfloat16", "frame_count": len(frames)}
+    motion = analyze_motion_images(frames, fps=8, minimum_frames=9)
+    if motion["status"] != "pass":
+        raise RuntimeError("LTX-2.5 smoke test did not demonstrate temporal motion: " + ", ".join(motion["failures"]))
+    return {"success": True, "device": device, "dtype": "bfloat16", "frame_count": len(frames),
+            "motion_evidence": motion}
 
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -521,21 +556,34 @@ class ModelRuntimeRegistry:
                 receipt = value if isinstance(value, dict) else {}
             except (OSError, ValueError, TypeError):
                 receipt = {}
+        receipt_result = receipt.get("result")
+        motion_evidence_valid = (
+            package_id not in _VIDEO_RUNTIME_PACKAGES
+            or (
+                isinstance(receipt_result, Mapping)
+                and _valid_video_motion_evidence(receipt_result.get("motion_evidence"))
+            )
+        )
         smoke_valid = bool(
-            receipt.get("success") is True
+            receipt.get("schema_version") == 1
+            and receipt.get("package_id") == package_id
+            and receipt.get("success") is True
             and receipt.get("validation_level") == 5
             and receipt.get("fingerprint") == fingerprint
+            and isinstance(receipt.get("receipt_timestamp"), str)
+            and bool(receipt.get("receipt_timestamp"))
+            and motion_evidence_valid
         )
-        smoke_required = package_id != "hf_hunyuan_video15_internal"
+        smoke_required = True
         if smoke_valid and descriptor.adapter_ready and not blockers:
             validation_level = 5
-        elif smoke_required and installed and descriptor.adapter_ready and validation_level == 3:
+        elif installed and descriptor.adapter_ready and validation_level == 3:
             blockers.append("Run the model runtime smoke test to initialize and qualify this installation.")
 
         runtime_ready = bool(
             descriptor.adapter_ready
             and not blockers
-            and (validation_level == 5 or (not smoke_required and validation_level >= 3))
+            and validation_level == 5
         )
         state: ValidationState = (
             "runtime_ready" if runtime_ready else
@@ -604,12 +652,16 @@ class ModelRuntimeRegistry:
         result = dict(adapter.smoke_test(package_root=package_root, hardware=effective_hardware, **kwargs))
         if result.get("success") is not True:
             raise RuntimeError(str(result.get("error") or "Runtime smoke test did not return a valid result"))
+        if package_id in _VIDEO_RUNTIME_PACKAGES and not _valid_video_motion_evidence(result.get("motion_evidence")):
+            raise RuntimeError("Video runtime smoke test did not return valid distributed temporal motion evidence")
         receipt = {
             "schema_version": 1,
             "validation_level": 5,
             "success": True,
             "fingerprint": status["fingerprint"],
             "runtime_backend": adapter.descriptor.runtime_backend,
+            "package_id": package_id,
+            "receipt_timestamp": datetime.now(timezone.utc).isoformat(),
             "result": result,
         }
         temporary = package_root / f".{RUNTIME_RECEIPT}.{os.getpid()}.tmp"

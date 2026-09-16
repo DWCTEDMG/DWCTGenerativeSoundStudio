@@ -96,6 +96,69 @@ public sealed class StudioJobsActivityServiceTests
         await client.RequestCanceled.Task.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
+    [TestMethod]
+    public async Task ReleasingFinalLeaseStopsPolling()
+    {
+        var client = new CountingJobsClient();
+        await using var service = new StudioJobsActivityService(
+            client,
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.FromMilliseconds(100));
+        IDisposable lease = service.Activate();
+        await client.WaitForRequestsAsync(2);
+
+        lease.Dispose();
+        await Task.Delay(60);
+        int settledCount = client.RequestCount;
+        await Task.Delay(80);
+
+        Assert.AreEqual(settledCount, client.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PollingContinuesUntilLastLeaseIsReleased()
+    {
+        var client = new CountingJobsClient();
+        await using var service = new StudioJobsActivityService(
+            client,
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.FromMilliseconds(100));
+        IDisposable first = service.Activate();
+        IDisposable second = service.Activate();
+        await client.WaitForRequestsAsync(1);
+
+        first.Dispose();
+        await client.WaitForRequestsAsync(2);
+        second.Dispose();
+        await Task.Delay(60);
+        int settledCount = client.RequestCount;
+        await Task.Delay(80);
+
+        Assert.AreEqual(settledCount, client.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task ReactivationWaitsForPreviousLoopAndDoesNotOverlapRequests()
+    {
+        var client = new ReentryJobsClient();
+        await using var service = new StudioJobsActivityService(
+            client,
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.FromMilliseconds(100));
+        IDisposable first = service.Activate();
+        await client.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        first.Dispose();
+        using IDisposable second = service.Activate();
+        await Task.Delay(50);
+        Assert.AreEqual(1, client.RequestCount);
+
+        client.ReleaseFirstRequest();
+        await client.SecondRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.AreEqual(1, client.MaximumConcurrentRequests);
+    }
+
     private static StudioJob CreateJob(string id, string projectId) => new(
         id,
         projectId,
@@ -163,6 +226,82 @@ public sealed class StudioJobsActivityServiceTests
 
         public Task<StudioJobListResponse> GetProjectJobsAsync(string projectId, CancellationToken cancellationToken = default) =>
             GetJobsAsync(cancellationToken);
+    }
+
+    private sealed class CountingJobsClient : IStudioJobsClient
+    {
+        private int _requestCount;
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
+        public Task<StudioJobListResponse> GetJobsAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _requestCount);
+            return Task.FromResult(new StudioJobListResponse([]));
+        }
+
+        public Task<StudioJobListResponse> GetProjectJobsAsync(string projectId, CancellationToken cancellationToken = default) =>
+            GetJobsAsync(cancellationToken);
+
+        public async Task WaitForRequestsAsync(int count)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            while (RequestCount < count)
+                await Task.Delay(5, timeout.Token);
+        }
+    }
+
+    private sealed class ReentryJobsClient : IStudioJobsClient
+    {
+        private readonly TaskCompletionSource _releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _activeRequests;
+        private int _maximumConcurrentRequests;
+        private int _requestCount;
+
+        public TaskCompletionSource FirstRequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondRequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int RequestCount => Volatile.Read(ref _requestCount);
+        public int MaximumConcurrentRequests => Volatile.Read(ref _maximumConcurrentRequests);
+
+        public async Task<StudioJobListResponse> GetJobsAsync(CancellationToken cancellationToken = default)
+        {
+            int active = Interlocked.Increment(ref _activeRequests);
+            UpdateMaximum(active);
+            int request = Interlocked.Increment(ref _requestCount);
+            try
+            {
+                if (request == 1)
+                {
+                    FirstRequestStarted.TrySetResult();
+                    await _releaseFirst.Task.WaitAsync(cancellationToken);
+                }
+                else if (request == 2)
+                {
+                    SecondRequestStarted.TrySetResult();
+                }
+
+                return new StudioJobListResponse([]);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeRequests);
+            }
+        }
+
+        public Task<StudioJobListResponse> GetProjectJobsAsync(string projectId, CancellationToken cancellationToken = default) =>
+            GetJobsAsync(cancellationToken);
+
+        public void ReleaseFirstRequest() => _releaseFirst.TrySetResult();
+
+        private void UpdateMaximum(int candidate)
+        {
+            int current;
+            while (candidate > (current = Volatile.Read(ref _maximumConcurrentRequests)) &&
+                   Interlocked.CompareExchange(ref _maximumConcurrentRequests, candidate, current) != current)
+            {
+            }
+        }
     }
 
     private sealed class SequenceJobsClient(params object[] results) : IStudioJobsClient

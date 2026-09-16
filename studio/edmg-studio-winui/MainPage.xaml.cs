@@ -1,6 +1,7 @@
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Pages;
+using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -86,8 +87,9 @@ public sealed partial class MainPage : Page
                     return;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                CrashLogger.Write("Startup setup status could not be loaded.", ex);
                 NavigateTo("setup");
                 return;
             }
@@ -126,26 +128,29 @@ public sealed partial class MainPage : Page
 
     private void BackendSupervisor_StatusChanged(object? sender, BackendStatus status)
     {
-        DispatcherQueue.TryEnqueue(
+        if (!DispatcherQueue.TryEnqueue(
             DispatcherQueuePriority.Normal,
-            async () =>
-            {
-                UpdateBackendStatus(status);
-                if (status.IsReady && ContentFrame.Content is IStudioRefreshable refreshable)
-                {
-                    try
-                    {
-                        await refreshable.RefreshAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        BackendInfoBar.Severity = InfoBarSeverity.Warning;
-                        BackendInfoBar.Title = "Backend connected; page refresh failed";
-                        BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
-                        BackendInfoBar.IsOpen = true;
-                    }
-                }
-            });
+            () => { _ = ObserveBackendStatusAsync(status); }))
+            CrashLogger.Write("Backend status update could not be dispatched because the shell dispatcher is unavailable.");
+    }
+
+    private async Task ObserveBackendStatusAsync(BackendStatus status)
+    {
+        UpdateBackendStatus(status);
+        if (!status.IsReady || ContentFrame.Content is not IStudioRefreshable refreshable) return;
+
+        try
+        {
+            await refreshable.RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            CrashLogger.Write("Backend connected, but the active page refresh failed.", ex);
+            BackendInfoBar.Severity = InfoBarSeverity.Warning;
+            BackendInfoBar.Title = "Backend connected; page refresh failed";
+            BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
+            BackendInfoBar.IsOpen = true;
+        }
     }
 
     private void UpdateBackendStatus(BackendStatus status)
@@ -275,9 +280,22 @@ public sealed partial class MainPage : Page
 
     private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
     {
-        DispatcherQueue.TryEnqueue(
+        if (!DispatcherQueue.TryEnqueue(
             DispatcherQueuePriority.Normal,
-            async () => await ApplyActivitySnapshotAsync(snapshot));
+            () => { _ = ObserveActivitySnapshotAsync(snapshot); }))
+            CrashLogger.Write("Studio activity update could not be dispatched because the shell dispatcher is unavailable.");
+    }
+
+    private async Task ObserveActivitySnapshotAsync(StudioJobsActivitySnapshot snapshot)
+    {
+        try
+        {
+            await ApplyActivitySnapshotAsync(snapshot);
+        }
+        catch (Exception ex)
+        {
+            CrashLogger.Write("Studio activity update failed.", ex);
+        }
     }
 
     private async Task RefreshActivityAsync()
@@ -296,6 +314,7 @@ public sealed partial class MainPage : Page
     {
         if (snapshot.Error is not null)
         {
+            CrashLogger.Write("Studio activity poll failed.", snapshot.Error);
             App.MainWindowInstance?.UpdateTaskbarProgress(StudioTaskbarProgress.None);
             BackendInfoBar.Severity = InfoBarSeverity.Warning;
             BackendInfoBar.Title = "Studio activity could not be refreshed";
@@ -324,6 +343,7 @@ public sealed partial class MainPage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write("Studio shell activity could not be applied.", ex);
             BackendInfoBar.Severity = InfoBarSeverity.Warning;
             BackendInfoBar.Title = "Studio activity could not be refreshed";
             BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);
@@ -353,6 +373,7 @@ public sealed partial class MainPage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write("Review badge update failed.", ex);
             BackendInfoBar.Severity = InfoBarSeverity.Warning;
             BackendInfoBar.Title = "Review badge could not be updated";
             BackendInfoBar.Message = StudioPageHelpers.GetUserFacingError(ex);

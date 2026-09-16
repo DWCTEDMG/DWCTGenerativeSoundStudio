@@ -3,7 +3,8 @@ param(
   [string[]]$ArtifactPaths = @(),
   [switch]$RequireSigning,
   [switch]$VerifyOnly,
-  [string]$SignToolPath = ""
+  [string]$SignToolPath = "",
+  [string]$CandidateManifest = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +29,15 @@ function ConvertTo-BooleanSetting($Value, [string]$Name) {
   if ($normalized -in @("1", "true", "yes", "on")) { return $true }
   if ($normalized -in @("", "0", "false", "no", "off")) { return $false }
   throw "$Name must be one of 1/0, true/false, yes/no, or on/off."
+}
+
+function Get-Sha256([string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  try {
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+  } finally { $stream.Dispose() }
 }
 
 function Get-RelativeEvidencePath($Root, $Path) {
@@ -267,6 +277,21 @@ function Write-SignatureEvidence($Root, $Run) {
   return $evidencePath
 }
 
+function Write-TimestampEvidence($Root, $SignatureEvidencePath, $Run) {
+  $timestampPath = Join-Path $Root "release\evidence\windows-timestamps.json"
+  $trusted = $Run.ok -eq $true -and @($Run.artifacts).Count -gt 0 -and @($Run.artifacts | Where-Object { $_.timestampVerified -ne $true }).Count -eq 0
+  $document = [ordered]@{
+    schemaVersion = 1
+    candidateId = $Run.candidateId
+    status = if ($trusted) { "trusted" } else { "failed" }
+    timestampUrl = $Run.timestampUrl
+    verifiedAt = $Run.completedAt
+    signingEvidenceSha256 = (Get-Sha256 $SignatureEvidencePath)
+  }
+  [IO.File]::WriteAllText($timestampPath, (($document | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+  return $timestampPath
+}
+
 $required = [bool]$RequireSigning -or (ConvertTo-BooleanSetting $env:EDMG_REQUIRE_CODE_SIGNING "EDMG_REQUIRE_CODE_SIGNING")
 $artifacts = @(Resolve-SignableArtifacts $StudioDir $ArtifactPaths)
 $certificateReference = [string]$env:EDMG_CODE_SIGN_CERT
@@ -280,9 +305,18 @@ if ($timestampUrl -notmatch "^https?://") {
   throw "EDMG_CODE_SIGN_TIMESTAMP_URL must be an absolute HTTP or HTTPS URL."
 }
 
+$candidateId = $null
+if ($CandidateManifest) {
+  if (-not (Test-Path -LiteralPath $CandidateManifest -PathType Leaf)) { throw "Candidate manifest is missing: $CandidateManifest" }
+  $candidateDocument = Get-Content -Raw -LiteralPath $CandidateManifest | ConvertFrom-Json
+  $candidateId = [string]$candidateDocument.candidateId
+  if ($candidateId -notmatch '^edmg-rc1-[a-f0-9]{64}$') { throw "Candidate manifest has an invalid candidate ID." }
+}
+
 $run = [ordered]@{
   startedAt = (Get-Date).ToUniversalTime().ToString("o")
   completedAt = $null
+  candidateId = $candidateId
   required = $required
   verifyOnly = [bool]$VerifyOnly
   certificateMode = [string]$certificate.Mode
@@ -332,6 +366,9 @@ try {
         signerThumbprint = ""
         expectedSignerThumbprint = [string]$certificate.Thumbprint
         signerNotAfter = $null
+        bytes = [long](Get-Item -LiteralPath $artifact).Length
+        sha256 = (Get-Sha256 $artifact)
+        timestampVerified = $false
       }
       $before = Get-AuthenticodeRecord $artifact
       $beforeMatchesConfiguredSigner = $certificate.Mode -eq "none" -or (
@@ -351,6 +388,7 @@ try {
         $after = $before
         $record.action = "verified"
         $record.signToolVerified = $true
+        $record.timestampVerified = $true
       } elseif ($VerifyOnly -or $certificate.Mode -eq "none") {
         $record.action = "skipped"
         $record.authenticodeStatus = $before.status
@@ -394,6 +432,9 @@ try {
         )
         $record.action = "signed"
         $record.signToolVerified = $true
+        $record.timestampVerified = $true
+        $record.bytes = [long](Get-Item -LiteralPath $artifact).Length
+        $record.sha256 = (Get-Sha256 $artifact)
         Write-Host ("[sign_release] Signed and verified: " + $relativePath) -ForegroundColor Green
       }
 
@@ -411,7 +452,9 @@ try {
 } finally {
   $run.completedAt = (Get-Date).ToUniversalTime().ToString("o")
   $evidencePath = Write-SignatureEvidence $StudioDir $run
+  $timestampEvidencePath = Write-TimestampEvidence $StudioDir $evidencePath $run
   Write-Host ("[sign_release] Signature evidence: " + $evidencePath) -ForegroundColor Cyan
+  Write-Host ("[sign_release] Timestamp evidence: " + $timestampEvidencePath) -ForegroundColor Cyan
 }
 
 exit 0

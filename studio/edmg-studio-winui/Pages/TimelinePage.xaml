@@ -1009,23 +1009,31 @@
                                             <ComboBoxItem Content="Timecode" Tag="timecode" />
                                             <ComboBoxItem Content="Clap onset" Tag="clap" />
                                             <ComboBoxItem Content="Transient onset" Tag="transient" />
-                                            <ComboBoxItem Content="Waveform correlation" Tag="waveform" />
+                                            <ComboBoxItem Content="Waveform correlation" Tag="waveform_correlation" />
                                         </ComboBox>
-                                        <ComboBox x:Name="PostSyncMediaComboBox" Header="Project media asset" DisplayMemberPath="Label"
-                                                  AutomationProperties.AutomationId="Timeline.Post.Sync.Media" />
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <ComboBox x:Name="PostSyncReferenceMediaComboBox" Grid.Column="0" Header="Reference project media" DisplayMemberPath="Label"
+                                                      AutomationProperties.AutomationId="Timeline.Post.Sync.ReferenceMedia" />
+                                            <ComboBox x:Name="PostSyncMediaComboBox" Grid.Column="1" Header="Candidate project media" DisplayMemberPath="Label"
+                                                      AutomationProperties.AutomationId="Timeline.Post.Sync.Media" />
+                                        </Grid>
                                         <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                                             <TextBox x:Name="PostReferenceTimecodeTextBox" Grid.Column="0" Header="Reference timecode"
                                                      AutomationProperties.AutomationId="Timeline.Post.Sync.ReferenceTimecode" />
                                             <TextBox x:Name="PostCandidateTimecodeTextBox" Grid.Column="1" Header="Candidate timecode"
                                                      AutomationProperties.AutomationId="Timeline.Post.Sync.CandidateTimecode" />
                                         </Grid>
-                                        <TextBlock x:Name="PostSyncLimitationText" Text="Timecode alignment is available. Audio waveform extraction is not connected in the native app."
+                                        <TextBlock x:Name="PostSyncLimitationText" Text="Timecode and bounded native WAVE alignment are available. Audio sources must be authorized project media."
                                                    TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
                                                    Style="{StaticResource StudioCaptionTextStyle}" />
-                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                        <ProgressBar x:Name="PostSyncProgressBar" IsIndeterminate="True" Visibility="Collapsed"
+                                                     AutomationProperties.AutomationId="Timeline.Post.Sync.Progress" />
+                                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
                                             <Button x:Name="PlanPostSyncButton" Grid.Column="0" Content="Plan alignment" Click="PlanPostSync_Click"
                                                     AutomationProperties.AutomationId="Timeline.Post.Sync.Plan" />
-                                            <Button x:Name="ApplyPostSyncButton" Grid.Column="1" Content="Accept and apply" Click="ApplyPostSync_Click"
+                                            <Button x:Name="CancelPostSyncButton" Grid.Column="1" Content="Cancel" Click="CancelPostSync_Click" IsEnabled="False"
+                                                    AutomationProperties.AutomationId="Timeline.Post.Sync.Cancel" />
+                                            <Button x:Name="ApplyPostSyncButton" Grid.Column="2" Content="Accept and apply" Click="ApplyPostSync_Click"
                                                     IsEnabled="False" AutomationProperties.AutomationId="Timeline.Post.Sync.Apply" />
                                         </Grid>
                                         <TextBlock x:Name="PostSyncPreviewText" Text="No alignment planned." TextWrapping="Wrap"

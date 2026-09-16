@@ -125,6 +125,29 @@ public sealed record CompatibilityReport(ImmutableArray<CompatibilityIssue> Issu
 }
 public sealed record InterchangeResult<T>(T Value, CompatibilityReport Compatibility);
 
+public static class PostProductionInterchangeConsent
+{
+    public static bool RequiresExplicitConsent(CompatibilityReport compatibility) => !compatibility.IsLossless;
+}
+
+public static class PostProductionHistory
+{
+    public static PostProductionDocument AppendInterchange(PostProductionDocument document, string format, string direction,
+        CompatibilityReport compatibility, string? fileName = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (string.IsNullOrWhiteSpace(format)) throw new ArgumentException("Interchange format is required.", nameof(format));
+        if (direction is not ("import" or "export")) throw new ArgumentException("Direction must be import or export.", nameof(direction));
+        var metadata = new JsonObject { ["completed_at"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture) };
+        if (!string.IsNullOrWhiteSpace(fileName)) metadata["file_name"] = Path.GetFileName(fileName);
+        string id = $"interchange-{Guid.NewGuid():N}";
+        return document with
+        {
+            InterchangeHistory = document.InterchangeHistory.Add(new(id, format.Trim(), direction, compatibility, metadata))
+        };
+    }
+}
+
 public static class PostProductionContracts
 {
     public const int SchemaVersion = 1;
@@ -264,7 +287,8 @@ public static class PostProductionContracts
     private static double Confidence(JsonObject n) { double value = Finite(n, "confidence"); if (value is < 0 or > 1) throw new InvalidDataException("Confidence must be between zero and one."); return value; }
     private static void SetOptional(JsonObject n, string name, string? value) { if (value is null) n.Remove(name); else n[name] = value; }
     internal static string SyncText(SyncMethod value) => value switch { SyncMethod.Timecode => "timecode", SyncMethod.Clap => "clap", SyncMethod.Transient => "transient", SyncMethod.WaveformCorrelation => "waveform_correlation", _ => throw new ArgumentOutOfRangeException(nameof(value)) };
-    private static SyncMethod ParseSync(string value) => value switch { "timecode" => SyncMethod.Timecode, "clap" => SyncMethod.Clap, "transient" => SyncMethod.Transient, "waveform_correlation" => SyncMethod.WaveformCorrelation, _ => throw new InvalidDataException("Unknown sync method.") };
+    public static SyncMethod ParseSyncSelection(string value) => value switch { "timecode" => SyncMethod.Timecode, "clap" => SyncMethod.Clap, "transient" => SyncMethod.Transient, "waveform_correlation" => SyncMethod.WaveformCorrelation, _ => throw new InvalidDataException("Unknown sync method.") };
+    private static SyncMethod ParseSync(string value) => ParseSyncSelection(value);
     private static AdrReviewStatus ParseReview(string value) => value switch { "unreviewed" => AdrReviewStatus.Unreviewed, "approved" => AdrReviewStatus.Approved, "rejected" => AdrReviewStatus.Rejected, _ => throw new InvalidDataException("Unknown ADR review status.") };
     private static string ReviewText(AdrReviewStatus value) => value.ToString().ToLowerInvariant();
     private static AudioChannelLayout ParseLayout(string value) => value switch { "mono" => AudioChannelLayout.Mono, "stereo" => AudioChannelLayout.Stereo, "5.1" => AudioChannelLayout.Surround51, "7.1" => AudioChannelLayout.Surround71, "object" => AudioChannelLayout.Object, _ => throw new InvalidDataException("Unsupported audio channel layout.") };
@@ -286,11 +310,11 @@ public static class PostAlignment
     }
 
     public static AlignmentResult StrongestOnset(ReadOnlySpan<float> reference, ReadOnlySpan<float> candidate,
-        SyncMethod method = SyncMethod.Clap, double threshold = .6)
+        SyncMethod method = SyncMethod.Clap, double threshold = .6, CancellationToken cancellationToken = default)
     {
         if (method is not (SyncMethod.Clap or SyncMethod.Transient)) throw new ArgumentException("Onset alignment requires clap or transient method.");
         if (reference.Length < 2 || candidate.Length < 2) return Insufficient("At least two samples are required.");
-        (int ri, double rv, double rs) = Peak(reference); (int ci, double cv, double cs) = Peak(candidate);
+        (int ri, double rv, double rs) = Peak(reference, cancellationToken); (int ci, double cv, double cs) = Peak(candidate, cancellationToken);
         double confidence = Math.Min(rv / Math.Max(rs, 1e-12), cv / Math.Max(cs, 1e-12));
         confidence = Math.Clamp((confidence - 1) / 4, 0, 1);
         bool ambiguous = confidence < threshold;
@@ -299,17 +323,26 @@ public static class PostAlignment
     }
 
     public static AlignmentResult WaveformCorrelation(ReadOnlySpan<float> reference, ReadOnlySpan<float> candidate,
-        int maximumShiftSamples, double threshold = .8)
+        int maximumShiftSamples, double threshold = .8, CancellationToken cancellationToken = default,
+        long maximumOperations = long.MaxValue)
     {
         if (maximumShiftSamples < 0) throw new ArgumentOutOfRangeException(nameof(maximumShiftSamples));
+        if (maximumOperations <= 0) throw new ArgumentOutOfRangeException(nameof(maximumOperations));
         if (reference.Length < 3 || candidate.Length < 3) return Insufficient("At least three samples are required.");
+        long estimatedOperations = EstimateCorrelationOperations(reference.Length, candidate.Length, maximumShiftSamples);
+        if (estimatedOperations > maximumOperations)
+            throw new InvalidOperationException($"Correlation requires {estimatedOperations} sample operations, exceeding the configured limit of {maximumOperations}.");
         double best = double.NegativeInfinity, second = double.NegativeInfinity; int bestShift = 0, overlap = 0;
         for (int shift = -maximumShiftSamples; shift <= maximumShiftSamples; shift++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int r0 = Math.Max(0, -shift), c0 = Math.Max(0, shift), count = Math.Min(reference.Length - r0, candidate.Length - c0);
             if (count < 3) continue;
-            double rMean = 0, cMean = 0; for (int i = 0; i < count; i++) { rMean += reference[r0 + i]; cMean += candidate[c0 + i]; } rMean /= count; cMean /= count;
-            double numerator = 0, rd = 0, cd = 0; for (int i = 0; i < count; i++) { double r = reference[r0 + i] - rMean, c = candidate[c0 + i] - cMean; numerator += r * c; rd += r * r; cd += c * c; }
+            double rMean = 0, cMean = 0;
+            for (int i = 0; i < count; i++) { if ((i & 0x3fff) == 0) cancellationToken.ThrowIfCancellationRequested(); rMean += reference[r0 + i]; cMean += candidate[c0 + i]; }
+            rMean /= count; cMean /= count;
+            double numerator = 0, rd = 0, cd = 0;
+            for (int i = 0; i < count; i++) { if ((i & 0x3fff) == 0) cancellationToken.ThrowIfCancellationRequested(); double r = reference[r0 + i] - rMean, c = candidate[c0 + i] - cMean; numerator += r * c; rd += r * r; cd += c * c; }
             double score = rd > 0 && cd > 0 ? numerator / Math.Sqrt(rd * cd) : 0;
             if (score > best) { second = best; best = score; bestShift = shift; overlap = count; } else if (score > second) second = score;
         }
@@ -318,7 +351,23 @@ public static class PostAlignment
         return new(bestShift, confidence, overlap, acceptable, ambiguous, acceptable ? "Normalized cross-correlation aligned." : ambiguous ? "Correlation peak is ambiguous." : "Correlation is below threshold.");
     }
 
-    private static (int Index, double Peak, double Second) Peak(ReadOnlySpan<float> data) { int index = 1; double best = 0, second = 0; for (int i = 1; i < data.Length; i++) { double value = Math.Abs(data[i] - data[i - 1]); if (value > best) { second = best; best = value; index = i; } else if (value > second) second = value; } return (index, best, second); }
+    private static long EstimateCorrelationOperations(int referenceLength, int candidateLength, int maximumShiftSamples)
+    {
+        try { return checked((2L * maximumShiftSamples + 1) * Math.Min(referenceLength, candidateLength) * 2); }
+        catch (OverflowException) { return long.MaxValue; }
+    }
+
+    private static (int Index, double Peak, double Second) Peak(ReadOnlySpan<float> data, CancellationToken cancellationToken)
+    {
+        int index = 1; double best = 0, second = 0;
+        for (int i = 1; i < data.Length; i++)
+        {
+            if ((i & 0x3fff) == 0) cancellationToken.ThrowIfCancellationRequested();
+            double value = Math.Abs(data[i] - data[i - 1]);
+            if (value > best) { second = best; best = value; index = i; } else if (value > second) second = value;
+        }
+        return (index, best, second);
+    }
     private static AlignmentResult Insufficient(string text) => new(0, 0, 0, false, true, text);
 }
 
@@ -597,6 +646,8 @@ public static class ReconformService
 }
 
 public sealed record AudioLayoutCapability(AudioChannelLayout Layout, bool Preview, bool Render, bool Export, string Detail);
+public enum PostProductionOperation { Preview, Render, Export }
+public sealed record PostProductionOperationGate(bool Allowed, string Explanation, CompatibilityReport Compatibility);
 public static class PostProductionCapabilities
 {
     public static ImmutableArray<AudioLayoutCapability> Native { get; } =
@@ -610,6 +661,27 @@ public static class PostProductionCapabilities
     public static CompatibilityReport Report(PostProductionDocument document) => new(document.AudioLayouts
         .Where(layout => layout.Layout != AudioChannelLayout.Stereo)
         .Select(layout => new CompatibilityIssue("unsupported_audio_layout", CompatibilitySeverity.Warning, $"Native preview/render/export does not support {PostProductionContracts.LayoutText(layout.Layout)}.")).ToImmutableArray());
+
+    public static PostProductionOperationGate Gate(PostProductionDocument document, PostProductionOperation operation)
+    {
+        CompatibilityReport report = Report(document);
+        AudioLayoutDescriptor? unsupported = document.AudioLayouts.FirstOrDefault(layout =>
+        {
+            AudioLayoutCapability capability = Native.Single(item => item.Layout == layout.Layout);
+            return operation switch
+            {
+                PostProductionOperation.Preview => !capability.Preview,
+                PostProductionOperation.Render => !capability.Render,
+                PostProductionOperation.Export => !capability.Export,
+                _ => true
+            };
+        });
+        return unsupported is null
+            ? new(true, string.Empty, report)
+            : new(false,
+                $"Native {operation.ToString().ToLowerInvariant()} is blocked because layout '{unsupported.Id}' is {PostProductionContracts.LayoutText(unsupported.Layout)}. Change it to stereo or use metadata-only canonical JSON interchange.",
+                report);
+    }
 }
 
 public static class PostProductionInterchange

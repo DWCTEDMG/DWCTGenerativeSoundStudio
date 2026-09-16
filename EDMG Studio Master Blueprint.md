@@ -1676,6 +1676,8 @@ Later professional phase:
 - waveform alignment
 - replace production dialogue
 
+Repository status: the WinUI Timeline source now connects bounded, cancelable clap/transient/waveform-correlation analysis to backend-authorized project WAVE media, with project/revision/document fencing and explicit acceptance. Canonical JSON, CMX3600, and ADR CSV interchange record successful history; lossy ADR CSV requires confirmation before destination selection. Native preview/render/export source paths fail closed for modeled non-stereo layouts while canonical metadata remains available. This is source/build/test qualification only; running-app picker, transport, device, and packaged-host acceptance remains external.
+
 This should use the same timeline and marker system.
 
 ---

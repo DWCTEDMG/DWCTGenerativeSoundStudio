@@ -2,7 +2,8 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
-using Microsoft.UI.Dispatching;
+using EdmgStudio.Core.Services;
+using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -11,7 +12,7 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class QueuePage : Page, IStudioRefreshable
 {
     private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
-    private readonly DispatcherQueueTimer _refreshTimer;
+    private IDisposable? _jobsActivityLease;
     private bool _isRefreshing;
     private bool _isCommandRunning;
     private bool _isRebuildingJobs;
@@ -28,9 +29,6 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         _desiredJobProjectId = App.Services.Session.SelectedJobProjectId;
         AllProjectsSwitch.IsOn = App.Services.Session.QueueAllProjects;
         StatusFilterComboBox.SelectedIndex = (int)App.Services.Session.QueueFilter;
-        _refreshTimer = DispatcherQueue.CreateTimer();
-        _refreshTimer.Interval = TimeSpan.FromSeconds(2);
-        _refreshTimer.Tick += RefreshTimer_Tick;
         Loaded += QueuePage_Loaded;
         Unloaded += QueuePage_Unloaded;
     }
@@ -46,26 +44,16 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
         SetBusy(Jobs.Count == 0);
         try
         {
-            var projectId = App.Services.Session.ActiveProjectId;
-            StudioJobListResponse response;
-            if (AllProjectsSwitch.IsOn)
-            {
-                response = await _apiClient.GetJobsAsync(cancellationToken);
-            }
-            else if (!string.IsNullOrWhiteSpace(projectId))
-            {
-                response = await _apiClient.GetProjectJobsAsync(projectId, cancellationToken);
-            }
-            else
+            string projectId = App.Services.Session.ActiveProjectId;
+            if (!AllProjectsSwitch.IsOn && string.IsNullOrWhiteSpace(projectId))
             {
                 Jobs.Clear();
                 ShowStatus("Open a project or enable All projects to browse jobs.", InfoBarSeverity.Warning);
                 return;
             }
 
-            _allJobs.Clear();
-            _allJobs.AddRange(response.Jobs);
-            ApplyFilter();
+            await App.Services.JobsActivity.RefreshAsync(cancellationToken);
+            ApplyActivitySnapshot(App.Services.JobsActivity.Snapshot);
 
             ShowStatus(
                 Jobs.Count == 0 ? "No jobs are queued for this scope." : $"{Jobs.Count} jobs loaded.",
@@ -88,18 +76,38 @@ public sealed partial class QueuePage : Page, IStudioRefreshable
 
     private async void QueuePage_Loaded(object sender, RoutedEventArgs e)
     {
+        App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
+        _jobsActivityLease = App.Services.JobsActivity.Activate();
         await RefreshAsync();
-        _refreshTimer.Start();
     }
 
-    private void QueuePage_Unloaded(object sender, RoutedEventArgs e) => _refreshTimer.Stop();
-
-    private async void RefreshTimer_Tick(DispatcherQueueTimer sender, object args)
+    private void QueuePage_Unloaded(object sender, RoutedEventArgs e)
     {
-        if (!_isCommandRunning && _allJobs.Any(job => job.IsActive))
+        App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
+        _jobsActivityLease?.Dispose();
+        _jobsActivityLease = null;
+    }
+
+    private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
+    {
+        if (!DispatcherQueue.TryEnqueue(() => ApplyActivitySnapshot(snapshot)))
+            CrashLogger.Write("Queue activity update could not be dispatched because the page dispatcher is unavailable.");
+    }
+
+    private void ApplyActivitySnapshot(StudioJobsActivitySnapshot snapshot)
+    {
+        if (snapshot.Error is not null)
         {
-            await RefreshAsync();
+            ShowStatus(StudioPageHelpers.GetErrorMessage(snapshot.Error), InfoBarSeverity.Warning);
+            return;
         }
+
+        string projectId = App.Services.Session.ActiveProjectId;
+        _allJobs.Clear();
+        _allJobs.AddRange(AllProjectsSwitch.IsOn
+            ? snapshot.Jobs
+            : snapshot.Jobs.Where(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase)));
+        ApplyFilter();
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync();

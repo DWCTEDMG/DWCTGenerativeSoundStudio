@@ -25,6 +25,7 @@ public sealed partial class OutputsPage : Page
     private readonly LatestRequestGate _previewRequests = new();
     private string? _previewTempPath;
     private readonly LatestRequestGate _refreshRequests = new();
+    private ProjectDto? _activeProject;
     private bool _isInitialized;
 
     public OutputsPage()
@@ -71,8 +72,11 @@ public sealed partial class OutputsPage : Page
         SetBusy(true);
         try
         {
+            Task<ProjectResponse> projectTask = _apiClient.GetProjectAsync(projectId, request.Token);
             JsonElement outputs = await _apiClient.GetOutputsAsync(projectId, request.Token);
+            ProjectResponse projectResponse = await projectTask;
             if (!request.IsCurrent || projectId != ActiveProjectId) return;
+            _activeProject = projectResponse.Project;
             Items.Clear();
             foreach (StudioOutputItem item in StudioOutputCatalog.Project(outputs))
             {
@@ -122,6 +126,7 @@ public sealed partial class OutputsPage : Page
         _session.SetSelectedArtifact(selected.Path);
         try
         {
+            EnsurePostOperationAllowed(PostProductionOperation.Preview);
             await _projectMediaClient.StreamProjectMediaAsync<bool>(
                 projectId,
                 selected.Path,
@@ -231,6 +236,7 @@ public sealed partial class OutputsPage : Page
 
         try
         {
+            EnsurePostOperationAllowed(PostProductionOperation.Export);
             await SaveProjectArtifactAsync(selected.Path, selected.Name, "Output file");
         }
         catch (Exception ex)
@@ -292,6 +298,7 @@ public sealed partial class OutputsPage : Page
         SetBusy(true);
         try
         {
+            EnsurePostOperationAllowed(PostProductionOperation.Export);
             double displayedVariant = UnrealVariantNumber.Value;
             if (double.IsNaN(displayedVariant) ||
                 displayedVariant < 1 ||
@@ -585,8 +592,16 @@ public sealed partial class OutputsPage : Page
         string? jobId = FindMetadataString(selected.Metadata, "job_id");
         if (string.IsNullOrWhiteSpace(jobId))
         {
-            StudioJobListResponse jobs = await _apiClient.GetProjectJobsAsync(ActiveProjectId);
-            jobId = jobs.Jobs.FirstOrDefault(job =>
+            await App.Services.JobsActivity.RefreshAsync();
+            StudioJobsActivitySnapshot snapshot = App.Services.JobsActivity.Snapshot;
+            if (snapshot.Error is not null)
+            {
+                SetStatus("Job lookup unavailable", StudioPageHelpers.GetErrorMessage(snapshot.Error), InfoBarSeverity.Warning);
+                return;
+            }
+
+            jobId = snapshot.Jobs.FirstOrDefault(job =>
+                string.Equals(job.ProjectId, ActiveProjectId, StringComparison.OrdinalIgnoreCase) &&
                 job.Status == "succeeded" &&
                 string.Equals(
                     NormalizeProjectPath(FindJobOutputPath(job.Result)),
@@ -665,11 +680,28 @@ public sealed partial class OutputsPage : Page
     private static string NormalizeProjectPath(string? path) =>
         (path ?? string.Empty).Replace('\\', '/').TrimStart('/');
 
+    private void EnsurePostOperationAllowed(PostProductionOperation operation)
+    {
+        ProjectDto project = _activeProject ?? throw new InvalidOperationException("Reload outputs before starting native media processing.");
+        PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+            PostProductionContracts.Read(project.CanonicalProject.Timeline), operation);
+        if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
+    }
+
     private void RenderButton_Click(object sender, RoutedEventArgs e)
     {
         StudioOutputItem? selected = SelectedOutput;
         if (selected?.SupportsMediaWorkflow != true)
         {
+            return;
+        }
+        try
+        {
+            EnsurePostOperationAllowed(PostProductionOperation.Render);
+        }
+        catch (InvalidOperationException exception)
+        {
+            SetStatus("Render blocked", exception.Message, InfoBarSeverity.Error);
             return;
         }
 

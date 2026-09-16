@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edmg.invalid/schemas/store-submission-v1.json",
+  "title": "EDMG Studio Partner Center submission metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "productId", "identityName", "publisher", "publisherId", "version", "displayName", "publisherDisplayName", "certification", "knownIssues", "rollback"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "productId": { "type": "string", "minLength": 1 },
+    "identityName": { "type": "string", "minLength": 1 },
+    "publisher": { "type": "string", "pattern": "^CN=" },
+    "publisherId": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]{1,5}(\\.[0-9]{1,5}){2}\\.0$" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "publisherDisplayName": { "type": "string", "minLength": 1 },
+    "certification": { "$ref": "#/$defs/evidence" },
+    "knownIssues": { "$ref": "#/$defs/evidence" },
+    "rollback": { "$ref": "#/$defs/evidence" }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidenceReference"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1 },
+        "evidenceReference": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

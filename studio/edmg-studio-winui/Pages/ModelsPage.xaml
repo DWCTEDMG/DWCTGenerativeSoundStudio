@@ -352,6 +352,58 @@
                     </Border>
 
                     <Border
+                        x:Name="QwenCard"
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Qwen Director runtime" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure llama.cpp for Qwen3-VL. Installed, configured, reachable, model-loaded, and Level-5 smoke-qualified are reported separately." TextWrapping="Wrap" />
+                            <TextBox x:Name="QwenRuntimePathBox" Header="llama.cpp runtime path" PlaceholderText="Path to llama-mtmd-cli" />
+                            <TextBox x:Name="QwenGpuLayersBox" Header="GPU layers" PlaceholderText="auto" />
+                            <NumberBox x:Name="QwenContextBox" Header="Context length" Minimum="8192" Maximum="32768" Value="8192" />
+                            <TextBlock x:Name="QwenStatusText" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Click="QwenSave_Click" Content="Save Qwen settings" />
+                                <Button Click="QwenProbe_Click" Content="Probe readiness" />
+                                <Button Click="QwenSmoke_Click" Content="Run Level-5 smoke" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
+                        x:Name="WhisperCard"
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Whisper transcription runtime" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure the managed Transformers Whisper package. Readiness is granted only after genuine audio transcription writes a matching Level-5 receipt." TextWrapping="Wrap" />
+                            <ComboBox x:Name="WhisperDeviceCombo" Header="Device" SelectedIndex="0">
+                                <ComboBoxItem Content="Auto" Tag="auto" />
+                                <ComboBoxItem Content="CUDA" Tag="cuda" />
+                                <ComboBoxItem Content="CPU" Tag="cpu" />
+                            </ComboBox>
+                            <ComboBox x:Name="WhisperComputeCombo" Header="Compute type" SelectedIndex="0">
+                                <ComboBoxItem Content="Auto" Tag="auto" />
+                                <ComboBoxItem Content="float16" Tag="float16" />
+                                <ComboBoxItem Content="int8" Tag="int8" />
+                                <ComboBoxItem Content="int8_float16" Tag="int8_float16" />
+                            </ComboBox>
+                            <TextBlock x:Name="WhisperStatusText" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Click="WhisperSave_Click" Content="Save Whisper settings" />
+                                <Button Click="WhisperProbe_Click" Content="Probe readiness" />
+                                <Button Click="WhisperSmoke_Click" Content="Run Level-5 smoke" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border
                         Padding="20"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

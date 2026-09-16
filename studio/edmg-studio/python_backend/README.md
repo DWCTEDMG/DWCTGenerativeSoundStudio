@@ -79,7 +79,9 @@ current package, dependencies, runner configuration, and selected GPU.
 Runtime status is available through `GET /v1/runtimes` and
 `GET /v1/runtimes/{model_id}/readiness`; supported real-inference qualification runs through
 `POST /v1/runtimes/{model_id}/smoke-test`. The four states are `not_installed`,
-`installed_runtime_unavailable`, `runtime_degraded`, and `runtime_ready`.
+`installed_runtime_unavailable`, `runtime_degraded`, and `runtime_ready`. Hunyuan, LTX, and every claimed managed video renderer require a matching Level-5 real-inference receipt; installation or Level-3 validation never enables rendering. SVD and AnimateDiff remain unavailable until canonical managed packages and smoke adapters can produce that evidence.
+
+Successful internal video-model output may emit temporal proof after final muxing and artifact-manifest creation. Validation binds project/revision and schedule identity to runtime/device fingerprints, media properties, motion evidence, content hash, and artifact lineage. Referenced files and hashes are verified; still, proxy, hosted, and cache-derived claims are rejected.
 
 | Package ID | Runtime adapter |
 | --- | --- |

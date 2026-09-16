@@ -212,23 +212,50 @@ Invoke-Checked "pnpm install --frozen-lockfile" {
   & $PnpmExe install --frozen-lockfile
 }
 
-Write-Host "[2/2] Building locked DirectML backend and Windows installer..."
-Invoke-Checked "pnpm run check:tooling" {
-  & $PnpmExe run check:tooling
-}
-Invoke-Checked "pnpm run dist:win" {
-  & $PnpmExe run dist:win
-}
+Write-Host "[2/2] Building and finalizing one candidate-bound Windows release..."
+Invoke-Checked "prepare locked DirectML release bundle" { & $PnpmExe run prepare:release-bundle:directml }
+Invoke-Checked "release metadata checks" { & $PnpmExe run check:release-metadata }
+$stageScript = Join-Path $StudioDir "packaging\windows\stage_winui_msix.ps1"
+& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stageScript -ReleaseMode production -IncludeProductionBackend -RequireSigning
+if ($LASTEXITCODE -ne 0) { throw "Intermediate MSIX staging failed with exit code $LASTEXITCODE" }
+$msixMetadataPath = Join-Path $StudioDir "release\winui-msix\winui-msix.json"
+$msixMetadata = Get-Content -Raw -LiteralPath $msixMetadataPath | ConvertFrom-Json
+$msixPath = Join-Path (Split-Path -Parent $msixMetadataPath) ([string]$msixMetadata.package.fileName)
+$candidatePath = Join-Path $StudioDir "release\candidate\release-candidate.json"
+$signScript = Join-Path $StudioDir "packaging\windows\sign_release.ps1"
+& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $signScript -StudioDir $StudioDir -ArtifactPaths $msixPath -RequireSigning -CandidateManifest $candidatePath
+if ($LASTEXITCODE -ne 0) { throw "MSIX signing failed with exit code $LASTEXITCODE" }
+$msixMetadata.package.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $msixPath).Hash.ToLowerInvariant()
+$msixMetadata.distributable = $false
+[IO.File]::WriteAllText($msixMetadataPath, (($msixMetadata | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+$installerScript = Join-Path $StudioDir "packaging\windows\build_winui_installer.ps1"
+& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installerScript
+if ($LASTEXITCODE -ne 0) { throw "Intermediate installer build failed with exit code $LASTEXITCODE" }
+$installerMetadataPath = Join-Path $StudioDir "dist-winui\winui-installer.json"
+$installerMetadata = Get-Content -Raw -LiteralPath $installerMetadataPath | ConvertFrom-Json
+$installerPath = Join-Path (Split-Path -Parent $installerMetadataPath) ([string]$installerMetadata.fileName)
+& $signScript -StudioDir $StudioDir -ArtifactPaths @($msixPath, $installerPath) -RequireSigning -CandidateManifest $candidatePath
+if ($LASTEXITCODE -ne 0) { throw "Joint final signing and verification failed with exit code $LASTEXITCODE" }
+$candidateScript = Join-Path $StudioDir "scripts\release-candidate.mjs"
+& $NodeExe $candidateScript attach --manifest $candidatePath --kind msix --artifact $msixPath
+if ($LASTEXITCODE -ne 0) { throw "Final MSIX candidate binding failed." }
+& $NodeExe $candidateScript attach --manifest $candidatePath --kind installer --artifact $installerPath
+if ($LASTEXITCODE -ne 0) { throw "Final installer candidate binding failed." }
+$msixMetadata.package.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $msixPath).Hash.ToLowerInvariant(); $msixMetadata.distributable = $true
+$installerMetadata.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant(); $installerMetadata.msixSha256 = $msixMetadata.package.sha256
+[IO.File]::WriteAllText($msixMetadataPath, (($msixMetadata | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($installerMetadataPath, (($installerMetadata | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+& $NodeExe $candidateScript verify-package --manifest $candidatePath --msix-metadata $msixMetadataPath --installer-metadata $installerMetadataPath
+if ($LASTEXITCODE -ne 0) { throw "Final package contract validation failed." }
+$signatureEvidence = Join-Path $StudioDir "release\evidence\windows-signatures.json"
+$timestampEvidence = Join-Path $StudioDir "release\evidence\windows-timestamps.json"
+& $NodeExe $candidateScript attach-evidence --manifest $candidatePath --kind signing --reference $signatureEvidence
+if ($LASTEXITCODE -ne 0) { throw "Signature evidence binding failed." }
+& $NodeExe $candidateScript attach-evidence --manifest $candidatePath --kind timestamp --reference $timestampEvidence
+if ($LASTEXITCODE -ne 0) { throw "Timestamp evidence binding failed." }
+& $NodeExe $candidateScript verify --manifest $candidatePath --msix $msixPath --installer $installerPath --signing-evidence $signatureEvidence --timestamp-evidence $timestampEvidence --production
+if ($LASTEXITCODE -ne 0) { throw "Independent production verification failed." }
 Pop-Location
-
-Write-Host "[post] Authenticode signing and verification (credential/requirement gated)..." -ForegroundColor Cyan
-$signScript = Join-Path $StudioDir "packaging/windows/sign_release.ps1"
-if (Test-Path $signScript) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $signScript -StudioDir $StudioDir -VerifyOnly
-  if ($LASTEXITCODE -ne 0) {
-    throw "sign_release.ps1 failed with exit code $LASTEXITCODE"
-  }
-}
 
 Write-Host "[post] Clean-machine smoke checklist..." -ForegroundColor Cyan
 $smokeScript = Join-Path $StudioDir "packaging/windows/smoke_clean_machine.ps1"

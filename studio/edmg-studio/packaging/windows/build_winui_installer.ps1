@@ -57,7 +57,12 @@ foreach ($requiredPath in @($metadataPath, $managerPath)) {
 }
 
 $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
-if ([int]$metadata.schemaVersion -ne 1 -or
+$candidatePath = Join-Path $studioDirectory "release\candidate\release-candidate.json"
+if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { throw "Release candidate manifest is missing: $candidatePath" }
+$candidate = Get-Content -Raw -LiteralPath $candidatePath | ConvertFrom-Json
+if ([int]$metadata.schemaVersion -ne 2 -or
+    [string]$metadata.candidateId -cne [string]$candidate.candidateId -or
+    -not $metadata.backend -or
     [string]$metadata.package.architecture -cne "x64" -or
     [string]$metadata.package.applicationId -cne "App" -or
     [string]$metadata.package.windowsAppSdkDeployment -cne "self-contained") {
@@ -71,11 +76,7 @@ if (-not (Test-Path -LiteralPath $msixPath -PathType Leaf)) {
 if ((Get-Sha256Hex $msixPath) -cne ([string]$metadata.package.sha256).ToLowerInvariant()) {
   throw "Staged WinUI package bytes do not match winui-msix.json."
 }
-
-$signature = Get-AuthenticodeSignature -LiteralPath $msixPath
-if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid) {
-  throw "The WinUI package must be signed by a trusted certificate before building its installer (status: $($signature.Status))."
-}
+$candidateScript = Join-Path $studioDirectory "scripts\release-candidate.mjs"
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::OpenRead($msixPath)
@@ -83,6 +84,7 @@ try {
   $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
   foreach ($requiredEntry in @(
     "AppxManifest.xml",
+    "release-candidate.json",
     "backend/edmg-studio-backend.exe",
     "backend/backend-bundle-manifest.json",
     "bin/ffmpeg.exe",
@@ -146,6 +148,7 @@ $lines += @(
   "[Files]",
   ('Source: "{0}"; DestDir: "{{app}}\package"; DestName: "{1}"; Hash: "{2}"; Flags: ignoreversion' -f (Escape-InnoValue $msixPath), (Escape-InnoValue ([IO.Path]::GetFileName($msixPath))), $msixHash),
   ('Source: "{0}"; DestDir: "{{app}}\package"; DestName: "manage_winui_package.ps1"; Flags: ignoreversion' -f (Escape-InnoValue $managerPath)),
+  ('Source: "{0}"; DestDir: "{{app}}\package"; DestName: "release-candidate.json"; Flags: ignoreversion' -f (Escape-InnoValue $candidatePath)),
   "",
   "[Icons]",
   'Name: "{group}\EDMG Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\package\manage_winui_package.ps1"" -Action Launch"',
@@ -174,13 +177,12 @@ if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
   throw "Inno Setup completed but did not produce $setupPath."
 }
 
-$signingScript = Join-Path $PSScriptRoot "sign_release.ps1"
-if (-not [string]::IsNullOrWhiteSpace([string]$env:EDMG_CODE_SIGN_CERT)) {
-  & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $signingScript `
-    -StudioDir $studioDirectory -ArtifactPaths $setupPath -RequireSigning
-  if ($LASTEXITCODE -ne 0) {
-    throw "Setup executable signing failed with exit code $LASTEXITCODE."
-  }
-}
+Write-Host "Installer is intermediate; build_all.ps1 owns candidate binding, joint signing, and production verification." -ForegroundColor Yellow
+$candidate = Get-Content -Raw -LiteralPath $candidatePath | ConvertFrom-Json
+$installerMetadata = [ordered]@{ schemaVersion=1; candidateId=[string]$candidate.candidateId; fileName=[IO.Path]::GetFileName($setupPath); sha256=(Get-Sha256Hex $setupPath); msixSha256=$msixHash; backend=$metadata.backend }
+$installerMetadataPath = Join-Path $outputPath "winui-installer.json"
+[IO.File]::WriteAllText($installerMetadataPath, (($installerMetadata | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+Write-Host "Final package contract validation is deferred until signed artifact hashes are candidate-bound." -ForegroundColor Yellow
+if ($LASTEXITCODE -ne 0) { throw "Final installer candidate/package contract validation failed." }
 
 Write-Host "WinUI installer created: $setupPath" -ForegroundColor Green

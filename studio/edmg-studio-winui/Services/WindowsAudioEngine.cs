@@ -38,7 +38,9 @@ public sealed class WindowsAudioEngine : IAudioEngine
 
     internal Task WorkerCompletion => _worker;
 
+#pragma warning disable CS0067 // Meter delivery is unavailable until AudioGraph playback executes the Core mixer.
     public event EventHandler<IReadOnlyList<AudioMeterSnapshot>>? MetersAvailable;
+#pragma warning restore CS0067
 
     public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _devices).Items;
 
@@ -46,7 +48,7 @@ public sealed class WindowsAudioEngine : IAudioEngine
     public string? FailureMessage => Volatile.Read(ref _failure) is null ? null :
         "Audio playback stopped after an engine failure. Restart Studio to reopen the audio device.";
     public string MixerProcessingCapability =>
-        "Core offline/host DSP boundary ready; Windows AudioGraph playback remains direct-route and does not execute bus/send/PDC DSP.";
+        "Core live callback adapter is ready, but Windows AudioGraph file nodes do not expose decoded per-track quantum buffers; playback remains direct-route and does not execute bus/send/PDC/automation DSP or publish processed meters.";
 
     internal static MixerProcessor CreateCoreProcessor(AudioEngineConfiguration configuration) =>
         new(MixerGraphBuilder.FromAudioRoutes(configuration), configuration.BufferFrames);

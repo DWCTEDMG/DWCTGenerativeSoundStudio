@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 
+from edmg_studio_backend.services import model_runtime_registry as runtime_module
 from edmg_studio_backend.services.hardware_memory import (
     meets_physical_ram_requirement,
     nvidia_gpu_profile,
@@ -193,7 +195,7 @@ def test_hunyuan_wsl_uses_driver_visible_cuda_without_promoting_native_runtimes(
     assert native["device"] == "cpu"
 
 
-def test_hunyuan_does_not_require_smoke_test_receipt(tmp_path, monkeypatch):
+def test_hunyuan_requires_matching_level_five_smoke_receipt(tmp_path, monkeypatch):
     monkeypatch.setenv("EDMG_HUNYUAN15_RUNNER", "wsl")
     adapter = DEFAULT_RUNTIME_REGISTRY.adapter("hf_hunyuan_video15_internal")
     subject = ModelRuntimeRegistry()
@@ -209,13 +211,115 @@ def test_hunyuan_does_not_require_smoke_test_receipt(tmp_path, monkeypatch):
         hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
     )
 
-    assert status["runtime_ready"]
-    assert status["runtime_state"] == "runtime_ready"
+    assert not status["runtime_ready"]
+    assert status["runtime_state"] == "installed_runtime_unavailable"
     assert status["validation_level"] == 3
-    assert status["smoke_test_required"] is False
+    assert status["smoke_test_required"] is True
     assert not status["smoke_tested"]
-    assert not status["blockers"]
+    assert any("smoke test" in blocker.lower() for blocker in status["blockers"])
 
+    receipt_path = tmp_path / "runtime-validation.json"
+    legacy_receipt = {
+        "schema_version": 1,
+        "package_id": "hf_hunyuan_video15_internal",
+        "receipt_timestamp": "2026-01-01T00:00:00+00:00",
+        "validation_level": 5,
+        "success": True,
+        "fingerprint": status["fingerprint"],
+    }
+    receipt_path.write_text(json.dumps(legacy_receipt), encoding="utf-8")
+    assert not subject.status(
+        "hf_hunyuan_video15_internal", package_root=tmp_path,
+        package_validation=package_validation(),
+        hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
+    )["runtime_ready"]
+
+    motion_evidence = {
+        "status": "pass", "failures": [], "frame_count": 9,
+        "perceptually_unique_frames": 9, "meaningful_transition_count": 8,
+        "required_meaningful_transition_count": 3, "motion_quartiles": [0, 1, 2, 3],
+    }
+    receipt_path.write_text(json.dumps({
+        **legacy_receipt, "result": {"motion_evidence": motion_evidence},
+    }), encoding="utf-8")
+    qualified = subject.status(
+        "hf_hunyuan_video15_internal",
+        package_root=tmp_path,
+        package_validation=package_validation(),
+        hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
+    )
+    assert qualified["runtime_ready"]
+    assert qualified["validation_level"] == 5
+    assert qualified["smoke_tested"]
+
+
+
+
+@pytest.mark.parametrize("evidence", [
+    None,
+    {},
+    {"status": "fail", "failures": ["frozen"], "frame_count": 9,
+     "perceptually_unique_frames": 9, "meaningful_transition_count": 8,
+     "required_meaningful_transition_count": 3, "motion_quartiles": [0, 1, 2, 3]},
+    {"status": "pass", "failures": [], "frame_count": 8,
+     "perceptually_unique_frames": 8, "meaningful_transition_count": 7,
+     "required_meaningful_transition_count": 3, "motion_quartiles": [0, 1, 2, 3]},
+])
+def test_video_smoke_test_refuses_invalid_motion_receipt(tmp_path, evidence):
+    adapter = DEFAULT_RUNTIME_REGISTRY.adapter("hf_hunyuan_video15_internal")
+    subject = ModelRuntimeRegistry()
+    subject.register(RuntimeAdapter(descriptor=adapter.descriptor, validate_config=lambda root: [],
+                                    smoke_test=lambda **kwargs: {"success": True, "motion_evidence": evidence}))
+    with pytest.raises(RuntimeError, match="temporal motion evidence"):
+        subject.smoke_test(
+            "hf_hunyuan_video15_internal", package_root=tmp_path,
+            package_validation=package_validation(),
+            hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
+        )
+    assert not (tmp_path / "runtime-validation.json").exists()
+
+def _motion_frames(count: int = 9) -> list[Image.Image]:
+    frames = []
+    for index in range(count):
+        frame = Image.new("RGB", (64, 64), "black")
+        ImageDraw.Draw(frame).rectangle((index * 5, 24, index * 5 + 12, 36), fill="white")
+        frames.append(frame)
+    return frames
+
+
+@pytest.mark.parametrize("smoke_name,module_name,generator_name", [
+    ("_smoke_test_hunyuan", "edmg_studio_backend.services.internal_video_models", "generate_video_model_frames"),
+    ("_smoke_test_ltx_25", "edmg_studio_backend.services.ltx_25_runtime", "generate_ltx_frames"),
+])
+def test_level_five_video_smoke_requires_distributed_motion(tmp_path, monkeypatch, smoke_name, module_name, generator_name):
+    import importlib
+
+    module = importlib.import_module(module_name)
+    if smoke_name == "_smoke_test_ltx_25":
+        monkeypatch.setattr(module, "ltx_runtime_config", lambda: type("Config", (), {"smoke_timeout_s": 30})())
+    smoke = getattr(runtime_module, smoke_name)
+
+    monkeypatch.setattr(module, generator_name, lambda **_kwargs: [Image.new("RGB", (64, 64), "black")] * 9)
+    with pytest.raises(RuntimeError, match="temporal motion"):
+        smoke(package_root=tmp_path, hardware={"backend": "cpu"})
+
+    sparse = [Image.new("RGB", (64, 64), "black") for _ in range(9)]
+    sparse[-1] = Image.new("RGB", (64, 64), "white")
+    monkeypatch.setattr(module, generator_name, lambda **_kwargs: sparse)
+    with pytest.raises(RuntimeError, match="motion_not_distributed|meaningful"):
+        smoke(package_root=tmp_path, hardware={"backend": "cpu"})
+
+    monkeypatch.setattr(module, generator_name, lambda **_kwargs: _motion_frames())
+    result = smoke(package_root=tmp_path, hardware={"backend": "cpu"})
+    assert result["motion_evidence"]["status"] == "pass"
+
+
+def test_level_five_video_smoke_rejects_insufficient_frames(tmp_path, monkeypatch):
+    from edmg_studio_backend.services import internal_video_models
+
+    monkeypatch.setattr(internal_video_models, "generate_video_model_frames", lambda **_kwargs: _motion_frames(7))
+    with pytest.raises(RuntimeError, match="too_few_frames"):
+        runtime_module._smoke_test_hunyuan(package_root=tmp_path, hardware={"backend": "cpu"})
 
 def test_opt_in_real_model_runtime_smoke_tests():
     if os.environ.get("REAL_MODEL_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:

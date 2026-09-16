@@ -216,6 +216,9 @@ $IconPath = Join-Path $StudioDir "electron-resources\app-icon.ico"
 $WinUiStageDirectory = Join-Path $StudioDir "release\winui-msix"
 $WinUiMetadataPath = Join-Path $WinUiStageDirectory "winui-msix.json"
 $WinUiManagerPath = Join-Path $PSScriptRoot "manage_winui_package.ps1"
+$CandidatePath = Join-Path $StudioDir "release\candidate\release-candidate.json"
+if (-not (Test-Path -LiteralPath $CandidatePath -PathType Leaf)) { throw "Release candidate manifest not found: $CandidatePath" }
+$Candidate = Get-Content -Raw -LiteralPath $CandidatePath | ConvertFrom-Json
 $SigningRequired = ConvertTo-BooleanSetting $env:EDMG_REQUIRE_CODE_SIGNING "EDMG_REQUIRE_CODE_SIGNING"
 $SigningConfigured = -not [string]::IsNullOrWhiteSpace([string]$env:EDMG_CODE_SIGN_CERT)
 if ($SigningRequired -and -not $SigningConfigured) {
@@ -235,7 +238,9 @@ if ($WinUiCandidates.Count -ne 1) {
 }
 $WinUiMsixPath = $WinUiCandidates[0].FullName
 $WinUiMetadata = Get-Content -Raw -LiteralPath $WinUiMetadataPath | ConvertFrom-Json
-if ([int]$WinUiMetadata.schemaVersion -ne 1 -or
+if ([int]$WinUiMetadata.schemaVersion -ne 2 -or
+    [string]$WinUiMetadata.candidateId -cne [string]$Candidate.candidateId -or
+    -not $WinUiMetadata.backend -or
     [string]$WinUiMetadata.package.fileName -cne [IO.Path]::GetFileName($WinUiMsixPath) -or
     [string]$WinUiMetadata.package.name -cne "ED2F9BCD-A580-4603-8A17-A7AD5FF6D451" -or
     [string]$WinUiMetadata.package.architecture -cne "x64" -or
@@ -251,6 +256,8 @@ if ($WinUiMsixSha256 -cne ([string]$WinUiMetadata.package.sha256).ToLowerInvaria
 }
 Invoke-WindowsSigning $StudioDir @($WinUiMsixPath) "staged WinUI MSIX" `
   -VerifyOnly -RequireSigning:$SigningEnabled
+& node (Join-Path $StudioDir "scripts\release-candidate.mjs") verify --manifest $CandidatePath --backend-manifest (Join-Path $StudioDir "electron-resources\backend\backend-bundle-manifest.json") --msix $WinUiMsixPath
+if ($LASTEXITCODE -ne 0) { throw "Canonical release candidate verification failed." }
 
 if (-not $SkipElectronDirBuild) {
   Push-Location $StudioDir
@@ -533,6 +540,8 @@ if (-not (Test-Path -LiteralPath $SetupPath -PathType Leaf)) {
 }
 Invoke-WindowsSigning $StudioDir @($SetupPath) "post-compile setup" `
   -VerifyOnly -RequireSigning:$SigningEnabled
+& node (Join-Path $StudioDir "scripts\release-candidate.mjs") attach --manifest $CandidatePath --kind installer --artifact $SetupPath
+if ($LASTEXITCODE -ne 0) { throw "External installer candidate finalization failed." }
 
 Write-Host "Done. Inno external-payload release:" -ForegroundColor Green
 Write-Host ("  Setup:   " + $SetupPath) -ForegroundColor Green

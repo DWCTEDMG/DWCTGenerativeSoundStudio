@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -485,6 +486,11 @@ def test_internal_request_resolves_distinct_server_side_tensorrt_anchor_path(tmp
     monkeypatch.setattr(app_module, "_render_provider_status", lambda _hw: {"settings": {"directml": {}}})
     monkeypatch.setattr(app_module, "_internal_model_family_for_request", lambda *_args: "sd15")
     monkeypatch.setattr(app_module, "_internal_model_hardware_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        app_module,
+        "_resolve_internal_video_model_selection",
+        lambda *_args, **_kwargs: ("svd", "hf_svd_xt_1_1_internal", svd_path),
+    )
 
     resolved = app_module._resolve_internal_render_request(
         project.id,
@@ -544,6 +550,11 @@ def test_internal_request_fails_preflight_when_tensorrt_anchor_bundle_is_missing
     monkeypatch.setattr(app_module, "_render_provider_status", lambda _hw: {"settings": {"directml": {}}})
     monkeypatch.setattr(app_module, "_internal_model_family_for_request", lambda *_args: "sd15")
     monkeypatch.setattr(app_module, "_internal_model_hardware_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        app_module,
+        "_resolve_internal_video_model_selection",
+        lambda *_args, **_kwargs: ("svd", "hf_svd_xt_1_1_internal", svd_path),
+    )
 
     with pytest.raises(UserFacingError) as exc:
         app_module._resolve_internal_render_request(
@@ -639,6 +650,8 @@ def test_anchorless_hunyuan_render_uses_native_text_to_video(tmp_path, monkeypat
     output = internal_video.render_internal_video_variant(
         ffmpeg_path="ffmpeg",
         project_dir=tmp_path,
+        project_id="revision-proof-project",
+        project_revision=37,
         variant={"index": 0, "duration_s": 4.0},
         scenes=[{"start_s": 0.0, "end_s": 4.0, "prompt": "a dancer spins"}],
         audio_path=None,
@@ -663,6 +676,9 @@ def test_anchorless_hunyuan_render_uses_native_text_to_video(tmp_path, monkeypat
     assert captured["init_image"] is None
     assert captured["base_model_dir"] == model_path
     assert captured["device"] == "cuda:0"
+    proof = json.loads(output.with_suffix(output.suffix + ".temporal-proof.json").read_text(encoding="utf-8"))
+    assert proof["project_id"] == "revision-proof-project"
+    assert proof["project_revision"] == "37"
 
 
 def test_internal_video_request_rejects_flux_still_model(tmp_path, monkeypatch) -> None:
@@ -811,7 +827,10 @@ def test_tensorrt_deforum_compatibility_route_queues_canonical_video(tmp_path, m
     assert queued.payload["parseq_applied"] is True
     assert "model_path" not in queued.payload
     assert queued.progress["total"] == 18
-    assert preflight_calls == [(project.id, queued.payload)]
+    assert len(preflight_calls) == 1
+    assert preflight_calls[0][0] == project.id
+    assert preflight_calls[0][1]["render_mode"] == queued.payload["render_mode"]
+    assert preflight_calls[0][1]["compatibility_source"] == queued.payload["compatibility_source"]
     assert response["preflight"]["settings"] == {
         "profile_width": 512,
         "profile_height": 512,
@@ -847,6 +866,10 @@ def test_public_render_preflight_recursively_removes_private_and_absolute_paths(
         }
     )
 
+    qualification = public.pop("qualification")
+    assert qualification["ready"] is False
+    assert qualification["route"] == "unknown"
+    assert qualification["blockers"] == ["Render preflight is incomplete or has an unknown route."]
     assert public == {
         "ok": True,
         "model_id": "local_sd15_tensorrt_bundle",

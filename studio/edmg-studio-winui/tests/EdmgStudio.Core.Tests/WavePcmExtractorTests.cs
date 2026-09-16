@@ -63,6 +63,100 @@ public sealed class WavePcmExtractorTests
         BinaryPrimitives.WriteInt32LittleEndian(second.AsSpan(24, 4), 44_100);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => new WaveAlignmentService().AlignAsync(
             new MemoryStream(first), new MemoryStream(second), SyncMethod.Clap));
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => new WaveAlignmentService().AlignAsync(
+            new MemoryStream(first), new MemoryStream(first), SyncMethod.Clap, requiredSampleRate: 44_100));
+    }
+
+    [TestMethod]
+    public async Task AlignmentRejectsOversizedSourcesAndShiftLimits()
+    {
+        float[] oversized = new float[WaveAlignmentService.MaximumSamplesPerSource + 1];
+        byte[] wave = Wave(1, 16, 1, oversized);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => new WaveAlignmentService().AlignAsync(
+            new MemoryStream(wave), new MemoryStream(wave), SyncMethod.Clap));
+        await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => new WaveAlignmentService().AlignAsync(
+            new MemoryStream(Wave(1, 16, 1, [0, 1, 0])), new MemoryStream(Wave(1, 16, 1, [0, 1, 0])),
+            SyncMethod.WaveformCorrelation, WaveAlignmentService.MaximumShiftSamples + 1));
+    }
+
+    [TestMethod]
+    public void AlignmentLoopsHonorCancellationAndWorkLimit()
+    {
+        float[] samples = Enumerable.Range(0, 100_000).Select(index => (float)Math.Sin(index)).ToArray();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() =>
+            PostAlignment.StrongestOnset(samples, samples, cancellationToken: cancelled.Token));
+        Assert.Throws<OperationCanceledException>(() =>
+            PostAlignment.WaveformCorrelation(samples, samples, 1, cancellationToken: cancelled.Token));
+        Assert.Throws<InvalidOperationException>(() =>
+            PostAlignment.WaveformCorrelation(samples, samples, 100, maximumOperations: 1_000));
+    }
+
+
+    [TestMethod]
+    public async Task BoundedCorrelationAlignsSecondsLong48KhzAudioWithTenSecondRequest()
+    {
+        const int length = 144_000;
+        const int shift = 12_345;
+        var random = new Random(731);
+        float[] reference = Enumerable.Range(0, length).Select(_ => (float)(random.NextDouble() * 1.8 - .9)).ToArray();
+        float[] candidate = new float[length];
+        Array.Copy(reference, 0, candidate, shift, length - shift);
+
+        AlignmentResult result = await new WaveAlignmentService().AlignAsync(
+            new MemoryStream(Wave(3, 32, 1, reference)), new MemoryStream(Wave(3, 32, 1, candidate)),
+            SyncMethod.WaveformCorrelation, WaveAlignmentService.MaximumShiftSamples, .8);
+
+        Assert.AreEqual(shift, result.OffsetSamples);
+        Assert.IsTrue(result.Acceptable, result.Diagnostics);
+        StringAssert.Contains(result.Diagnostics, "coarse-to-fine");
+    }
+
+    [TestMethod]
+    public async Task BoundedCorrelationPreservesNegativeSampleOffset()
+    {
+        const int length = 96_000;
+        const int shift = 7_321;
+        var random = new Random(914);
+        float[] candidate = Enumerable.Range(0, length).Select(_ => (float)(random.NextDouble() * 1.8 - .9)).ToArray();
+        float[] reference = new float[length];
+        Array.Copy(candidate, 0, reference, shift, length - shift);
+
+        AlignmentResult result = await new WaveAlignmentService().AlignAsync(
+            new MemoryStream(Wave(3, 32, 1, reference)), new MemoryStream(Wave(3, 32, 1, candidate)),
+            SyncMethod.WaveformCorrelation, WaveAlignmentService.MaximumShiftSamples, .8);
+
+        Assert.AreEqual(-shift, result.OffsetSamples);
+        Assert.IsTrue(result.Acceptable, result.Diagnostics);
+    }
+
+    [TestMethod]
+    public void MaximumPublishedLimitsProduceExecutableBudgetedPlan()
+    {
+        WaveAlignmentService.CorrelationPlan plan = WaveAlignmentService.PlanCorrelation(
+            WaveAlignmentService.MaximumSamplesPerSource, WaveAlignmentService.MaximumSamplesPerSource,
+            WaveAlignmentService.MaximumShiftSamples);
+
+        Assert.IsGreaterThan(1, plan.DownsampleFactor);
+        Assert.IsGreaterThan(0, plan.RefinementRadius);
+        Assert.IsLessThan(WaveAlignmentService.MaximumCorrelationOperations, plan.CoarseOperations);
+        long remaining = WaveAlignmentService.MaximumCorrelationOperations - plan.CoarseOperations;
+        Assert.IsGreaterThanOrEqualTo(4096L * (2L * plan.RefinementRadius + 1L) * 2L, remaining);
+        Assert.IsLessThanOrEqualTo(512, plan.DownsampleFactor);
+    }
+
+    [TestMethod]
+    public async Task BoundedCorrelationHonorsPreCancelledRealisticInput()
+    {
+        float[] samples = Enumerable.Range(0, 96_000).Select(index => (float)Math.Sin(index * .017)).ToArray();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => new WaveAlignmentService().AlignAsync(
+            new MemoryStream(Wave(3, 32, 1, samples)), new MemoryStream(Wave(3, 32, 1, samples)),
+            SyncMethod.WaveformCorrelation, WaveAlignmentService.MaximumShiftSamples,
+            cancellationToken: cancelled.Token));
     }
 
     internal static byte[] Wave(ushort format, ushort bits, ushort channels, IReadOnlyList<float> samples)

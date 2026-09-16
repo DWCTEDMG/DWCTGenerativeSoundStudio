@@ -6,11 +6,12 @@ public sealed record ExtractedWaveAudio(int SampleRate, int Channels, float[] In
 {
     public int FrameCount => InterleavedSamples.Length / Channels;
 
-    public float[] DownmixToMono()
+    public float[] DownmixToMono(CancellationToken cancellationToken = default)
     {
         var mono = new float[FrameCount];
         for (int frame = 0; frame < mono.Length; frame++)
         {
+            if ((frame & 0x3fff) == 0) cancellationToken.ThrowIfCancellationRequested();
             double sum = 0;
             for (int channel = 0; channel < Channels; channel++)
                 sum += InterleavedSamples[frame * Channels + channel];

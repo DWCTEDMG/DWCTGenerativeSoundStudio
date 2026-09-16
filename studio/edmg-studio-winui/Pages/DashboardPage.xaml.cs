@@ -145,14 +145,12 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
                 .OrderByDescending(project => project.UpdatedAt.Length > 0 ? project.UpdatedAt : project.CreatedAt, StringComparer.Ordinal)
                 .ToList() ?? [];
             var activeProject = ResolveActiveProject(projects);
+            await App.Services.JobsActivity.RefreshAsync(cancellationToken);
+            StudioJobsActivitySnapshot jobsSnapshot = App.Services.JobsActivity.Snapshot;
 
-            Task<LoadResult<StudioJobListResponse>>? jobsTask = null;
             Task<LoadResult<JsonElement>>? outputsTask = null;
             if (activeProject is not null)
             {
-                jobsTask = CaptureAsync(
-                    () => _apiClient.GetProjectJobsAsync(activeProject.Id, cancellationToken),
-                    "Queue");
                 outputsTask = CaptureAsync(
                     () => _apiClient.GetOutputsAsync(activeProject.Id, cancellationToken),
                     "Outputs");
@@ -160,14 +158,16 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
 
             ProjectDto[] recentProjects = [.. projects.Take(6)];
             Task<ProjectDashboardData>[] projectDataTasks = recentProjects
-                .Select(project => LoadProjectDashboardDataAsync(project, cancellationToken))
+                .Select(project => LoadProjectDashboardDataAsync(project, jobsSnapshot, cancellationToken))
                 .ToArray();
 
             var healthResult = await healthTask;
             var configResult = await configTask;
             var modelsResult = await modelsTask;
             var providersResult = await providersTask;
-            var jobsResult = jobsTask is null ? null : await jobsTask;
+            LoadResult<StudioJobListResponse>? jobsResult = activeProject is null
+                ? null
+                : ProjectJobs(activeProject, jobsSnapshot);
             var outputsResult = outputsTask is null ? null : await outputsTask;
             ProjectDashboardData[] projectData = await Task.WhenAll(projectDataTasks);
 
@@ -364,17 +364,24 @@ public sealed partial class DashboardPage : Page, INotifyPropertyChanged
 
     private async Task<ProjectDashboardData> LoadProjectDashboardDataAsync(
         ProjectDto project,
+        StudioJobsActivitySnapshot jobsSnapshot,
         CancellationToken cancellationToken)
     {
-        var jobsTask = CaptureAsync(
-            () => _apiClient.GetProjectJobsAsync(project.Id, cancellationToken),
-            $"{project.Name} jobs");
         var outputsTask = CaptureAsync(
             () => _apiClient.GetOutputsAsync(project.Id, cancellationToken),
             $"{project.Name} outputs");
-        await Task.WhenAll(jobsTask, outputsTask);
-        return new ProjectDashboardData(project, await jobsTask, await outputsTask);
+        return new ProjectDashboardData(project, ProjectJobs(project, jobsSnapshot), await outputsTask);
     }
+
+    private static LoadResult<StudioJobListResponse> ProjectJobs(
+        ProjectDto project,
+        StudioJobsActivitySnapshot snapshot) =>
+        snapshot.Error is null
+            ? new LoadResult<StudioJobListResponse>(
+                new StudioJobListResponse(snapshot.Jobs.Where(job =>
+                    string.Equals(job.ProjectId, project.Id, StringComparison.OrdinalIgnoreCase)).ToList()),
+                null)
+            : new LoadResult<StudioJobListResponse>(null, StudioPageHelpers.GetErrorMessage(snapshot.Error));
 
     private async Task RenderProjectCardsAsync(
         IReadOnlyList<ProjectDashboardData> projectData,

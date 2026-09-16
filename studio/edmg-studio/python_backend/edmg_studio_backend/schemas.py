@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -8,6 +9,45 @@ from .version import STUDIO_VERSION
 
 ConditioningMode = Literal["raw", "blur", "edge", "external"]
 DiffusionWorkflowFamily = Literal["auto", "txt2img", "img2img", "inpaint", "outpaint", "controlnet"]
+
+
+class RenderCapabilityEvidence(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    ready: bool
+    route: str
+    renderer: str
+    model_id: str | None = None
+    device: str | None = None
+    capability_level: int = Field(default=0, ge=0, le=5)
+    evidence_receipt: str | None = None
+    fallback_policy: str
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TemporalProofReceipt(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: int = Field(ge=1)
+    receipt_timestamp: datetime
+    project_id: str = Field(min_length=1)
+    project_revision: str = Field(min_length=1)
+    applied_schedule_identity: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    model_fingerprint: str = Field(min_length=1)
+    runtime_fingerprint: str = Field(min_length=1)
+    device_fingerprint: str = Field(min_length=1)
+    codec: str = Field(min_length=1)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    frame_rate: float = Field(gt=0)
+    duration_seconds: float = Field(gt=0)
+    has_audio: bool
+    motion_evidence: dict[str, Any]
+    artifact_path: str = Field(min_length=1)
+    content_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    lineage: dict[str, Any]
 
 
 class LoraSelection(BaseModel):

@@ -69,7 +69,9 @@ same project format as the compatibility client.
 The Models page distinguishes package installation from runtime readiness. Its four states are
 `not_installed`, `installed_runtime_unavailable`, `runtime_degraded`, and `runtime_ready`. Only a
 successful Level-5 real-inference smoke test produces `runtime_ready`; the backend fingerprints the
-package, dependencies, runner, hardware, and selected device in `runtime-validation.json`.
+package, dependencies, runner, hardware, and selected device in `runtime-validation.json`. Hunyuan, LTX, and every claimed managed video renderer use this rule; SVD and AnimateDiff remain unavailable until canonical real-inference qualification exists. Qwen and Whisper have first-class configuration, readiness, and smoke controls that keep installed, configured, reachable, model-loaded, and smoke-qualified states distinct.
+
+The Render page displays structured route, renderer/model, device, capability level and evidence receipt, fallback policy, warnings, and blockers, then rechecks preflight at submission and fails closed. Genuine internal video-model renders may emit hash-verified temporal proof; still, proxy, hosted, and cache-derived outputs cannot satisfy that proof.
 
 The implemented adapters cover Qwen3-VL 8B and 30B GGUF through llama.cpp, Transformers Whisper
 large-v3-turbo, LTX-2.5 Distilled through an isolated official Python runtime, and
@@ -167,6 +169,17 @@ dotnet build .\EdmgStudio.WinUI.slnx -p:Platform=x64
 Only x64 is qualified for the native preview path. Do not build or publish this project as AnyCPU.
 Normal source builds are unpackaged (`WindowsPackageType=None`); release packaging supplies
 `Package.appxmanifest` explicitly and switches the build to MSIX.
+
+## Gate F candidate qualification
+
+Run packaging from `../edmg-studio`. `pnpm run stage:winui:msix` creates an unsigned structural
+**non-distributable** developer MSIX. The production lane creates `release/candidate/release-candidate.json`,
+binds the exact Git state, frozen locks, effective package identity, validated backend payload and final
+artifact hashes, and rejects dirty source or absent signing. Store builds additionally require a private,
+externally supplied metadata file conforming to `StoreSubmission.schema.json`; the checked-in example is
+intentionally invalid. Real signing/timestamp receipts, clean-machine lifecycle evidence, upgrade and
+rollback media, and returned Partner Center certification remain external gates and must never be inferred
+from a successful source build.
 
 The current implementation/verification ledger is
 [`docs/WINUI_PARITY_STATUS.md`](../../docs/WINUI_PARITY_STATUS.md). Core tests and a

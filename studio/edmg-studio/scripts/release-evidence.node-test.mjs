@@ -163,12 +163,15 @@ test("existing SBOM reuse rejects missing and malformed evidence", async () => {
 test("dist evidence reuses the bundle SBOM by default", async () => {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "edmg-release-dist-sbom-"));
   const evidenceDir = path.join(tempRoot, "release", "evidence");
+  const candidateDir = path.join(tempRoot, "release", "candidate");
   const distDir = path.join(tempRoot, "dist");
   const pythonBackendDir = path.join(tempRoot, "python_backend");
   const sbomPath = path.join(evidenceDir, "python-backend-cuda.cyclonedx.json");
   await fsp.mkdir(evidenceDir, { recursive: true });
+  await fsp.mkdir(candidateDir, { recursive: true });
   await fsp.mkdir(distDir, { recursive: true });
   await fsp.mkdir(pythonBackendDir, { recursive: true });
+  await fsp.writeFile(path.join(candidateDir, "release-candidate.json"), `${JSON.stringify({ candidateId: `edmg-rc1-${"a".repeat(64)}` })}\n`, "utf8");
   await fsp.writeFile(
     sbomPath,
     JSON.stringify({

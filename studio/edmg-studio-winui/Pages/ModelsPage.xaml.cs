@@ -11,6 +11,8 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class ModelsPage : Page, IStudioRefreshable
 {
     private const string TensorRtModelId = "local_sd15_tensorrt_bundle";
+    private const string QwenModelId = "hf_qwen3_vl_8b_gguf_director";
+    private const string WhisperModelId = "hf_whisper_large_v3_turbo_internal";
     private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
     private readonly DispatcherQueueTimer _pollTimer;
     private readonly ObservableCollection<ModelPresentation> _visibleModels = [];
@@ -54,7 +56,9 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             UpdateStorage(response);
             await Task.WhenAll(
                 LoadHunyuanConfigAsync(cancellationToken),
-                LoadLtxConfigAsync(cancellationToken));
+                LoadLtxConfigAsync(cancellationToken),
+                LoadQwenConfigAsync(cancellationToken),
+                LoadWhisperConfigAsync(cancellationToken));
             if (_tensorRtStatus is null)
             {
                 _tensorRtStatus = await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
@@ -318,7 +322,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                 JsonElement response = await _apiClient.ProbeHunyuanRuntimeAsync(token);
                 bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
                 HunyuanStatusText.Text = ready
-                    ? "Hunyuan Linux environment passed its readiness probe and is available for rendering."
+                    ? "Hunyuan Linux environment is reachable and configured. A matching Level-5 inference smoke receipt is still required before rendering."
                     : FormatHunyuanIssues(response);
             },
             "Hunyuan Linux runtime probe completed.");
@@ -402,6 +406,66 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         return string.IsNullOrWhiteSpace(detail) ? "LTX runtime is not ready." : detail;
     }
 
+    private async Task LoadQwenConfigAsync(CancellationToken cancellationToken)
+    {
+        JsonElement response = await _apiClient.GetDirectorRuntimeSettingsAsync(cancellationToken);
+        JsonElement settings = response.GetProperty("settings");
+        SetHunyuanText(QwenRuntimePathBox, settings, "runtime_path");
+        QwenGpuLayersBox.Text = settings.TryGetProperty("gpu_layers", out JsonElement layers) ? layers.ToString() : "auto";
+        QwenContextBox.Value = JsonNumber(settings, "context_length", 8192);
+        await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, cancellationToken);
+    }
+
+    private async Task LoadWhisperConfigAsync(CancellationToken cancellationToken)
+    {
+        JsonElement response = await _apiClient.GetTranscriptionSettingsAsync(cancellationToken);
+        JsonElement settings = response.GetProperty("settings");
+        SelectTag(WhisperDeviceCombo, settings.TryGetProperty("device", out JsonElement device) ? device.GetString() : "auto");
+        SelectTag(WhisperComputeCombo, settings.TryGetProperty("compute_type", out JsonElement compute) ? compute.GetString() : "auto");
+        await UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, cancellationToken);
+    }
+
+    private static void SelectTag(ComboBox combo, string? tag)
+    {
+        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(item => string.Equals(item.Tag as string, tag, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task UpdateRuntimeStatusAsync(string modelId, TextBlock target, CancellationToken cancellationToken)
+    {
+        ModelRuntimeStatus status = await _apiClient.GetModelRuntimeReadinessAsync(modelId, cancellationToken);
+        target.Text = $"Installed: {status.Installed} | Configured: {status.ValidationLevel >= 3} | Reachable: {status.AdapterReady} | Model loaded: {status.SmokeTested} | Smoke-qualified: {status.RuntimeReady}\nDevice: {status.Device ?? "unknown"} | Capability level: {status.ValidationLevel}\n{string.Join("\n", status.Blockers ?? [])}";
+    }
+
+    private async void QwenSave_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
+    {
+        await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(new { runtime_path = QwenRuntimePathBox.Text, gpu_layers = QwenGpuLayersBox.Text, context_length = QwenContextBox.Value }), token);
+        await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token);
+    }, "Qwen Director runtime settings saved.");
+
+    private async void QwenProbe_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(token => UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token), "Qwen readiness refreshed.");
+
+    private async void QwenSmoke_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
+    {
+        ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(QwenModelId, token);
+        UpsertTask(response.Task);
+    }, "Qwen genuine inference smoke test queued.");
+
+    private async void WhisperSave_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
+    {
+        string device = (WhisperDeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+        string computeType = (WhisperComputeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+        await _apiClient.SaveTranscriptionSettingsAsync(JsonSerializer.SerializeToElement(new { provider = "transformers_whisper", model = WhisperModelId, device, compute_type = computeType }), token);
+        await UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, token);
+    }, "Whisper runtime settings saved.");
+
+    private async void WhisperProbe_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(token => UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, token), "Whisper readiness refreshed.");
+
+    private async void WhisperSmoke_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
+    {
+        ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(WhisperModelId, token);
+        UpsertTask(response.Task);
+    }, "Whisper genuine transcription smoke test queued.");
+
     private void SelectModel(ModelPresentation model)
     {
         _selectedModel = model;
@@ -448,9 +512,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         AcceptLicenseButton.IsEnabled = available && model!.RequiresLicense && !model.IsAccepted;
         BenchmarkButton.IsEnabled = available;
         SmokeTestButton.IsEnabled = available && model!.CanSmokeTest;
-        SmokeTestButton.Content = model?.RuntimeStatus?.SmokeTestRequired == false
-            ? "Run optional runtime test"
-            : "Run runtime smoke test";
+        SmokeTestButton.Content = "Run Level-5 inference smoke test";
         RevalidateButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
         UninstallButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
         RemoveButton.IsEnabled = available && model!.IsUserModel;

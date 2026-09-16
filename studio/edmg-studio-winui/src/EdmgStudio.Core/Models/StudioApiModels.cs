@@ -931,6 +931,8 @@ public static class StudioJson
 [JsonSerializable(typeof(TensorRtCanonicalStatus))]
 [JsonSerializable(typeof(TensorRtMigrationAvailability))]
 [JsonSerializable(typeof(TensorRtDiskStatus))]
+[JsonSerializable(typeof(InternalRenderPreflightResponse))]
+[JsonSerializable(typeof(RenderCapabilityEvidence))]
 [JsonSerializable(typeof(JsonElement))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
 [JsonSerializable(typeof(WorkspaceAssetsResponse))]

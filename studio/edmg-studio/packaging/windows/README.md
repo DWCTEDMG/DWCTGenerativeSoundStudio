@@ -264,3 +264,9 @@ The build script auto-detects both backend layouts used in this repo:
 `.github/workflows/package-qualification.yml` builds an unsigned structural MSIX on pull requests and retains qualification evidence for 30 days. The protected non-PR lane requires production signing credentials, fails closed when absent, and retains signed package/evidence artifacts for 90 days. An unsigned artifact is never described as production signed.
 
 Release evidence also includes `dependency-inventory.json`, normalizing available Python, Node, .NET, Go, and pinned native provenance/checksums. Lockfile omissions are represented explicitly as `unavailable`; signature and attestation status are likewise explicit.
+
+## Canonical Gate F provenance
+
+`release/candidate/release-candidate.json` is created before packaging, copied into the MSIX, and finalized with the exact MSIX and installer hashes. `winui-msix.json`, backend manifest, installer metadata, SBOM/checksum evidence, and lifecycle receipts must carry that same candidate ID. The candidate ID hashes only immutable source/build inputs; later artifact/evidence references are outside that core, avoiding self-referential hashes.
+
+`pnpm run stage:winui:msix` creates an unsigned developer structural package and labels it non-distributable. Production staging explicitly uses `-ReleaseMode production -IncludeProductionBackend -RequireSigning` and fails on dirty source, missing backend, development identity, unsigned artifacts, or mismatches. Store mode consumes an externally completed `StoreSubmission.schema.json` document; `StoreSubmission.example.json` values are placeholders and are rejected. Signing keys and Partner Center credentials are never stored here.

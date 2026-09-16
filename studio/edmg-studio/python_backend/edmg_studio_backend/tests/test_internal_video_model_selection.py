@@ -94,12 +94,12 @@ def test_auto_selection_skips_ltx_when_not_high_tier_qualified(
         lambda *args, **kwargs: {"runtime_ready": runtime_ready, "blockers": ["not qualified"]},
     )
 
-    engine, model_id, path = app_module._resolve_internal_video_model_selection(
-        {"video_model_engine": "auto"}, base_model_family="sd15"
-    )
-    assert (engine, model_id, path) == (
-        "svd", app_module.INTERNAL_SVD_VIDEO_MODEL_ID, installed[app_module.INTERNAL_SVD_VIDEO_MODEL_ID]
-    )
+    with pytest.raises(UserFacingError) as exc:
+        app_module._resolve_internal_video_model_selection(
+            {"video_model_engine": "auto"}, base_model_family="sd15"
+        )
+    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
+    assert "Level-5" in exc.value.message
 
 
 def _write_svd_layout(path: Path) -> Path:
@@ -168,20 +168,20 @@ def test_explicit_engine_model_mismatch_is_rejected_before_render(
     assert str(tmp_path) not in (exc.value.hint or "")
 
 
-def test_auto_engine_uses_selected_models_declared_engine(tmp_path: Path, monkeypatch) -> None:
-    installed = _install_lookup(tmp_path, monkeypatch)
+def test_auto_engine_rejects_selected_unqualified_renderer(tmp_path: Path, monkeypatch) -> None:
+    _install_lookup(tmp_path, monkeypatch)
 
-    engine, model_id, model_path = app_module._resolve_internal_video_model_selection(
-        {
-            "video_model_engine": "auto",
-            "video_model_id": app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
-        },
-        base_model_family="sd15",
-    )
+    with pytest.raises(UserFacingError) as exc:
+        app_module._resolve_internal_video_model_selection(
+            {
+                "video_model_engine": "auto",
+                "video_model_id": app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
+            },
+            base_model_family="sd15",
+        )
 
-    assert engine == "animatediff"
-    assert model_id == app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID
-    assert model_path == installed[model_id]
+    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
+    assert "Level-5" in exc.value.message
 
 
 def test_arbitrary_installed_model_cannot_enter_video_model_lane(tmp_path: Path, monkeypatch) -> None:
@@ -262,6 +262,38 @@ def test_qualified_hunyuan_selection_is_admitted(tmp_path: Path, monkeypatch) ->
         },
         base_model_family="sd15",
     ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
+
+
+def test_auto_selection_uses_qualified_hunyuan_when_ltx_is_unavailable(tmp_path, monkeypatch):
+    from edmg_studio_backend.services import engine_packages
+
+    installed = _install_lookup(tmp_path, monkeypatch)
+    hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
+    installed[app_module.HUNYUAN_MODEL_ID] = hunyuan
+    installed[app_module.LTX_MODEL_ID] = None
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(engine_packages, "runtime_status", lambda model_id, *args, **kwargs: {
+        "runtime_ready": model_id == app_module.HUNYUAN_MODEL_ID, "blockers": []})
+    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+
+    assert app_module._resolve_internal_video_model_selection(
+        {"video_model_engine": "auto"}, base_model_family="sd15"
+    ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
+
+
+def test_auto_selection_reports_no_ready_renderer_even_with_legacy_models(tmp_path, monkeypatch):
+    from edmg_studio_backend.services import engine_packages
+
+    installed = _install_lookup(tmp_path, monkeypatch)
+    installed[app_module.HUNYUAN_MODEL_ID] = _write_hunyuan_layout(tmp_path / "hunyuan")
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {
+        "runtime_ready": False, "blockers": ["not qualified"]})
+    with pytest.raises(UserFacingError) as exc:
+        app_module._resolve_internal_video_model_selection(
+            {"video_model_engine": "auto"}, base_model_family="sd15")
+    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
+    assert "No installed" in exc.value.message
 
 
 @pytest.mark.parametrize(("vram_gb", "chunk_frames"), [(6.0, 8), (8.0, 12)])

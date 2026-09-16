@@ -72,8 +72,10 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
             _subscriberCount++;
             if (_subscriberCount == 1)
             {
+                CancellationTokenSource? previousCancellation = _loopCancellation;
+                Task? previousLoop = _loopTask;
                 _loopCancellation = new CancellationTokenSource();
-                _loopTask = RunLoopAsync(_loopCancellation.Token);
+                _loopTask = RunLoopAfterAsync(previousLoop, previousCancellation, _loopCancellation.Token);
             }
         }
 
@@ -149,6 +151,30 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
                 return;
             }
         }
+    }
+
+    private async Task RunLoopAfterAsync(
+        Task? previousLoop,
+        CancellationTokenSource? previousCancellation,
+        CancellationToken cancellationToken)
+    {
+        if (previousLoop is not null)
+        {
+            try
+            {
+                await previousLoop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (previousCancellation?.IsCancellationRequested == true)
+            {
+            }
+            finally
+            {
+                previousCancellation?.Dispose();
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        await RunLoopAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RefreshCoreAsync()

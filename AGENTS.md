@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## Visual Studio implementer / Codex reviewer coordination
+
+For the user's current coordination workflow, read [STUDIO_PROGRESS.md](STUDIO_PROGRESS.md) before acting. Visual Studio Copilot owns implementation and the Implementer update section; Codex owns the Reviewer update section. WinUI 3 is the active product scope, with the shared Python backend supporting it.
+
+In reviewer/monitor mode, inspect saved changes and available evidence without editing implementation, staging or committing another agent's work, pushing, launching, running builds/tests, or synchronizing dependencies in its active environment. A later user assignment can change that role. Re-read the handoff before narrow section edits and preserve the other writer's updates. Distinguish recorded baseline results, new observations, and currently verified candidate evidence.
+
+Copilot instructions live in `.github/copilot-instructions.md`; the optional checkpoint prompt is `.github/prompts/studio-progress.prompt.md`. This file-based workflow does not expose either agent's live chat or unsaved buffers.
+
 ## Product / UX priority (user preference)
 
 The **Studio UI is the priority**. When adding or changing functionality, surface it in the

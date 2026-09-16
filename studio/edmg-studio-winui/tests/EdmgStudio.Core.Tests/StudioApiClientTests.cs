@@ -1484,6 +1484,52 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task InternalRenderPreflight_UsesStructuredQualificationAndPreservesUnknownFields()
+    {
+        using var httpClient = new HttpClient(new RecordingHandler((request, _) =>
+        {
+            Assert.AreEqual(HttpMethod.Post, request.Method);
+            Assert.AreEqual("/v1/projects/project-1/render/internal/preflight", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse(
+                """
+                {
+                  "qualification": {
+                    "ready": false,
+                    "route": "internal",
+                    "renderer": "hunyuan_video15",
+                    "model_id": "hf_hunyuan_video15_internal",
+                    "device": "cuda:0",
+                    "capability_level": 3,
+                    "evidence_receipt": null,
+                    "fallback_policy": "fail_closed",
+                    "blockers": ["Matching Level-5 inference receipt required"],
+                    "warnings": [],
+                    "future_evidence_field": "kept"
+                  },
+                  "future_preflight_field": {"enabled": true}
+                }
+                """));
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+        using var body = JsonDocument.Parse("{}");
+
+        InternalRenderPreflightResponse response = await client.PreflightInternalRenderAsync(
+            "project-1",
+            body.RootElement);
+
+        Assert.IsFalse(response.Qualification.Ready);
+        Assert.AreEqual("hunyuan_video15", response.Qualification.Renderer);
+        Assert.AreEqual(3, response.Qualification.CapabilityLevel);
+        Assert.AreEqual("fail_closed", response.Qualification.FallbackPolicy);
+        Assert.AreEqual("Matching Level-5 inference receipt required", response.Qualification.Blockers.Single());
+        Assert.AreEqual("kept", response.Qualification.ExtensionData!["future_evidence_field"].GetString());
+        Assert.IsTrue(response.ExtensionData!["future_preflight_field"].GetProperty("enabled").GetBoolean());
+    }
+
+    [TestMethod]
     public async Task ModelManagement_UsesExactPathsBodiesAndTypedResponses()
     {
         var captured = new List<CapturedRequest>();

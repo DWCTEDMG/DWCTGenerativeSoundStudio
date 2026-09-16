@@ -2715,6 +2715,7 @@ def render_internal_video_variant(
     ffmpeg_path: str,
     project_dir: Path,
     project_id: str | None = None,
+    project_revision: int | str,
     variant: dict[str, Any],
     scenes: list[dict[str, Any]],
     audio_path: Path | None,
@@ -3916,7 +3917,7 @@ def render_internal_video_variant(
                 "sha256": None,
             }
         )
-    write_artifact_manifest(
+    artifact_manifest = write_artifact_manifest(
         final_mp4,
         project_dir=project_dir,
         project_id=project_id,
@@ -3948,6 +3949,29 @@ def render_internal_video_variant(
         parents=[str(meta_json.name)] if meta_json.exists() else [],
         extra={"render_meta": str(meta_json.name), "variant_index": int(variant.get("index", 0))},
     )
+    if settings.temporal_mode == "video_model" and video_model_output_motion_report is not None:
+        from .temporal_proof import build_temporal_proof, validate_temporal_proof, write_temporal_proof
+
+        proof = build_temporal_proof(
+            project_dir=project_dir,
+            project_id=project_id or project_dir.name,
+            project_revision=project_revision,
+            artifact_path=final_mp4,
+            schedule_identity=meta["timeline_digest"],
+            model_fingerprint=_json_digest({"model_id": settings.video_model_id, "model_path": settings.video_model_path}),
+            runtime_fingerprint=_json_digest({"engine": settings.video_model_engine, "algorithm": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION}),
+            device_fingerprint=_json_digest({"device": settings.device_preference, "dtype": settings.video_model_dtype}),
+            codec="h264",
+            width=int(settings.width),
+            height=int(settings.height),
+            frame_rate=float(settings.fps_output),
+            duration_seconds=float(total_frames) / max(1.0, float(settings.fps_render)),
+            has_audio=bool(audio_path and audio_path.exists()),
+            motion_evidence=video_model_output_motion_report,
+            lineage={"artifact_manifest": artifact_manifest.name, "render_metadata": meta_json.name},
+        )
+        if not validate_temporal_proof(proof, project_dir=project_dir):
+            write_temporal_proof(final_mp4.with_suffix(final_mp4.suffix + ".temporal-proof.json"), proof)
     emit_checkpoint(stage="complete", status="complete", force=True, final=True, message=f"Internal render complete: {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": final_mp4.exists()})
     if log_fn:
         log_fn(f"Internal render complete: {final_mp4.name}")

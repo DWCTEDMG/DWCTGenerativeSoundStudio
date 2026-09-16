@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -106,7 +107,7 @@ public sealed partial class StudioForgePage : Page
 
         var projectTask = App.Services.ApiClient.GetProjectAsync(projectId);
         var outputsTask = App.Services.ApiClient.GetOutputsAsync(projectId);
-        var jobsTask = App.Services.ApiClient.GetProjectJobsAsync(projectId);
+        var jobsTask = App.Services.JobsActivity.RefreshAsync();
         var unrealTask = ProbeJsonValueAsync(
             () => App.Services.ApiClient.GetUnrealPreviewAsync(
                 projectId,
@@ -118,7 +119,10 @@ public sealed partial class StudioForgePage : Page
 
         var project = (await projectTask).Project;
         var outputs = await outputsTask;
-        var jobs = await jobsTask;
+        await jobsTask;
+        StudioJobsActivitySnapshot jobs = App.Services.JobsActivity.Snapshot;
+        if (jobs.Error is not null)
+            throw new InvalidOperationException("Studio job activity is unavailable.", jobs.Error);
         var unreal = await unrealTask;
         var liveCue = await liveCueTask;
 
@@ -128,7 +132,7 @@ public sealed partial class StudioForgePage : Page
             .AppendLine($"Analysis: {ReadyLabel(project.HasAnalysis)}")
             .AppendLine($"Plan:     {ReadyLabel(project.HasPlan)}")
             .AppendLine($"Outputs:  {StudioOutputCatalog.CountArtifacts(outputs)} artifact(s)")
-            .Append($"Jobs:     {jobs.Jobs.Count} tracked");
+            .Append($"Jobs:     {jobs.Jobs.Count(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))} tracked");
         ProjectSummaryTextBlock.Text = summary.ToString();
 
         BridgePreviewTextBox.Text =

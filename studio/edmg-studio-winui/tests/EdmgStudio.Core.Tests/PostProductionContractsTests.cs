@@ -69,6 +69,15 @@ public sealed class PostProductionContractsTests
         Assert.IsTrue(insufficient.Ambiguous);
     }
 
+
+    [TestMethod]
+    public void SyncSelectionUsesCanonicalWaveformDiscriminator()
+    {
+        Assert.AreEqual(SyncMethod.WaveformCorrelation,
+            PostProductionContracts.ParseSyncSelection("waveform_correlation"));
+        Assert.Throws<InvalidDataException>(() => PostProductionContracts.ParseSyncSelection("waveform"));
+    }
+
     [TestMethod]
     public void AdrOperations_ReviewAndPreferredSelectionAreImmutableAndUnique()
     {
@@ -184,10 +193,16 @@ public sealed class PostProductionContractsTests
         InterchangeResult<string> canonical = PostProductionInterchange.ExportCanonical(document);
         PostProductionDocument restored = PostProductionInterchange.ImportCanonical(canonical.Value).Value;
         Assert.IsTrue(restored.AudioLayouts[0].Metadata["vendor"]!.GetValue<bool>());
+        PostProductionOperationGate previewGate = PostProductionCapabilities.Gate(restored, PostProductionOperation.Preview);
+        Assert.IsFalse(previewGate.Allowed);
+        StringAssert.Contains(previewGate.Explanation, "metadata-only canonical JSON");
+        Assert.IsTrue(PostProductionCapabilities.Gate(PostProductionContracts.Empty(), PostProductionOperation.Render).Allowed);
         Assert.Throws<InvalidOperationException>(() => PostProductionInterchange.ExportCmx3600(project, document));
         Assert.IsFalse(PostProductionInterchange.ExportCmx3600(project, document, true).Compatibility.IsLossless);
         InterchangeResult<string> csv = PostProductionInterchange.ExportAdrCsv(document);
         Assert.IsFalse(csv.Compatibility.IsLossless);
+        Assert.IsTrue(PostProductionInterchangeConsent.RequiresExplicitConsent(csv.Compatibility));
+        Assert.IsFalse(PostProductionInterchangeConsent.RequiresExplicitConsent(CompatibilityReport.Compatible));
         using JsonDocument fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "post-production-compatibility-golden.json")));
         JsonElement expectedLayouts = fixture.RootElement.GetProperty("native_audio_layouts");
         Assert.HasCount(expectedLayouts.GetArrayLength(), PostProductionCapabilities.Native);
@@ -220,6 +235,15 @@ public sealed class PostProductionContractsTests
                 [new("take", "reviewed", "asset", AdrReviewStatus.Approved, true, recording, new JsonObject())], new JsonObject())]
         };
         Assert.IsFalse(PostProductionInterchange.ExportAdrCsv(reviewed).Compatibility.IsLossless);
+
+        PostProductionDocument history = PostProductionHistory.AppendInterchange(restored, "adr_csv", "export",
+            csv.Compatibility, "dialogue.csv");
+        history.InterchangeHistory[0].Metadata["vendor_history"] = new JsonObject { ["kept"] = true };
+        PostProductionDocument historyRoundTrip = PostProductionInterchange.ImportCanonical(
+            PostProductionInterchange.ExportCanonical(history).Value).Value;
+        Assert.AreEqual("adr_csv", historyRoundTrip.InterchangeHistory[0].Format);
+        Assert.AreEqual("dialogue.csv", historyRoundTrip.InterchangeHistory[0].Metadata["file_name"]!.GetValue<string>());
+        Assert.IsTrue(historyRoundTrip.InterchangeHistory[0].Metadata["vendor_history"]!["kept"]!.GetValue<bool>());
 
         TimelineEvent cmxClip = project.Tracks[0].Events[0] with
         {

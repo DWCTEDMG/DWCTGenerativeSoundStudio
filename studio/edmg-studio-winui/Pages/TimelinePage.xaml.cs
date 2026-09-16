@@ -52,6 +52,7 @@ public sealed partial class TimelinePage : Page
     private CancellationTokenSource? _pageCancellation;
     private CancellationTokenSource? _previewCancellation;
     private CancellationTokenSource? _automationCancellation;
+    private CancellationTokenSource? _postAlignmentCancellation;
     private JsonObject? _timelineDocument;
     private CanonicalProject? _canonicalProject;
     private JsonObject? _recoveryDocument;
@@ -81,6 +82,7 @@ public sealed partial class TimelinePage : Page
     private long _audioGraphGeneration;
     private string? _configuredAudioGraphKey;
     private bool _isLoaded;
+    private bool _isXamlInitialized;
     private bool _isBusy;
     private bool _isAutomationBusy;
     private bool _isDirty;
@@ -142,6 +144,7 @@ public sealed partial class TimelinePage : Page
         ApplyPointerToolUi();
         UpdateTransportUi();
         UpdateCommandState();
+        _isXamlInitialized = true;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -181,6 +184,7 @@ public sealed partial class TimelinePage : Page
         _automationCancellation?.Cancel();
         _automationCancellation?.Dispose();
         _automationCancellation = null;
+        CancelPostAlignment();
         _pageCancellation?.Cancel();
         _pageCancellation?.Dispose();
         _pageCancellation = null;
@@ -194,10 +198,24 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        DispatcherQueue.TryEnqueue(HandleSessionChangeAsync);
+        if (!DispatcherQueue.TryEnqueue(() => { _ = ObserveSessionChangeAsync(); }))
+            CrashLogger.Write("Timeline session change could not be dispatched because the page dispatcher is unavailable.");
     }
 
-    private async void HandleSessionChangeAsync()
+    private async Task ObserveSessionChangeAsync()
+    {
+        try
+        {
+            await HandleSessionChangeAsync();
+        }
+        catch (Exception ex)
+        {
+            CrashLogger.Write("Timeline session change failed.", ex);
+            ShowInfo(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+        }
+    }
+
+    private async Task HandleSessionChangeAsync()
     {
         string requestedProjectId = App.Services.Session.ActiveProjectId;
         if (string.Equals(requestedProjectId, _loadedProjectId, StringComparison.Ordinal))
@@ -255,6 +273,7 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
+        CancelPostAlignment();
         _pageCancellation?.Cancel();
         _pageCancellation?.Dispose();
         _pageCancellation = new CancellationTokenSource();
@@ -307,6 +326,7 @@ public sealed partial class TimelinePage : Page
             }
             catch (Exception ex)
             {
+                CrashLogger.Write($"Timeline workflow assets could not be loaded for project '{projectId}'.", ex);
                 ShowAutomationInfo(
                     $"Timeline loaded, but project sources could not be refreshed: {ex.Message}",
                     InfoBarSeverity.Warning);
@@ -320,6 +340,7 @@ public sealed partial class TimelinePage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write($"Timeline could not be loaded for project '{projectId}'.", ex);
             ClearTimeline("The timeline could not be loaded.");
             ShowInfo(ex.Message, InfoBarSeverity.Error);
         }
@@ -1134,10 +1155,10 @@ public sealed partial class TimelinePage : Page
         string outputId = selectedChannel?.OutputId ?? masterId;
         SelectComboByTag(MixerOutputComboBox, outputId);
         MixerOutputHintText.Text = string.Equals(outputId, masterId, StringComparison.OrdinalIgnoreCase)
-            ? "Windows AudioGraph playback currently supports master output only."
+            ? "Windows AudioGraph file playback is direct to master; decoded track quantum buffers are not exposed to the Core mixer."
             : $"Persisted route '{outputId}' is modeled by Core but not active in Windows AudioGraph playback.";
         MixerStatusText.Text = isAudioTrack
-            ? "Gain, constant-power pan, mute, solo, arm, monitor, and output are persisted. Core DSP supports buses, sends, PDC, and meters; Windows AudioGraph playback remains direct-route."
+            ? "Gain, pan, mute, solo, arm, monitor, and output are persisted. Live buses, sends, PDC, automation, and processed meters remain unavailable until decoded track buffers can enter the Core callback adapter."
             : "Select an audio track to edit channel state.";
         if (document is null)
         {
@@ -1154,7 +1175,7 @@ public sealed partial class TimelinePage : Page
                 ? "Select an audio channel to inspect its slots."
                 : $"Inserts: {(selectedChannel.Inserts.Length == 0 ? "None" : string.Join(", ", selectedChannel.Inserts.Select(insert => $"{insert.PluginId} ({(insert.Bypassed ? "bypassed" : "enabled")}, {insert.ReportedLatencySamples} samples)")))}\n" +
                   $"Sends: {(selectedChannel.Sends.Length == 0 ? "None" : string.Join(", ", selectedChannel.Sends.Select(send => $"{send.Tap} → {send.DestinationId} @ {send.Gain:0.##}")))}";
-            MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Delay buffers are active in Core processing, not Windows AudioGraph playback.";
+            MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Preallocated delay buffers are qualified in the Core callback adapter, not connected to AudioGraph file playback.";
         }
 
         MixerGainNumberBox.IsEnabled = canEdit;
@@ -3505,6 +3526,16 @@ public sealed partial class TimelinePage : Page
             StopPlayback();
             return new(true);
         }
+        if (_timelineDocument is not null)
+        {
+            PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+                PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Preview);
+            if (!gate.Allowed)
+            {
+                ShowInfo(gate.Explanation, InfoBarSeverity.Error);
+                return new(false, gate.Explanation);
+            }
+        }
 
         if (_positionSeconds >= _durationSeconds)
         {
@@ -3787,6 +3818,17 @@ public sealed partial class TimelinePage : Page
                 return;
             }
 
+            PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+                PostProductionContracts.Read(project.Timeline), PostProductionOperation.Preview);
+            if (!gate.Allowed)
+            {
+                Interlocked.Increment(ref _audioGraphGeneration);
+                _configuredAudioGraphKey = null;
+                AudioEngineStatusText.Text = "Audio: blocked by channel layout";
+                MixerRoutingText.Text = gate.Explanation;
+                return;
+            }
+
             string graphKey = CreateAudioGraphKey(project);
             if (string.Equals(graphKey, _configuredAudioGraphKey, StringComparison.Ordinal))
             {
@@ -4032,7 +4074,7 @@ public sealed partial class TimelinePage : Page
         object sender,
         RangeBaseValueChangedEventArgs e)
     {
-        if (_updatingZoom)
+        if (!_isXamlInitialized || _updatingZoom)
         {
             return;
         }
@@ -4421,6 +4463,14 @@ public sealed partial class TimelinePage : Page
             PreviewHintText.Text = "Add a video clip with a source path to enable preview.";
             return;
         }
+        PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+            PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Preview);
+        if (!gate.Allowed)
+        {
+            PreviewSurface.ShowUnsupported(gate.Explanation);
+            PreviewHintText.Text = gate.Explanation;
+            return;
+        }
 
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             _pageCancellation?.Token ?? CancellationToken.None);
@@ -4465,6 +4515,7 @@ public sealed partial class TimelinePage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write($"Timeline recovery status could not be refreshed for project '{_loadedProjectId}'.", ex);
             if (generation == _previewGeneration)
             {
                 PreviewSurface.ShowError(ex.Message);
@@ -4514,6 +4565,9 @@ public sealed partial class TimelinePage : Page
         StatusText.Text = "Queueing timeline render...";
         try
         {
+            PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+                PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Render);
+            if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
             var request = new TimelineRenderRequest(
                 width,
                 height,
@@ -4546,6 +4600,7 @@ public sealed partial class TimelinePage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write($"Timeline recovery could not be applied for project '{_loadedProjectId}'.", ex);
             StatusText.Text = "Render could not be queued.";
             ShowInfo(ex.Message, InfoBarSeverity.Error);
         }
@@ -4596,6 +4651,7 @@ public sealed partial class TimelinePage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write($"Timeline recovery metadata could not be exported for project '{_loadedProjectId}'.", ex);
             BackupSummaryText.Text = $"Recovery status unavailable: {ex.Message}";
         }
     }
@@ -4653,6 +4709,7 @@ public sealed partial class TimelinePage : Page
         }
         catch (Exception ex)
         {
+            CrashLogger.Write($"Timeline recovery journal could not be discarded for project '{_loadedProjectId}'.", ex);
             ShowInfo(ex.Message, InfoBarSeverity.Error);
         }
         finally
@@ -4812,6 +4869,7 @@ public sealed partial class TimelinePage : Page
         PostStatusText.Text = message;
         PostTimebaseText.Text = "Timebase unavailable.";
         PostPlayheadTimecodeText.Text = "Playhead: --:--:--:--";
+        PostSyncReferenceMediaComboBox.ItemsSource = null;
         PostSyncMediaComboBox.ItemsSource = null;
         PostAdrMediaComboBox.ItemsSource = null;
         PostAudioLayoutMediaComboBox.ItemsSource = null;
@@ -4863,12 +4921,15 @@ public sealed partial class TimelinePage : Page
             List<ProfessionalListItem> assets = _canonicalProject.MediaAssets
                 .Select(asset => new ProfessionalListItem(asset.Id, string.IsNullOrWhiteSpace(asset.Path) ? asset.Id : System.IO.Path.GetFileName(asset.Path), asset.Kind))
                 .ToList();
+            string? syncReferenceAsset = (PostSyncReferenceMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
             string? syncAsset = (PostSyncMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
             string? adrAsset = (PostAdrMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
             string? layoutAsset = (PostAudioLayoutMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
+            PostSyncReferenceMediaComboBox.ItemsSource = assets;
             PostSyncMediaComboBox.ItemsSource = assets;
             PostAdrMediaComboBox.ItemsSource = assets;
             PostAudioLayoutMediaComboBox.ItemsSource = new[] { new ProfessionalListItem(string.Empty, "None") }.Concat(assets).ToList();
+            SelectListItem(PostSyncReferenceMediaComboBox, syncReferenceAsset);
             SelectListItem(PostSyncMediaComboBox, syncAsset);
             SelectListItem(PostAdrMediaComboBox, adrAsset);
             SelectListItem(PostAudioLayoutMediaComboBox, layoutAsset ?? string.Empty);
@@ -4906,7 +4967,10 @@ public sealed partial class TimelinePage : Page
             take.Id, $"{take.Id}: {take.MediaAssetId}", $"{take.ReviewStatus}{(take.Preferred ? " • preferred" : string.Empty)}")).ToList() ?? [];
     }
 
-    private void PostAdrCue_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshPostAdrTakes();
+    private void PostAdrCue_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isXamlInitialized) RefreshPostAdrTakes();
+    }
 
     private void PostSyncMethod_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -4915,40 +4979,117 @@ public sealed partial class TimelinePage : Page
         bool timecode = GetSelectedTag(PostSyncMethodComboBox) == "timecode";
         PostReferenceTimecodeTextBox.IsEnabled = timecode;
         PostCandidateTimecodeTextBox.IsEnabled = timecode;
+        PostSyncReferenceMediaComboBox.IsEnabled = !timecode;
         PostSyncLimitationText.Text = timecode
             ? "Timecode alignment uses the canonical project timebase and requires explicit acceptance."
-            : "Audio waveform extraction is not connected in the native app, so clap, transient, and waveform-correlation analysis cannot be planned honestly here.";
+            : $"Native WAVE analysis uses authorized project media, matching the project sample rate, and is bounded to {WaveAlignmentService.MaximumSamplesPerSource:N0} frames per source.";
+        CancelPostAlignment();
         _pendingPostAlignment = null;
         ApplyPostSyncButton.IsEnabled = false;
     }
 
-    private void PlanPostSync_Click(object sender, RoutedEventArgs e)
+    private async void PlanPostSync_Click(object sender, RoutedEventArgs e)
     {
         try
         {
             EnsurePostProject();
             string methodTag = GetSelectedTag(PostSyncMethodComboBox) ?? "timecode";
-            if (methodTag != "timecode")
-                throw new NotSupportedException("Native waveform extraction is unavailable. Import externally analyzed timing as canonical post JSON instead.");
-            ProfessionalListItem asset = PostSyncMediaComboBox.SelectedItem as ProfessionalListItem
-                ?? throw new InvalidDataException("Select a project media asset.");
+            ProfessionalListItem candidate = PostSyncMediaComboBox.SelectedItem as ProfessionalListItem
+                ?? throw new InvalidDataException("Select candidate project media.");
             ProjectTimebase timebase = _canonicalProject!.Timebase;
-            Timecode reference = Timecode.Parse(PostReferenceTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
-            Timecode candidate = Timecode.Parse(PostCandidateTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
-            _pendingPostAlignment = PostAlignment.FromTimecode(reference, candidate, timebase);
-            _pendingPostAlignmentMediaId = asset.Id;
-            _pendingPostAlignmentMethod = SyncMethod.Timecode;
+            AlignmentResult result;
+            SyncMethod method;
+            if (methodTag == "timecode")
+            {
+                Timecode reference = Timecode.Parse(PostReferenceTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
+                Timecode candidateTimecode = Timecode.Parse(PostCandidateTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
+                result = PostAlignment.FromTimecode(reference, candidateTimecode, timebase);
+                method = SyncMethod.Timecode;
+            }
+            else
+            {
+                ProfessionalListItem reference = PostSyncReferenceMediaComboBox.SelectedItem as ProfessionalListItem
+                    ?? throw new InvalidDataException("Select reference project media.");
+                if (reference.Id == candidate.Id)
+                    throw new InvalidDataException("Reference and candidate media must be different assets.");
+                method = PostProductionContracts.ParseSyncSelection(methodTag);
+
+                CancelPostAlignment();
+                _postAlignmentCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation?.Token ?? CancellationToken.None);
+                CancellationToken cancellationToken = _postAlignmentCancellation.Token;
+                string projectId = _loadedProjectId!;
+                long revision = _editorRevision;
+                JsonObject document = _timelineDocument!;
+                SetPostAlignmentBusy(true, "Materializing authorized project media…");
+                string referencePath = await MaterializePostAlignmentAssetAsync(_canonicalProject!, projectId, reference.Id, cancellationToken);
+                string candidatePath = await MaterializePostAlignmentAssetAsync(_canonicalProject!, projectId, candidate.Id, cancellationToken);
+                EnsurePostPreviewCurrent(projectId, revision, document);
+                SetPostStatus("Analyzing bounded waveform windows…");
+                await using FileStream referenceStream = File.OpenRead(referencePath);
+                await using FileStream candidateStream = File.OpenRead(candidatePath);
+                int maximumShift = Math.Min(timebase.SampleRate * 10, WaveAlignmentService.MaximumShiftSamples);
+                result = await new WaveAlignmentService().AlignAsync(referenceStream, candidateStream, method,
+                    maximumShift, cancellationToken: cancellationToken, requiredSampleRate: timebase.SampleRate);
+                EnsurePostPreviewCurrent(projectId, revision, document);
+            }
+
+            _pendingPostAlignment = result;
+            _pendingPostAlignmentMediaId = candidate.Id;
+            _pendingPostAlignmentMethod = method;
             _pendingPostAlignmentProjectId = _loadedProjectId;
             _pendingPostAlignmentRevision = _editorRevision;
             _pendingPostAlignmentDocument = _timelineDocument;
-            ApplyPostSyncButton.IsEnabled = _pendingPostAlignment.Acceptable;
-            PostSyncPreviewText.Text = $"Offset {_pendingPostAlignment.OffsetSamples} samples • confidence {_pendingPostAlignment.Confidence:P0} • {_pendingPostAlignment.Diagnostics} Explicit acceptance is required.";
+            ApplyPostSyncButton.IsEnabled = result.Acceptable;
+            PostSyncPreviewText.Text = $"Offset {result.OffsetSamples} samples • confidence {result.Confidence:P0} • {result.Diagnostics} Explicit acceptance is required.";
             SetPostStatus("Alignment plan ready; no timeline changes were made.");
         }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or NotSupportedException or OverflowException)
+        catch (OperationCanceledException)
+        {
+            SetPostStatus("Alignment canceled; no timeline changes were made.");
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or ArgumentException or InvalidOperationException or NotSupportedException or OverflowException)
         {
             PostMutationFailed(ex);
         }
+        finally
+        {
+            SetPostAlignmentBusy(false);
+            _postAlignmentCancellation?.Dispose();
+            _postAlignmentCancellation = null;
+        }
+    }
+
+    private void CancelPostSync_Click(object sender, RoutedEventArgs e) => CancelPostAlignment();
+
+    private void CancelPostAlignment()
+    {
+        _postAlignmentCancellation?.Cancel();
+    }
+
+    private void SetPostAlignmentBusy(bool busy, string? status = null)
+    {
+        if (PostSyncProgressBar is null) return;
+        PostSyncProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        PlanPostSyncButton.IsEnabled = !busy;
+        CancelPostSyncButton.IsEnabled = busy;
+        if (status is not null) SetPostStatus(status);
+    }
+
+    private static async Task<string> MaterializePostAlignmentAssetAsync(CanonicalProject project, string projectId,
+        string assetId, CancellationToken cancellationToken)
+    {
+        MediaAsset asset = project.MediaAssets.FirstOrDefault(value => value.Id == assetId)
+            ?? throw new InvalidDataException($"Project media asset '{assetId}' no longer exists.");
+        string contentHash = ReadAssetContentHash(asset);
+        string cacheIdentity = CreateStableHash($"{projectId}\n{asset.Id}\n{asset.Path}\n{contentHash}");
+        string extension = System.IO.Path.GetExtension(asset.Path);
+        if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
+            extension = ".media";
+        string cacheRoot = System.IO.Path.Combine(ApplicationData.Current.LocalCacheFolder.Path, "post-alignment-media");
+        string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
+        if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
+            await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(projectId, asset.Path, destination, cancellationToken);
+        return destination;
     }
 
     private async void ApplyPostSync_Click(object sender, RoutedEventArgs e)
@@ -5095,11 +5236,12 @@ public sealed partial class TimelinePage : Page
 
     private async void ImportPostJson_Click(object sender, RoutedEventArgs e)
     {
-        await ImportPostTextAsync(".json", async text =>
+        await ImportPostTextAsync(".json", async (text, fileName) =>
         {
             InterchangeResult<PostProductionDocument> result = PostProductionInterchange.ImportCanonical(text);
-            PostProductionContracts.ValidateAgainstProject(_canonicalProject!, result.Value);
-            await CommitPostAsync(result.Value, "canonical post JSON imported");
+            PostProductionDocument imported = PostProductionHistory.AppendInterchange(result.Value, "canonical-json", "import", result.Compatibility, fileName);
+            PostProductionContracts.ValidateAgainstProject(_canonicalProject!, imported);
+            await CommitPostAsync(imported, "canonical post JSON imported");
             ShowPostCompatibility("Canonical JSON import", result.Compatibility);
         });
     }
@@ -5107,19 +5249,21 @@ public sealed partial class TimelinePage : Page
     private async void ExportPostJson_Click(object sender, RoutedEventArgs e)
     {
         await ExportPostTextAsync("JSON document", ".json", "post", () =>
-            PostProductionInterchange.ExportCanonical(PostProductionContracts.Read(_timelineDocument!)), "Canonical JSON export");
+            PostProductionInterchange.ExportCanonical(PostProductionContracts.Read(_timelineDocument!)), "Canonical JSON export", "canonical-json");
     }
 
     private async void ImportPostCmx_Click(object sender, RoutedEventArgs e)
     {
-        await ImportPostTextAsync(".edl", text =>
+        await ImportPostTextAsync(".edl", async (text, fileName) =>
         {
             InterchangeResult<ImmutableArray<ReconformEdit>> result = PostProductionInterchange.ImportCmx3600(text, _canonicalProject!.Timebase);
             ShowPostCompatibility("CMX3600 import", result.Compatibility);
             if (!result.Compatibility.IsCompatible)
                 throw new InvalidDataException("CMX3600 import contains errors. Review the compatibility report; no reconform preview was created.");
+            PostProductionDocument post = PostProductionHistory.AppendInterchange(PostProductionContracts.Read(_timelineDocument!),
+                "cmx3600", "import", result.Compatibility, fileName);
+            await CommitPostAsync(post, "CMX3600 imported for reconform preview");
             SetReconformPreview(ReconformService.Plan(result.Value), "CMX3600 preview");
-            return Task.CompletedTask;
         });
     }
 
@@ -5145,7 +5289,10 @@ public sealed partial class TimelinePage : Page
                 EnsurePostPreviewCurrent(projectId, revision, document);
                 result = PostProductionInterchange.ExportCmx3600(_canonicalProject!, post, allowOmissions: true);
             }
-            await SavePostTextAsync("CMX3600 EDL", ".edl", "timeline", result.Value);
+            StorageFile? file = await SavePostTextAsync("CMX3600 EDL", ".edl", "timeline", result.Value);
+            if (file is null) { SetPostStatus("CMX3600 export canceled; no file was written."); return; }
+            EnsurePostPreviewCurrent(projectId, revision, document);
+            await RecordPostInterchangeAsync("cmx3600", "export", result.Compatibility, file.Name);
             ShowPostCompatibility("CMX3600 export", result.Compatibility);
         }
         catch (Exception ex)
@@ -5156,7 +5303,7 @@ public sealed partial class TimelinePage : Page
 
     private async void ImportPostAdrCsv_Click(object sender, RoutedEventArgs e)
     {
-        await ImportPostTextAsync(".csv", async text =>
+        await ImportPostTextAsync(".csv", async (text, fileName) =>
         {
             InterchangeResult<ImmutableArray<AdrCue>> result = PostProductionInterchange.ImportAdrCsv(text);
             if (!result.Compatibility.IsCompatible) throw new InvalidDataException(FormatCompatibility(result.Compatibility));
@@ -5169,6 +5316,7 @@ public sealed partial class TimelinePage : Page
                 for (int suffix = 2; !used.Add(id); suffix++) id = $"{baseId}-{suffix}";
                 post = AdrOperations.AddCue(post, imported with { Id = id });
             }
+            post = PostProductionHistory.AppendInterchange(post, "adr-csv", "import", result.Compatibility, fileName);
             PostProductionContracts.ValidateAgainstProject(_canonicalProject!, post);
             await CommitPostAsync(post, "ADR CSV imported");
             ShowPostCompatibility("ADR CSV import", result.Compatibility);
@@ -5177,8 +5325,31 @@ public sealed partial class TimelinePage : Page
 
     private async void ExportPostAdrCsv_Click(object sender, RoutedEventArgs e)
     {
-        await ExportPostTextAsync("CSV document", ".csv", "adr-cues", () =>
-            PostProductionInterchange.ExportAdrCsv(PostProductionContracts.Read(_timelineDocument!)), "ADR CSV export");
+        try
+        {
+            EnsurePostProject();
+            string? projectId = _loadedProjectId;
+            long revision = _editorRevision;
+            JsonObject document = _timelineDocument!;
+            InterchangeResult<string> result = PostProductionInterchange.ExportAdrCsv(PostProductionContracts.Read(document));
+            ShowPostCompatibility("ADR CSV export", result.Compatibility);
+            if (PostProductionInterchangeConsent.RequiresExplicitConsent(result.Compatibility))
+            {
+                bool consent = await ConfirmAsync("Lossy ADR CSV export?",
+                    FormatCompatibility(result.Compatibility) + Environment.NewLine + "Export only after accepting these omissions.",
+                    "Export with omissions");
+                if (!consent) { SetPostStatus("ADR CSV export canceled; no file was written."); return; }
+                EnsurePostPreviewCurrent(projectId, revision, document);
+            }
+            StorageFile? file = await SavePostTextAsync("CSV document", ".csv", "adr-cues", result.Value);
+            if (file is null) { SetPostStatus("ADR CSV export canceled; no file was written."); return; }
+            EnsurePostPreviewCurrent(projectId, revision, document);
+            await RecordPostInterchangeAsync("adr-csv", "export", result.Compatibility, file.Name);
+        }
+        catch (Exception ex)
+        {
+            PostMutationFailed(ex);
+        }
     }
 
     private void PostAudioLayout_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -5248,7 +5419,7 @@ public sealed partial class TimelinePage : Page
         _ => AudioChannelLayout.Stereo
     };
 
-    private async Task ImportPostTextAsync(string extension, Func<string, Task> import)
+    private async Task ImportPostTextAsync(string extension, Func<string, string, Task> import)
     {
         try
         {
@@ -5264,7 +5435,7 @@ public sealed partial class TimelinePage : Page
             if (file is null) return;
             string text = await FileIO.ReadTextAsync(file);
             EnsurePostPreviewCurrent(projectId, revision, document);
-            await import(text);
+            await import(text, file.Name);
             SetPostStatus($"Imported {file.Name}.");
         }
         catch (Exception ex)
@@ -5274,13 +5445,19 @@ public sealed partial class TimelinePage : Page
     }
 
     private async Task ExportPostTextAsync(string description, string extension, string suggestedName,
-        Func<InterchangeResult<string>> create, string reportTitle)
+        Func<InterchangeResult<string>> create, string reportTitle, string format)
     {
         try
         {
             EnsurePostProject();
+            string? projectId = _loadedProjectId;
+            long revision = _editorRevision;
+            JsonObject document = _timelineDocument!;
             InterchangeResult<string> result = create();
-            await SavePostTextAsync(description, extension, suggestedName, result.Value);
+            StorageFile? file = await SavePostTextAsync(description, extension, suggestedName, result.Value);
+            if (file is null) { SetPostStatus($"{reportTitle} canceled; no file was written."); return; }
+            EnsurePostPreviewCurrent(projectId, revision, document);
+            await RecordPostInterchangeAsync(format, "export", result.Compatibility, file.Name);
             ShowPostCompatibility(reportTitle, result.Compatibility);
         }
         catch (Exception ex)
@@ -5289,16 +5466,24 @@ public sealed partial class TimelinePage : Page
         }
     }
 
-    private async Task SavePostTextAsync(string description, string extension, string suggestedName, string text)
+    private async Task RecordPostInterchangeAsync(string format, string direction, CompatibilityReport compatibility, string fileName)
+    {
+        PostProductionDocument post = PostProductionHistory.AppendInterchange(
+            PostProductionContracts.Read(_timelineDocument!), format, direction, compatibility, fileName);
+        await CommitPostAsync(post, $"{format} {direction} recorded");
+    }
+
+    private async Task<StorageFile?> SavePostTextAsync(string description, string extension, string suggestedName, string text)
     {
         if (App.MainWindowInstance is null) throw new InvalidOperationException("The Studio window is not ready for file selection.");
         var picker = new FileSavePicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary, SuggestedFileName = suggestedName };
         picker.FileTypeChoices.Add(description, [extension]);
         WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
         StorageFile? file = await picker.PickSaveFileAsync();
-        if (file is null) return;
+        if (file is null) return null;
         await FileIO.WriteTextAsync(file, text);
         SetPostStatus($"Exported {file.Name}.");
+        return file;
     }
 
     private void ShowPostCompatibility(string operation, CompatibilityReport report)

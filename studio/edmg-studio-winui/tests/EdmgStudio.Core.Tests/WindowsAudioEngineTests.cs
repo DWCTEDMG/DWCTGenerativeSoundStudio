@@ -16,7 +16,8 @@ public sealed class WindowsAudioEngineTests
         await using var engine = new WindowsAudioEngine();
 
         Assert.AreEqual(256, processor.MaximumFrames);
-        StringAssert.Contains(engine.MixerProcessingCapability, "does not execute bus/send/PDC DSP");
+        StringAssert.Contains(engine.MixerProcessingCapability, "file nodes do not expose decoded per-track quantum buffers");
+        StringAssert.Contains(engine.MixerProcessingCapability, "does not execute bus/send/PDC/automation DSP");
     }
 
     [TestMethod]
