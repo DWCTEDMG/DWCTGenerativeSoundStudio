@@ -76,7 +76,9 @@ test("source backend defaults to CUDA when NVIDIA hardware is available", () => 
 test("automatic accelerator selection preserves portable fallbacks and explicit profiles", () => {
   assert.equal(resolveAcceleratorProfile("", { isWindows: true, hasNvidiaGpu: true }), "cuda");
   assert.equal(resolveAcceleratorProfile("", { isWindows: true, hasNvidiaGpu: false }), "directml");
-  assert.equal(resolveAcceleratorProfile("", { isWindows: false, hasNvidiaGpu: false }), "cpu");
+  assert.throws(() => resolveAcceleratorProfile("", { isWindows: false, hasNvidiaGpu: false }), /CPU fallback is disabled/);
+  assert.equal(resolveAcceleratorProfile("auto", { isWindows: true, hasNvidiaGpu: true }), "cuda");
+  assert.throws(() => normalizeAcceleratorProfile(""), /Unsupported accelerator profile/);
   assert.equal(resolveAcceleratorProfile("cpu", { isWindows: true, hasNvidiaGpu: true }), "cpu");
   assert.equal(detectNvidiaGpu({
     spawnSyncImpl: () => ({ status: 0, stdout: "GPU 0: NVIDIA GeForce RTX 4050 Laptop GPU" }),
@@ -97,9 +99,10 @@ test("source backend runs exactly one profile through the frozen uv project", ()
   assert.equal(spec.command, "C:\\toolchain\\uv.exe");
   assert.equal(spec.label, "uv-frozen-backend");
   assert.equal(spec.acceleratorProfile, "cuda");
-  assert.deepEqual(spec.args.slice(0, 6), [
+  assert.deepEqual(spec.args.slice(0, 7), [
     "run",
     "--frozen",
+    "--no-sync",
     "--no-default-groups",
     "--python",
     "3.12",

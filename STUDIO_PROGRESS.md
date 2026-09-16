@@ -57,34 +57,26 @@ Use this table for the latest meaningful validation results; replace the pending
 
 <!-- REVIEWER-UPDATE-START: Codex owns this section. -->
 
-**Observed UTC:** 2026-09-15T19:48:26Z. This is a snapshot of a changing worktree.
+**Observed UTC:** 2026-09-16T09:09:15.155224+00:00. User explicitly assigned implementation of GPU-first defaults after the commit/audit request.
 
-**Baseline:** Local HEAD and the remote default branch both resolve to `ba5c7763c6d19ef6724aaad4709be31a897c5889` on `codex/Unified`. Its subject is `docs: record aggregate backend qualification` and its commit metadata includes a Copilot co-author. Individual uncommitted files cannot be attributed to a particular agent from Git status alone.
+**Baseline:** `66dcbe9dffcff36e1a4d92f6eb17ee49f52dfaee` on `codex/Unified` contains the previously pending 71-file workflow/release batch. The following validation applies to that baseline plus the current GPU-policy changes, not a new hardware qualification.
 
-**Work in progress:** 51 tracked modified files and 15 untracked files at the snapshot, before this handoff setup. File writes continued during inspection. Visual Studio, dotnet, and MSBuild processes were present; process presence does not prove a build is currently running or that it passed.
+**Current change:** Automatic GPU preference in source setup/test/launcher paths; CUDA environment preservation; no implicit CPU fallback in internal renderer selection; visible automatic Setup choices; source startup and tests avoid dependency synchronization. CPU-only CI opts in explicitly. See `docs/STUDIO_ACCELERATOR_POLICY.md` for support boundaries.
 
-### What the saved changes show
+**Fresh evidence (all commands from repository root unless stated otherwise):**
 
-| Blueprint area | Observed current work | Acceptance boundary |
+| Command | Result | Local evidence |
 | --- | --- | --- |
-| B: native reliability | Shared `StudioJobsActivityService` and shell/Queue/Review/Dashboard/Outputs/Forge integration; dispatcher/lifetime changes | Needs navigation, cancellation, error-state, and backend-recovery evidence for the current changes. |
-| C: audio | New `LiveMixerCallbackAdapter` and tests; Windows audio diagnostics/qualification changes | Core callback code exists, but the AudioGraph file-node playback path still does not execute live bus/send/PDC/automation processing. |
-| D: post | Native WAVE extraction/alignment, Timeline Post controls, compatibility/history and channel-layout checks | Current edits need validation; device capture, supported formats/layouts, and user acceptance boundaries remain explicit. |
-| E: models/rendering | Typed render preflight, Qwen/Whisper Models controls, stricter runtime readiness, and temporal-proof sidecars | Installed models and source tests do not prove real model inference or motion. Require current hardware/runtime receipts. |
-| F: Store/release | Candidate manifest and hash binding, signing/lifecycle validation, Store metadata schemas, and related README updates | Code-signing availability is user-reported. Current signatures, clean-machine install/upgrade/rollback, and Store certification are not established by these edits. |
+| `dotnet build studio/edmg-studio-winui/EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` | Exit 0; complete XAML build; 0 errors, 17 analyzer warnings | `%TEMP%/gpu-default-build.log` |
+| `dotnet test studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj --no-build --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` | Exit 0; 511 passed | `%TEMP%/gpu-default-core.log` |
+| `studio/edmg-studio/python_backend/.venv/Scripts/python.exe scripts/run_pytest_scopes.py` | Exit 0; selected CUDA, sync disabled; repository 172 passed/4 skipped; backend 1013 passed/4 skipped | `%TEMP%/gpu-default-all-python.log` |
+| Focused profile/installer/launcher/setup tests after final helper changes | Exit 0; 66 passed | `%TEMP%/gpu-default-focused.log` |
+| `node --test main-process/backend-runtime.node-test.mjs` from `studio/edmg-studio` | Exit 0; 18 passed | `%TEMP%/gpu-default-node.log` |
 
-### Evidence available now
+Targeted Ruff checks and whitespace checks pass. The aggregate run used the existing CUDA environment without synchronization; torch/torchaudio remain `2.11.0+cu130`, torchvision `0.26.0+cu130`. This does not claim full-repository lint cleanliness: the earlier audit found pre-existing backend lint issues and a missing `current_correlation` import in the generic exception handler.
 
-- Commit `ba5c776` records **164 passed / 4 skipped** for repository Python scope and **987 passed / 4 skipped** for backend-package scope in the consolidated blueprint. These are recorded baseline results, not reruns by this reviewer and not qualification of the newer dirty worktree.
-- This review has not run builds, tests, model jobs, installers, or dependency synchronization. No passing current-candidate result is inferred from a changed test file.
-- Copilot's current task description, progress percentage, remaining estimate, and live chat state are unknown until it writes its own handoff.
+**Acceptance limits:** Automatic approval review blocked the attempted unpackaged GUI launch with backend spawning disabled (reason: "blocked by policy"). The updated Setup surface compiled but was not exercised interactively. No real model inference, VST3 hosting, AudioGraph mixer integration, capture, signed installer lifecycle, or Store qualification was performed. Native bounded WAVE alignment is implemented; old statements that it is entirely unavailable have been corrected in the blueprints.
 
-### Next handoff requested
-
-Copilot should identify the active gate(s), post exact current test/build evidence, and distinguish code that exists from native or packaged behavior that has been exercised. Keep the large in-flight implementation batch out of any reviewer commit.
-
-### Follow-up monitoring
-
-Scheduled review setup is pending. Until confirmed, this file is updated when the reviewer is asked to inspect progress.
+Copilot's Implementer section is preserved. Unrelated local changes are not part of this GPU-policy work.
 
 <!-- REVIEWER-UPDATE-END -->

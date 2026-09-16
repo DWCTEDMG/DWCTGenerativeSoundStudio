@@ -99,6 +99,55 @@ def normalize_accelerator_profile(value: str | None) -> str:
     return profile
 
 
+def installed_accelerator_profile() -> str | None:
+    """Inspect the target environment without importing torch or changing packages."""
+    root = Path(os.getenv("UV_PROJECT_ENVIRONMENT") or backend_root() / ".venv")
+    if not root.is_absolute():
+        root = backend_root() / root
+    sites = [root / "Lib" / "site-packages", *root.glob("lib/python*/site-packages")]
+    packages = {
+        str(dist.metadata.get("Name", "")).lower(): dist.version
+        for dist in importlib.metadata.distributions(path=[str(site) for site in sites])
+    }
+    if "+cu" in packages.get("torch", ""):
+        return "cuda"
+    if platform.system() == "Windows" and "onnxruntime-directml" in packages:
+        return "directml"
+    return None
+
+
+def detect_nvidia_gpu() -> bool:
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=5,
+            check=False, **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}),
+        )
+        return result.returncode == 0 and any(
+            line.strip().startswith("GPU ") and ":" in line for line in result.stdout.splitlines()
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def resolve_accelerator_profile(value: str | None = None) -> str:
+    """GPU-first dependency selection. CPU is an explicit opt-in, never a fallback."""
+    requested = str(value or "").strip().lower()
+    if requested and requested != "auto":
+        return normalize_accelerator_profile(requested)
+    installed = installed_accelerator_profile()
+    # Preserve CUDA even when the driver/device is temporarily unavailable.
+    if installed == "cuda" or detect_nvidia_gpu():
+        return "cuda"
+    if installed == "directml" or platform.system() == "Windows":
+        # This chooses the Windows GPU package lane, not a runtime-readiness claim.
+        return "directml"
+    raise ToolchainError(
+        "No supported automatic GPU dependency profile was found. Configure a supported GPU "
+        "runtime or explicitly select cpu with EDMG_BACKEND_ACCELERATOR_PROFILE=cpu. "
+        "CPU fallback is disabled; no dependencies were changed."
+    )
+
+
 def profile_from_legacy_inputs(
     *,
     profile: str | None = None,
@@ -106,7 +155,7 @@ def profile_from_legacy_inputs(
     flavor: str | None = None,
 ) -> str:
     if str(profile or "").strip():
-        return normalize_accelerator_profile(profile)
+        return resolve_accelerator_profile(profile)
 
     normalized_bundle = str(bundle or "").strip().lower().replace("-", "_")
     if normalized_bundle not in _LEGACY_BUNDLE_PROFILES:
@@ -114,6 +163,8 @@ def profile_from_legacy_inputs(
             f"Unsupported legacy backend bundle {bundle!r}. Use accelerator_profile=cpu, directml, or cuda."
         )
     bundle_profile = _LEGACY_BUNDLE_PROFILES[normalized_bundle]
+    if not str(flavor or "").strip() or str(flavor).strip().lower() == "auto":
+        return bundle_profile or active_accelerator_profile()
     normalized_flavor = str(flavor or "cpu").strip().lower()
     flavor_profile = {
         "nvidia": "cuda",
@@ -135,9 +186,9 @@ def profile_from_legacy_inputs(
     return normalize_accelerator_profile(resolved)
 
 
-def active_accelerator_profile(default: str = "cpu") -> str:
+def active_accelerator_profile(default: str = "auto") -> str:
     raw = os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", default)
-    return normalize_accelerator_profile(raw)
+    return resolve_accelerator_profile(raw)
 
 
 def lock_sha256(path: Path | None = None) -> str:
@@ -432,6 +483,7 @@ def frozen_run_command(
         *frozen_project_args(
             "run", resolved_profile, capability_extras=capability_extras, groups=groups
         ),
+        "--no-sync",
         *map(str, command),
     ]
     return args, toolchain_environment(profile=resolved_profile)
@@ -486,9 +538,14 @@ def toolchain_status(*, profile: str | None = None, check_sync: bool = True) -> 
             ),
         }
 
-    resolved_profile = normalize_accelerator_profile(
-        profile or os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu")
-    )
+    try:
+        resolved_profile = resolve_accelerator_profile(
+            profile or os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "auto")
+        )
+    except ToolchainError as exc:
+        return {"ok": False, "packaged": False, "immutable": False,
+                "accelerator_profile": "unavailable", "error": str(exc),
+                "hint": "Configure a supported GPU profile or explicitly choose CPU in Setup."}
     status: dict[str, Any] = {
         "ok": False,
         "packaged": False,

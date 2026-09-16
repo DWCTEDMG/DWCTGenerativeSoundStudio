@@ -245,7 +245,7 @@ def create_setup_router(deps: SetupRouterDependencies) -> APIRouter:
 
     @router.post("/comfyui/portable/install")
     def setup_comfyui_portable_install(payload: dict[str, Any]):
-        flavor = (payload or {}).get("flavor") or "cpu"
+        flavor = resolve_comfy_flavor(payload)
         task = deps.tasks.start(
             f"install_comfyui_portable:{flavor}",
             deps.install_comfy,
@@ -256,16 +256,23 @@ def create_setup_router(deps: SetupRouterDependencies) -> APIRouter:
         )
         return {"ok": True, "task": task.to_dict()}
 
-    @router.post("/comfyui/portable/start")
-    def setup_comfyui_portable_start(payload: dict[str, Any]):
+    def resolve_comfy_flavor(payload: dict[str, Any]) -> str:
         flavor = str((payload or {}).get("flavor") or "auto").strip().lower()
         if flavor == "auto":
-            hardware = deps.hardware()
-            flavor = (
-                "nvidia"
-                if str(hardware.get("backend") or "cpu").lower() == "cuda" and deps.cuda_enabled()
-                else "cpu"
-            )
+            try:
+                profile = deps.resolve_profile({"accelerator_profile": "auto"})
+            except ToolchainError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            if profile != "cuda":
+                raise HTTPException(400, "Automatic portable ComfyUI setup requires a supported NVIDIA runtime. Configure an external GPU ComfyUI runtime or explicitly select a supported flavor; no CPU fallback was performed.")
+            flavor = "nvidia"
+        if flavor not in {"cpu", "nvidia", "amd"}:
+            raise HTTPException(400, "No supported GPU flavor selected. Choose a GPU runtime or explicitly select CPU.")
+        return flavor
+
+    @router.post("/comfyui/portable/start")
+    def setup_comfyui_portable_start(payload: dict[str, Any]):
+        flavor = resolve_comfy_flavor(payload)
         port = int((payload or {}).get("port") or 8188)
         task = deps.tasks.start(
             f"start_comfyui_portable:{flavor}",
@@ -287,7 +294,7 @@ def create_setup_router(deps: SetupRouterDependencies) -> APIRouter:
     @router.post("/edmg/install")
     def setup_edmg_install(payload: dict[str, Any]):
         mode = str((payload or {}).get("mode") or "standard").strip().lower() or "standard"
-        backend = str((payload or {}).get("backend") or "cpu").strip().lower() or "cpu"
+        backend = str((payload or {}).get("backend") or "auto").strip().lower() or "auto"
         task = deps.tasks.start(
             f"install_edmg_core:{mode}:{backend}",
             deps.install_edmg,

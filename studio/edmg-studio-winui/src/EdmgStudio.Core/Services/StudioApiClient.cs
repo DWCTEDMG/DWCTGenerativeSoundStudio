@@ -733,7 +733,7 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
         PostEmptySetupActionAsync("/v1/setup/7zip/install", cancellationToken);
 
     public Task<SetupTaskActionResponse> InstallBackendAsync(
-        string acceleratorProfile = "cpu",
+        string acceleratorProfile = "auto",
         CancellationToken cancellationToken = default)
     {
         acceleratorProfile = ValidateSetupProfile(acceleratorProfile);
@@ -745,7 +745,7 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     }
 
     public Task<SetupTaskActionResponse> InstallFullSetupAsync(
-        string acceleratorProfile = "cpu",
+        string acceleratorProfile = "auto",
         int comfyPort = 8188,
         string model = "qwen3:8b",
         CancellationToken cancellationToken = default)
@@ -761,10 +761,10 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     }
 
     public Task<SetupTaskActionResponse> InstallPortableComfyUiAsync(
-        string flavor = "cpu",
+        string flavor = "auto",
         CancellationToken cancellationToken = default)
     {
-        flavor = ValidateComfyUiFlavor(flavor, allowAuto: false);
+        flavor = ValidateComfyUiFlavor(flavor, allowAuto: true);
         return PostSetupActionAsync(
             "/v1/setup/comfyui/portable/install",
             new SetupComfyUiInstallRequest(flavor),
@@ -797,7 +797,7 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
 
     public Task<SetupTaskActionResponse> InstallEdmgCoreAsync(
         string mode = "standard",
-        string backend = "cpu",
+        string backend = "auto",
         CancellationToken cancellationToken = default)
     {
         mode = RequireShortValue(mode, nameof(mode), 50).ToLowerInvariant();
@@ -2656,9 +2656,9 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     private static string ValidateSetupProfile(string value)
     {
         var profile = RequireShortValue(value, nameof(value), 20).ToLowerInvariant();
-        if (profile is not ("cpu" or "cuda" or "directml"))
+        if (profile is not ("auto" or "cpu" or "cuda" or "directml"))
         {
-            throw new ArgumentException("Setup profile must be cpu, cuda, or directml.", nameof(value));
+            throw new ArgumentException("Setup profile must be auto, cpu, cuda, or directml.", nameof(value));
         }
 
         return profile;

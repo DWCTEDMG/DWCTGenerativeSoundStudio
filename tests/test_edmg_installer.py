@@ -23,6 +23,25 @@ def _load_module():
     return module
 
 
+def test_default_install_chooses_cuda_without_cpu_fallback(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module._UV_TOOLCHAIN, "active_accelerator_profile", lambda: "cuda")
+    calls = []
+    monkeypatch.setattr(module, "install", lambda **kwargs: calls.append(kwargs) or 0)
+    assert module.main(["install"]) == 0
+    assert calls[0]["backend"] == "cu130"
+    assert module.main(["install", "--backend", "cpu"]) == 0
+    assert calls[1]["backend"] == "cpu"
+
+
+def test_legacy_installer_rejects_unsupported_gpu_before_install(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module._UV_TOOLCHAIN, "active_accelerator_profile", lambda: "directml")
+    monkeypatch.setattr(module, "install", lambda **kwargs: pytest.fail("Must not fall back to CPU"))
+    with pytest.raises(SystemExit):
+        module.main(["install"])
+
+
 def _load_installer_gui_module():
     spec = importlib.util.spec_from_file_location(
         "installer_gui_test_module", INSTALLER_GUI_PATH

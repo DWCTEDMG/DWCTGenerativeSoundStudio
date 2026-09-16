@@ -22,7 +22,7 @@ public sealed class BackendConfigurationTests
     {
         Assert.AreEqual("cuda", BackendConfiguration.NormalizeAcceleratorProfile("NVIDIA"));
         Assert.AreEqual("directml", BackendConfiguration.NormalizeAcceleratorProfile("amd"));
-        Assert.AreEqual("cpu", BackendConfiguration.NormalizeAcceleratorProfile(null));
+        Assert.AreEqual("cpu", BackendConfiguration.NormalizeAcceleratorProfile("cpu"));
         Assert.ThrowsExactly<ArgumentException>(() => BackendConfiguration.NormalizeAcceleratorProfile("unsupported"));
     }
 
@@ -31,7 +31,9 @@ public sealed class BackendConfigurationTests
     {
         Assert.AreEqual("cuda", BackendConfiguration.ResolveAcceleratorProfile(null, () => true, isWindows: true));
         Assert.AreEqual("directml", BackendConfiguration.ResolveAcceleratorProfile(null, () => false, isWindows: true));
-        Assert.AreEqual("cpu", BackendConfiguration.ResolveAcceleratorProfile(null, () => false, isWindows: false));
+        Assert.ThrowsExactly<ArgumentException>(() => BackendConfiguration.ResolveAcceleratorProfile(null, () => false, isWindows: false));
+        Assert.AreEqual("cuda", BackendConfiguration.ResolveAcceleratorProfile("auto", () => true, isWindows: true));
+        Assert.ThrowsExactly<ArgumentException>(() => BackendConfiguration.NormalizeAcceleratorProfile(null));
         Assert.AreEqual("cpu", BackendConfiguration.ResolveAcceleratorProfile("cpu", () => true, isWindows: true));
     }
 
@@ -61,7 +63,7 @@ public sealed class BackendConfigurationTests
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "run", "--frozen", "--no-default-groups", "--python", "3.12",
+                    "run", "--frozen", "--no-sync", "--no-default-groups", "--python", "3.12",
                     "--extra", "cuda",
                     "--extra", "core",
                     "--extra", "audio",

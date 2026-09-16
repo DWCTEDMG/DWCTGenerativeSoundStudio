@@ -213,7 +213,7 @@ jobs:
         run: >-
           uv run --project studio/edmg-studio/python_backend --frozen
           --extra cpu --extra core --extra audio --group test
-          python scripts/run_pytest_scopes.py
+          python scripts/run_pytest_scopes.py --accelerator-profile cpu
 
       - name: Validate frozen DirectML profile
         if: runner.os == 'Windows'

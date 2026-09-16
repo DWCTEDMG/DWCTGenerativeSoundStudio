@@ -411,9 +411,9 @@ def _torch_index_url(backend: str) -> str:
     backend = backend.strip().lower()
     if backend in {"cpu", "cpu-only"}:
         return "https://download.pytorch.org/whl/cpu"
-    if backend in {"cu118", "cu121", "cu124"}:
+    if backend in {"cu118", "cu121", "cu124", "cu130"}:
         return f"https://download.pytorch.org/whl/{backend}"
-    raise ValueError(f"Unsupported backend: {backend} (use cpu, cu118, cu121, cu124)")
+    raise ValueError(f"Unsupported backend: {backend} (use cpu, cu118, cu121, cu124, cu130)")
 
 
 def _install_whisper_no_deps(
@@ -639,7 +639,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     pi.add_argument("--skip-torch", action="store_true", default=False)
     pi.add_argument(
-        "--backend", default="cpu", choices=["cpu", "cu118", "cu121", "cu124"]
+        "--backend", default="auto", choices=["auto", "cpu", "cuda", "directml", "cu118", "cu121", "cu124", "cu130"]
     )
 
     # Back-compat flags
@@ -692,8 +692,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         backend = str(args.backend)
         if args.cuda_version:
             backend = f"cu{args.cuda_version}"
-        if bool(args.cuda) and not args.cuda_version and args.backend == "cpu":
-            backend = "cu121"
+        if bool(args.cuda) and not args.cuda_version:
+            backend = "cu130"
+
+        if backend in {"auto", "cuda", "directml"}:
+            profile = _UV_TOOLCHAIN.active_accelerator_profile() if backend == "auto" else backend
+            if profile == "directml":
+                p.error("This legacy repair installer cannot provision DirectML. Use the Studio backend profile setup; no CPU fallback was performed.")
+            backend = "cu130" if profile == "cuda" else "cpu"
 
         return install(
             mode=str(args.mode),

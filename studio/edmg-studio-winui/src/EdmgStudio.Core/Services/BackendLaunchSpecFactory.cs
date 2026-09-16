@@ -76,6 +76,7 @@ public sealed class BackendLaunchSpecFactory
         {
             "run",
             "--frozen",
+            "--no-sync",
             "--no-default-groups",
             "--python",
             "3.12",

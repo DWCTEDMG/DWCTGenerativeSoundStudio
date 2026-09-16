@@ -159,7 +159,6 @@ public sealed record BackendConfiguration(
         {
             "nvidia" => "cuda",
             "amd" => "directml",
-            "" => "cpu",
             _ => normalized
         };
 
@@ -178,7 +177,7 @@ public sealed record BackendConfiguration(
         Func<bool>? hasNvidiaGpu = null,
         bool? isWindows = null)
     {
-        if (!string.IsNullOrWhiteSpace(value))
+        if (!string.IsNullOrWhiteSpace(value) && !string.Equals(value.Trim(), "auto", StringComparison.OrdinalIgnoreCase))
         {
             return NormalizeAcceleratorProfile(value);
         }
@@ -190,7 +189,8 @@ public sealed record BackendConfiguration(
             return "cuda";
         }
 
-        return windows ? "directml" : "cpu";
+        return windows ? "directml" : throw new ArgumentException(
+            "No supported automatic GPU profile was found. Configure a supported GPU runtime or explicitly select cpu; CPU fallback is disabled.");
     }
 
     private static bool DetectNvidiaGpu()

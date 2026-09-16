@@ -236,7 +236,8 @@
                                     AutomationProperties.AutomationId="SetupAcceleratorProfileComboBox"
                                     Header="Accelerator profile"
                                     SelectedIndex="0">
-                                    <ComboBoxItem Content="CPU" Tag="cpu" />
+                                    <ComboBoxItem Content="Automatic — prefer GPU" Tag="auto" />
+                                    <ComboBoxItem Content="CPU — explicit opt-in" Tag="cpu" />
                                     <ComboBoxItem Content="NVIDIA CUDA" Tag="cuda" />
                                     <ComboBoxItem Content="DirectML" Tag="directml" />
                                 </ComboBox>
@@ -265,7 +266,8 @@
                                     AutomationProperties.AutomationId="SetupComfyFlavorComboBox"
                                     Header="Portable flavor"
                                     SelectedIndex="0">
-                                    <ComboBoxItem Content="CPU" Tag="cpu" />
+                                    <ComboBoxItem Content="Automatic — prefer GPU" Tag="auto" />
+                                    <ComboBoxItem Content="CPU — explicit opt-in" Tag="cpu" />
                                     <ComboBoxItem Content="NVIDIA" Tag="nvidia" />
                                     <ComboBoxItem Content="AMD" Tag="amd" />
                                 </ComboBox>

@@ -72,7 +72,7 @@ open; the heading must not be read as evidence that earlier accepted phases were
 - Native VST3 discovery may be scanner-only or unavailable. Do not claim plugin processing until instantiate, bus negotiation, processing, state, latency, and crash-isolation evidence exists.
 - Automation editing and immutable callback snapshots do not prove live callback consumption.
 - Native ADR recording is unavailable unless a real capture device and qualification receipt pass; deterministic capture is test support only.
-- Native waveform extraction and waveform-based alignment remain unavailable where the UI says so; timecode alignment and imported canonical post data remain supported.
+- Native bounded WAVE extraction and clap/transient/waveform alignment are implemented in Timeline Post with authorized project media, matching sample rates, cancellation, and explicit preview/apply. Running-app media qualification remains open; timecode alignment and imported canonical post data remain supported.
 - Native preview/render/export is currently stereo-only; unsupported channel/object layouts are preserved and reported.
 - Hunyuan and LTX package installation is not runtime readiness. Each requires a real inference smoke test and matching receipt.
 - CI may validate packaging contracts while reporting interactive UI automation as not run when its driver is unavailable.

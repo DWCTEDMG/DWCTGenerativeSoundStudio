@@ -211,9 +211,8 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         EdmgReadinessText.Text = "EDMG Core: " + DescribeDiagnostic(setup.Edmg, "available", "ok");
         SevenZipReadinessText.Text = "7-Zip: " + DescribeDiagnostic(setup.SevenZip, "ok", "available");
 
-        var profile = ReadString(setup.Toolchain, "accelerator_profile")
-            ?? ReadString(setup.Toolchain, "profile");
-        SelectTaggedItem(AcceleratorProfileComboBox, profile);
+        // Status reports the installed profile; it must not overwrite the user's
+        // automatic policy or an explicit selection on every refresh.
 
         var model = ReadString(setup.Ollama, "model");
         if (!string.IsNullOrWhiteSpace(model))
@@ -408,7 +407,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         await QueueSetupActionAsync(
             "Full setup",
             token => App.Services.ApiClient.InstallFullSetupAsync(
-                GetSelectedTag(AcceleratorProfileComboBox, "cpu"),
+                GetSelectedTag(AcceleratorProfileComboBox, "auto"),
                 GetComfyPort(),
                 OllamaModelTextBox.Text,
                 token));
@@ -417,7 +416,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         await QueueSetupActionAsync(
             "Backend profile synchronization",
             token => App.Services.ApiClient.InstallBackendAsync(
-                GetSelectedTag(AcceleratorProfileComboBox, "cpu"),
+                GetSelectedTag(AcceleratorProfileComboBox, "auto"),
                 token));
 
     private async void InstallSevenZip_Click(object sender, RoutedEventArgs e) =>
@@ -427,7 +426,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         await QueueSetupActionAsync(
             "EDMG Core installation",
             token => App.Services.ApiClient.InstallEdmgCoreAsync(
-                backend: GetSelectedTag(AcceleratorProfileComboBox, "cpu"),
+                backend: GetSelectedTag(AcceleratorProfileComboBox, "auto"),
                 cancellationToken: token));
 
     private async void InstallOllama_Click(object sender, RoutedEventArgs e) =>
@@ -448,7 +447,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         await QueueSetupActionAsync(
             "Portable ComfyUI installation",
             token => App.Services.ApiClient.InstallPortableComfyUiAsync(
-                GetSelectedTag(ComfyFlavorComboBox, "cpu"),
+                GetSelectedTag(ComfyFlavorComboBox, "auto"),
                 token));
 
     private async void StartComfyUi_Click(object sender, RoutedEventArgs e) =>

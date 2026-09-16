@@ -105,15 +105,15 @@ public sealed record SetupOllamaPullRequest(
     [property: JsonPropertyName("model")] string Model = "qwen3:8b");
 
 public sealed record SetupProfileRequest(
-    [property: JsonPropertyName("accelerator_profile")] string AcceleratorProfile = "cpu");
+    [property: JsonPropertyName("accelerator_profile")] string AcceleratorProfile = "auto");
 
 public sealed record SetupFullInstallRequest(
-    [property: JsonPropertyName("accelerator_profile")] string AcceleratorProfile = "cpu",
+    [property: JsonPropertyName("accelerator_profile")] string AcceleratorProfile = "auto",
     [property: JsonPropertyName("comfy_port")] int ComfyPort = 8188,
     [property: JsonPropertyName("model")] string Model = "qwen3:8b");
 
 public sealed record SetupComfyUiInstallRequest(
-    [property: JsonPropertyName("flavor")] string Flavor = "cpu");
+    [property: JsonPropertyName("flavor")] string Flavor = "auto");
 
 public sealed record SetupComfyUiStartRequest(
     [property: JsonPropertyName("flavor")] string Flavor = "auto",
@@ -121,4 +121,4 @@ public sealed record SetupComfyUiStartRequest(
 
 public sealed record SetupEdmgInstallRequest(
     [property: JsonPropertyName("mode")] string Mode = "standard",
-    [property: JsonPropertyName("backend")] string Backend = "cpu");
+    [property: JsonPropertyName("backend")] string Backend = "auto");

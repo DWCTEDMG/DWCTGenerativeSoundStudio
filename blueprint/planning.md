@@ -596,7 +596,7 @@ Implementation status:
 
 - Canonical timelines now carry a versioned, extension-preserving `timeline.post` document for sync anchors, ADR cues and imported takes, reconform history, interchange history, channel layouts, and object-audio metadata. Exact sample positions remain canonical decimal strings and unsupported future schema versions fail explicitly.
 - Project timebases now preserve rational frame rates, project start timecode, and drop-frame mode. Professional timecode supports 24000/1001, 24, 25, 30000/1001, 30, 50, 60000/1001, and 60 fps; invalid dropped labels are rejected, while legacy non-timecode rates remain loadable and use a non-destructive project-rate display fallback.
-- Core alignment provides exact timecode, clap/transient onset, and common-audio normalized cross-correlation results with confidence, overlap, ambiguity, diagnostics, and an explicit acceptance boundary. The native Post workspace exposes timecode alignment and honestly disables waveform-derived planning until native waveform extraction exists.
+- Core alignment provides exact timecode, clap/transient onset, and common-audio normalized cross-correlation results with confidence, overlap, ambiguity, diagnostics, and an explicit acceptance boundary. The native Post workspace now exposes timecode and bounded WAVE-derived alignment with authorized project media, matching sample rates, cancellation, and explicit preview/apply. Running-app media qualification remains separate.
 - ADR contracts support cues, imported or pre-recorded takes, recording metadata, review state, and one approved preferred take. Timeline provides cue, take-registration, and review controls; native recording is visibly unavailable instead of simulated.
 - Reconform planning validates insert/delete/move ranges and conflicts, rejects affected locked tracks, previews before mutation, and commits through the existing revision-safe whole-document command. Application updates clips, markers, ADR cues, sync positions, and history; clips crossing inserted/deleted ranges are split with source ranges trimmed so source-to-timeline correspondence is preserved.
 - Canonical post JSON is lossless and extension-preserving, including nested reconform edit extensions. CMX3600 uses source ranges for source timecodes and timeline bounds for record timecodes, reports reel, frame-rounding, source-range, speed, effects, post-metadata, and layout losses, and requires explicit consent before lossy export. ADR CSV handles quoted multiline fields and reports omitted cue, take, review, recording, association, and broader post metadata.
@@ -667,8 +667,8 @@ Use the pinned Python 3.12 and `uv` environment:
 
 ```powershell
 uv lock --project studio\edmg-studio\python_backend --check
-uv sync --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio --group test --group lint
-uv run --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio --group test python -m pytest
+uv run --project studio\edmg-studio\python_backend --frozen --no-sync python scripts\run_pytest_scopes.py --sync
+uv run --project studio\edmg-studio\python_backend --frozen --no-sync --group test python -m pytest
 ```
 
 Run the smallest focused tests while developing, then the applicable full regression scope before the phase commit. Run Ruff on changed Python files.
@@ -676,7 +676,7 @@ Run the smallest focused tests while developing, then the applicable full regres
 ### Cross-scope regression
 
 ```powershell
-uv run --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts\run_pytest_scopes.py
+uv run --project studio\edmg-studio\python_backend --frozen --no-sync --group test python scripts\run_pytest_scopes.py
 ```
 
 Validation must use exit status and assertions as authoritative. Known, documented stderr noise is not a failure when the test runner exits successfully.

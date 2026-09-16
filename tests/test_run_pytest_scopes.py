@@ -60,25 +60,61 @@ def test_resolve_uv_rejects_wrong_version_even_when_explicit(monkeypatch: pytest
 
 @pytest.mark.parametrize("profile", ["cpu", "cuda", "directml"])
 @pytest.mark.parametrize("explicit", [False, True])
-def test_selected_profile_is_preserved_in_sync_and_both_test_scopes(monkeypatch, tmp_path, profile, explicit):
+@pytest.mark.parametrize("sync", [False, True])
+def test_selected_profile_is_preserved_in_sync_and_both_test_scopes(monkeypatch, tmp_path, profile, explicit, sync):
     module = _load_module()
     calls = []
     monkeypatch.setattr(module, "_resolve_uv", lambda: "uv")
     monkeypatch.setenv("EDMG_PYTEST_TEMP_ROOT", str(tmp_path))
     monkeypatch.setenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu" if explicit else profile)
+    if profile == "directml":
+        from edmg_studio_backend import uv_toolchain
+        monkeypatch.setattr(uv_toolchain.platform, "system", lambda: "Windows")
 
     def record(label, cwd, args, *, env):
         calls.append((label, args, env))
         return 0
 
     monkeypatch.setattr(module, "run_step", record)
-    assert module.main(["--accelerator-profile", profile] if explicit else []) == 0
-    assert len(calls) == 4
+    arguments = ["--accelerator-profile", profile] if explicit else []
+    assert module.main(arguments + (["--sync"] if sync else [])) == 0
+    assert len(calls) == (4 if sync else 3)
     for _, command, env in calls[1:]:
         extras = [command[i + 1] for i, arg in enumerate(command) if arg == "--extra"]
         assert set(extras) == {profile, "core", "audio"}
         assert env["EDMG_BACKEND_ACCELERATOR_PROFILE"] == profile
-    assert "--inexact" in calls[1][1]  # Preserve installed ASR/model packages.
+    if sync:
+        assert "--inexact" in calls[1][1]  # Preserve installed ASR/model packages.
+    else:
+        assert all("sync" not in command for _, command, _ in calls)
+
+
+def test_default_auto_uses_gpu_without_mutating_environment(monkeypatch, tmp_path):
+    module = _load_module()
+    from edmg_studio_backend import uv_toolchain
+    monkeypatch.delenv("EDMG_BACKEND_ACCELERATOR_PROFILE", raising=False)
+    monkeypatch.setenv("EDMG_PYTEST_TEMP_ROOT", str(tmp_path))
+    monkeypatch.setattr(uv_toolchain, "installed_accelerator_profile", lambda: "cuda")
+    monkeypatch.setattr(uv_toolchain, "detect_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(module, "_resolve_uv", lambda: "uv")
+    calls = []
+    monkeypatch.setattr(module, "run_step", lambda label, cwd, args, *, env: calls.append((args, env)) or 0)
+    assert module.main([]) == 0
+    assert len(calls) == 3
+    assert all("sync" not in args for args, _ in calls)
+    assert all(env["EDMG_BACKEND_ACCELERATOR_PROFILE"] == "cuda" for _, env in calls)
+
+
+def test_auto_without_supported_gpu_stops_before_tools(monkeypatch):
+    module = _load_module()
+    from edmg_studio_backend import uv_toolchain
+    monkeypatch.delenv("EDMG_BACKEND_ACCELERATOR_PROFILE", raising=False)
+    monkeypatch.setattr(uv_toolchain, "installed_accelerator_profile", lambda: None)
+    monkeypatch.setattr(uv_toolchain, "detect_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(uv_toolchain.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(module, "_resolve_uv", lambda: pytest.fail("Must not synchronize or run tools"))
+    with pytest.raises(SystemExit):
+        module.main([])
 
 
 def test_invalid_profile_fails_before_sync(monkeypatch):

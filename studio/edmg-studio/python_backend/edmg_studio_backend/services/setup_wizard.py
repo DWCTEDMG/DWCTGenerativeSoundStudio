@@ -26,6 +26,7 @@ from ..uv_toolchain import (
     is_packaged_backend,
     normalize_accelerator_profile,
     profile_from_legacy_inputs,
+    resolve_accelerator_profile,
     sync_frozen_project,
     toolchain_status,
 )
@@ -1142,13 +1143,13 @@ def resolve_setup_accelerator_profile(payload: dict[str, Any] | None = None) -> 
     flavor = str(data.get("flavor") or "").strip() or None
 
     if raw_profile:
-        if raw_profile not in ACCELERATOR_PROFILES:
+        if raw_profile not in (*ACCELERATOR_PROFILES, "auto"):
             allowed = ", ".join(ACCELERATOR_PROFILES)
             raise ToolchainError(
                 f"Unsupported accelerator_profile {data.get('accelerator_profile')!r}. "
                 f"Choose exactly one of: {allowed}."
             )
-        resolved = normalize_accelerator_profile(raw_profile)
+        resolved = resolve_accelerator_profile(raw_profile)
         if bundle is not None or flavor is not None:
             legacy = profile_from_legacy_inputs(bundle=bundle, flavor=flavor)
             if legacy != resolved:
@@ -1186,8 +1187,8 @@ def check_backend_bundle(
         status = dict(toolchain_status(profile=None, check_sync=check_sync))
         resolved_profile = str(status.get("accelerator_profile") or "unknown").strip().lower()
     else:
-        resolved_profile = active_accelerator_profile()
-        status = dict(toolchain_status(profile=resolved_profile, check_sync=check_sync))
+        status = dict(toolchain_status(profile=None, check_sync=check_sync))
+        resolved_profile = str(status.get("accelerator_profile") or "unavailable")
 
     installed_profile = str(status.get("accelerator_profile") or "").strip().lower()
     if profile_requested and status.get("immutable") and installed_profile != resolved_profile:

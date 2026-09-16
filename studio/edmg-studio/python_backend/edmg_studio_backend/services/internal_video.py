@@ -1122,21 +1122,22 @@ def _device_auto(preference: str = "auto") -> str:
         except Exception:
             return False
 
-    if pref == "cuda" and _cuda_ok():
-        return "cuda"
-    if pref == "mps" and _mps_ok():
-        return "mps"
-    if pref == "directml" and _directml_ok():
-        return "directml"
+    probes = {"cuda": _cuda_ok, "mps": _mps_ok, "directml": _directml_ok}
+    if pref in probes:
+        if probes[pref]():
+            return pref
+        raise RuntimeError(f"Requested {pref} acceleration is unavailable. No CPU fallback was performed.")
     if pref == "cpu":
         return "cpu"
+    if pref != "auto":
+        raise ValueError(f"Unsupported render device: {preference!r}")
     if _cuda_ok():
         return "cuda"
     if _mps_ok():
         return "mps"
     if _directml_ok():
         return "directml"
-    return "cpu"
+    raise RuntimeError("No supported GPU is ready for internal rendering. Configure GPU acceleration or explicitly select CPU; automatic CPU fallback is disabled.")
 
 
 def _encode_prompt(pipes: _Pipes, prompt: str) -> Any:

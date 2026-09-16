@@ -50,13 +50,15 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
 `studio/edmg-studio/README.md`, and the `package.json` scripts.
 
 ### Python
+- GPU-first policy: use automatic accelerator selection; CPU requires an explicit `--accelerator-profile cpu` or `EDMG_BACKEND_ACCELERATOR_PROFILE=cpu`. Never synchronize an existing GPU environment to CPU as a default.
+- `scripts/run_pytest_scopes.py` preserves dependencies unless `--sync` is explicitly supplied. It detects/preserves CUDA, otherwise selects the Windows DirectML package lane, and fails without a supported GPU profile on other platforms. Runtime readiness remains separately validated.
 - Python is pinned to 3.12 in the repository `.python-version`; use the pinned `uv` 0.11.28
   project environment rather than whichever interpreter or package installer is on `PATH`.
 - From the repo root, validate and synchronize the baseline with
   `uv lock --project studio/edmg-studio/python_backend --check` followed by
-  `uv sync --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test --group lint`.
+  `uv run --project studio/edmg-studio/python_backend --frozen --no-sync python scripts/run_pytest_scopes.py --sync`.
 - Start the backend with
-  `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`.
+  `uv run --project studio/edmg-studio/python_backend --frozen --no-sync python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`.
 - Ollama and ComfyUI are **not** installed here. Set `EDMG_AI_PROVIDER=rule_based` so planning
   uses the built-in `RuleBasedPlanner` (no LLM server needed). The create→upload→analyze→plan
   flow works fully with the rule-based provider; only actual model rendering needs GPU + model
@@ -76,7 +78,7 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
   resolution cannot recurse; `src/test/api.test.ts` carries the regression coverage.
 
 ### Tests
-- Backend: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python -m pytest` must exit 0. Test counts intentionally are not pinned here because they drift as coverage is added.
+- Backend: `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python -m pytest` must exit 0. Test counts intentionally are not pinned here because they drift as coverage is added.
 - Frontend: `pnpm run test:ui` must exit 0. The Windows-only
   `src/test/directorRuntime.test.ts` may log a hardcoded `C:\...` ENOENT message to stderr on Linux
   while the test and runner still pass; treat the exit code and assertions as authoritative.
@@ -85,8 +87,8 @@ The notes below are the non-obvious gotchas; standard commands live in the root 
 - `pnpm run lint` and `pnpm run typecheck` both pass clean on this branch (exit 0).
 - Repo-level: the frozen uv project environment is the reliable green signal.
   Some repo-root orchestration tests may still fail on branches with in-flight render-tier work.
-  Run both scopes with `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`.
-  Proxy fallback coverage: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --group test python -m pytest tests/test_studio_proxy_fallback.py`.
+  Run both scopes with `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py`.
+  Proxy fallback coverage: `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python -m pytest tests/test_studio_proxy_fallback.py`.
 
 ### Storage
 - Backend project data is written to `studio/edmg-studio/python_backend/data/` (gitignored) when

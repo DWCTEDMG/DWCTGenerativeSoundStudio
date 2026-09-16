@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,6 +12,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "studio" / "edmg-studio" / "python_backend"
 DEFAULT_TEMP_ROOT = REPO_ROOT / ".pytest-runtime"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from edmg_studio_backend.uv_toolchain import ToolchainError, resolve_accelerator_profile  # noqa: E402
 UV_VERSION = "0.11.28"
 UV_PROJECT_FLAGS = [
     "--project",
@@ -54,7 +59,7 @@ def _resolve_uv() -> str:
     return uv
 
 
-def _uv_pytest_command(uv: str, *pytest_args: str, profile: str = "cpu") -> list[str]:
+def _uv_pytest_command(uv: str, *pytest_args: str, profile: str) -> list[str]:
     return [uv, "run", *UV_PROJECT_FLAGS, "--extra", profile, "python", "-m", "pytest", *pytest_args]
 
 
@@ -86,15 +91,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run isolated repository and backend tests.")
     parser.add_argument(
         "--accelerator-profile",
-        choices=("cpu", "cuda", "directml"),
-        default=os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cpu").strip().lower(),
-        help="Runtime to preserve during sync (default: EDMG_BACKEND_ACCELERATOR_PROFILE or cpu).",
+        choices=("auto", "cpu", "cuda", "directml"),
+        default=os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "auto").strip().lower() or "auto",
+        help="GPU-first auto selection; CPU requires an explicit choice.",
     )
+    parser.add_argument("--sync", action="store_true", help="Explicitly synchronize dependencies before testing. Default: preserve the environment.")
     args = parser.parse_args(argv)
     profile = args.accelerator_profile
     # argparse does not validate a string default against choices.
-    if profile not in {"cpu", "cuda", "directml"}:
+    if profile not in {"auto", "cpu", "cuda", "directml"}:
         parser.error(f"Unsupported accelerator profile: {profile!r}")
+    try:
+        profile = resolve_accelerator_profile(profile)
+    except ToolchainError as exc:
+        parser.error(str(exc))
+    print(f"[pytest-scopes] accelerator={profile}; dependency sync={'requested' if args.sync else 'disabled'}", flush=True)
     uv = _resolve_uv()
     toolchain_env = dict(os.environ)
     toolchain_env["EDMG_BACKEND_ACCELERATOR_PROFILE"] = profile
@@ -121,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             "test",
         ],
         env=toolchain_env,
-    )
+    ) if args.sync else 0
     if sync_rc != 0:
         return sync_rc
 

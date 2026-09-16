@@ -25,7 +25,6 @@ def _load_launcher():
 def test_profile_selection_prefers_explicit_closed_profile(monkeypatch):
     launcher = _load_launcher()
     monkeypatch.setenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "cuda")
-    monkeypatch.setattr(launcher.shutil, "which", lambda _name: None)
 
     assert launcher.select_profile() == "cuda"
 
@@ -36,19 +35,18 @@ def test_profile_selection_prefers_explicit_closed_profile(monkeypatch):
 
 def test_profile_selection_is_deterministic_for_detected_platform(monkeypatch):
     launcher = _load_launcher()
+    from edmg_studio_backend import uv_toolchain
     monkeypatch.delenv("EDMG_BACKEND_ACCELERATOR_PROFILE", raising=False)
-    monkeypatch.setattr(
-        launcher.shutil,
-        "which",
-        lambda name: "nvidia-smi" if name == "nvidia-smi" else None,
-    )
+    monkeypatch.setattr(uv_toolchain, "installed_accelerator_profile", lambda: None)
+    monkeypatch.setattr(uv_toolchain, "detect_nvidia_gpu", lambda: True)
     assert launcher.select_profile() == "cuda"
 
-    monkeypatch.setattr(launcher.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(launcher.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(uv_toolchain, "detect_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(uv_toolchain.platform, "system", lambda: "Windows")
     assert launcher.select_profile() == "directml"
-    monkeypatch.setattr(launcher.platform, "system", lambda: "Linux")
-    assert launcher.select_profile() == "cpu"
+    monkeypatch.setattr(uv_toolchain.platform, "system", lambda: "Linux")
+    with pytest.raises(launcher.ToolchainError, match="CPU fallback is disabled"):
+        launcher.select_profile()
 
 
 def test_main_syncs_then_runs_the_same_frozen_profile(monkeypatch):

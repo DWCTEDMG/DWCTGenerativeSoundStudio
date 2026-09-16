@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import platform
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,20 +13,13 @@ if str(BACKEND_ROOT) not in sys.path:
 from edmg_studio_backend.uv_toolchain import (  # noqa: E402
     ToolchainError,
     frozen_run_command,
-    normalize_accelerator_profile,
+    active_accelerator_profile,
     sync_frozen_project,
 )
 
 
 def select_profile() -> str:
-    explicit = os.getenv("EDMG_BACKEND_ACCELERATOR_PROFILE", "").strip()
-    if explicit:
-        return normalize_accelerator_profile(explicit)
-    if shutil.which("nvidia-smi"):
-        return "cuda"
-    if platform.system() == "Windows":
-        return "directml"
-    return "cpu"
+    return active_accelerator_profile()
 
 
 def main() -> int:

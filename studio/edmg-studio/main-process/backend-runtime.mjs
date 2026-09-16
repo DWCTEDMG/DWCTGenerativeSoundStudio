@@ -16,7 +16,7 @@ const PACKAGED_BACKEND_LAUNCH_ATTEMPTS = 3;
 
 export function normalizeAcceleratorProfile(value, { isWindows = process.platform === "win32" } = {}) {
   const aliases = { nvidia: "cuda", amd: "directml" };
-  const requested = String(value || "cpu").trim().toLowerCase();
+  const requested = String(value || "").trim().toLowerCase();
   const profile = aliases[requested] || requested;
   if (!new Set(["cpu", "directml", "cuda"]).has(profile)) {
     throw new Error(`Unsupported accelerator profile ${JSON.stringify(value)}; choose cpu, directml, or cuda.`);
@@ -44,12 +44,13 @@ export function resolveAcceleratorProfile(
   value,
   { isWindows = process.platform === "win32", hasNvidiaGpu } = {},
 ) {
-  if (String(value || "").trim()) {
+  if (String(value || "").trim() && String(value).trim().toLowerCase() !== "auto") {
     return normalizeAcceleratorProfile(value, { isWindows });
   }
   const nvidiaAvailable = hasNvidiaGpu ?? detectNvidiaGpu();
   if (nvidiaAvailable) return "cuda";
-  return isWindows ? "directml" : "cpu";
+  if (isWindows) return "directml";
+  throw new Error("No supported automatic GPU profile was found. Configure a supported GPU runtime or explicitly select cpu; CPU fallback is disabled.");
 }
 
 export function buildBackendLaunchSpec({
@@ -79,7 +80,7 @@ export function buildBackendLaunchSpec({
     { isWindows, hasNvidiaGpu },
   );
   const command = String(env.EDMG_UV_BIN || "uv").trim() || "uv";
-  const args = ["run", "--frozen", "--no-default-groups", "--python", "3.12"];
+  const args = ["run", "--frozen", "--no-sync", "--no-default-groups", "--python", "3.12"];
   for (const extra of [acceleratorProfile, ...SOURCE_RUNTIME_CAPABILITY_EXTRAS]) {
     args.push("--extra", extra);
   }
