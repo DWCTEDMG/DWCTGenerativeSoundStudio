@@ -1098,7 +1098,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             return false;
         }
-        ShowStatus("Draft edits are unsaved", "Save or apply your draft edits in Overview + Director before continuing, or choose Discard local edits to reload the saved draft.", InfoBarSeverity.Warning);
+            ShowStatus("Draft edits are unsaved", "Save or apply your Workspace draft edits before continuing, or choose Discard local edits to reload the saved draft.", InfoBarSeverity.Warning);
         return true;
     }
 
@@ -2073,12 +2073,24 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private void SetWorkspaceMode(bool isStoryboard, bool isPlanner, bool isReactive)
     {
-        OverviewScrollViewer.Visibility = isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
+        bool allTools = !isStoryboard && !isPlanner && !isReactive;
+        OverviewScrollViewer.Visibility = Visibility.Visible;
         OverviewPanel.Visibility = isStoryboard || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
-        StoryboardPanel.Visibility = isStoryboard ? Visibility.Visible : Visibility.Collapsed;
-        PlannerPanel.Visibility = isPlanner ? Visibility.Visible : Visibility.Collapsed;
-        ReactivePanel.Visibility = isReactive ? Visibility.Visible : Visibility.Collapsed;
+        StoryboardSection.Visibility = allTools || isStoryboard ? Visibility.Visible : Visibility.Collapsed;
+        PlannerSection.Visibility = allTools || isPlanner ? Visibility.Visible : Visibility.Collapsed;
+        ReactiveSection.Visibility = allTools || isReactive ? Visibility.Visible : Visibility.Collapsed;
+        if (isStoryboard) StoryboardSection.IsExpanded = true;
+        if (isPlanner) PlannerSection.IsExpanded = true;
+        if (isReactive) ReactiveSection.IsExpanded = true;
     }
+
+    private void StoryboardSection_Expanding(Expander sender, ExpanderExpandingEventArgs args) => PopulateStoryboard();
+
+    private async void PlannerSection_Expanding(Expander sender, ExpanderExpandingEventArgs args) =>
+        await EnsureSpecialistPageAsync(WorkspacePlannerFrame, typeof(AiPlannerLabPage));
+
+    private async void ReactiveSection_Expanding(Expander sender, ExpanderExpandingEventArgs args) =>
+        await EnsureSpecialistPageAsync(WorkspaceReactiveFrame, typeof(ReactiveLabPage));
 
     private void ClearWorkspace(string message)
     {

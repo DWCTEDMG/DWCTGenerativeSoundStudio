@@ -39,7 +39,7 @@
                 <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Workspace" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Shape source media, project health, analysis, storyboards, and handoffs from one native workbench."
+                    Text="Create, direct, and refine"
                     TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
@@ -76,7 +76,7 @@
                 x:Name="OverviewSelectorItem"
                 AutomationProperties.AutomationId="Workspace.Mode.Overview"
                 Icon="Home"
-                Text="Overview + Director" />
+                Text="All tools" />
             <SelectorBarItem
                 x:Name="StoryboardSelectorItem"
                 AutomationProperties.AutomationId="Workspace.Mode.Storyboard"
@@ -100,6 +100,12 @@
             HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
             <Grid x:Name="WorkspaceContentGrid">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid x:Name="OverviewPanel" ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition x:Name="OverviewPrimaryColumn" Width="*" />
@@ -135,7 +141,7 @@
                         </Border>
 
                         <StackPanel Spacing="12" Padding="20,8">
-                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Create" />
+                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Creative direction" />
                             <TextBox x:Name="CommandBrief" Header="Creative brief" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80" AutomationProperties.AutomationId="Workspace.Command.Brief" />
                             <TextBox x:Name="CommandStyle" Header="Visual style" AutomationProperties.AutomationId="Workspace.Command.Style" />
                             <ComboBox x:Name="CommandProvider" Header="Creative model provider" SelectedIndex="0" HorizontalAlignment="Stretch">
@@ -955,7 +961,9 @@
                     </StackPanel>
                 </Grid>
 
-                <StackPanel x:Name="StoryboardPanel" Visibility="Collapsed" Spacing="16">
+                <Expander x:Name="StoryboardSection" Grid.Row="1" Header="Storyboard" HorizontalAlignment="Stretch"
+                          Margin="0,16,0,0" Expanding="StoryboardSection_Expanding">
+                <StackPanel x:Name="StoryboardPanel" Spacing="16" HorizontalAlignment="Stretch">
                     <Border Style="{StaticResource WorkspaceCardStyle}">
                         <StackPanel Spacing="12">
                             <Grid ColumnSpacing="12">
@@ -1049,6 +1057,20 @@
                         </StackPanel>
                     </Border>
                 </StackPanel>
+                </Expander>
+
+                <Expander x:Name="PlannerSection" Grid.Row="2" Header="AI Planner" HorizontalAlignment="Stretch"
+                          Margin="0,16,0,0" Expanding="PlannerSection_Expanding">
+                    <Grid x:Name="PlannerPanel" Height="760" HorizontalAlignment="Stretch">
+                        <Frame x:Name="WorkspacePlannerFrame" AutomationProperties.AutomationId="Workspace.Planner.Frame" />
+                    </Grid>
+                </Expander>
+                <Expander x:Name="ReactiveSection" Grid.Row="3" Header="Reactive motion and camera" HorizontalAlignment="Stretch"
+                          Margin="0,16,0,0" Expanding="ReactiveSection_Expanding">
+                    <Grid x:Name="ReactivePanel" Height="760" HorizontalAlignment="Stretch">
+                        <Frame x:Name="WorkspaceReactiveFrame" AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
+                    </Grid>
+                </Expander>
 
                 <VisualStateManager.VisualStateGroups>
                     <VisualStateGroup x:Name="WorkspaceWidthStates">
@@ -1080,13 +1102,5 @@
                 </VisualStateManager.VisualStateGroups>
             </Grid>
         </ScrollViewer>
-        <Grid x:Name="PlannerPanel" Grid.Row="3" Visibility="Collapsed">
-            <Frame x:Name="WorkspacePlannerFrame"
-                   AutomationProperties.AutomationId="Workspace.Planner.Frame" />
-        </Grid>
-        <Grid x:Name="ReactivePanel" Grid.Row="3" Visibility="Collapsed">
-            <Frame x:Name="WorkspaceReactiveFrame"
-                   AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
-        </Grid>
     </Grid>
 </Page>
