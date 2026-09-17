@@ -1,22 +1,41 @@
-# Enhanced Deforum Music Generator (EDMG) — Studio Canonical Repo
+<p align="center">
+  <img src="studio/edmg-studio-winui/Assets/Brand/StudioLogo.png" alt="EDMG Studio" width="180">
+</p>
 
-This repository now combines:
-- EDMG Studio, the primary desktop product
-- standalone EDMG engine flows
-- legacy A1111 / engine integration paths
-- installer and build tooling for compatibility and advanced workflows
+<h1 align="center">EDMG Studio</h1>
 
-EDMG Studio is the authoritative product surface. The native WinUI 3 client is
-the only active Windows product surface; the other repo-root entrypoints remain
-available for compatibility, migration, Linux, and engine-specific workflows.
-They are not alternative Windows release paths.
+<p align="center">
+  Native Windows control room for music analysis, AI direction, audio-reactive storytelling, and generative video rendering.
+</p>
+
+<p align="center">
+  <a href="studio/edmg-studio-winui/README.md"><strong>WinUI Studio</strong></a> ·
+  <a href="README_STUDIO.md"><strong>Get started</strong></a> ·
+  <a href="docs/README.md"><strong>Documentation</strong></a> ·
+  <a href="blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md"><strong>Roadmap</strong></a>
+</p>
+
+> [!IMPORTANT]
+> The native WinUI 3 client is the active Windows product. The shared FastAPI backend powers
+> analysis, AI providers, managed models, rendering, jobs, outputs, and persistence. Electron/React
+> remains available for Linux and compatibility workflows.
+
+## What EDMG Studio does
+
+EDMG Studio turns music into a reviewable audiovisual production workflow:
+
+- understand source audio with Whisper and structured music analysis
+- develop a baseline creative plan with configured AI providers or BYOM
+- strengthen direction with managed Qwen while preserving fallback plans and edits
+- review storyboard beats, motion cues, camera direction, and reactive keyframes
+- hand approved project state to render, preflight, queue, review, and output tools
 
 The current cross-project status and forward work list are maintained in the
 [WinUI 3 consolidated blueprint](blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md).
 Use it with [`blueprint/planning.md`](blueprint/planning.md); source code, tests,
 and accepted phase evidence remain authoritative over prose.
 
-## Canonical product
+## Product architecture
 
 The Studio product has one active Windows client, one compatibility client, and
 one authoritative backend:

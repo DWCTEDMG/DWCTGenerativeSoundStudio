@@ -32,17 +32,17 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions, consolidated blueprint, phase history, regression references, and the latest Reviewer update are loaded. The user directly assigned a repository-wide README and instruction refresh; Visual Studio Copilot owns the documentation changes and publication checkpoint.
+**Acknowledgement:** Repository instructions, consolidated blueprint, phase history, regression references, and the latest Reviewer update are loaded. The user directly assigned an update to the repository's public GitHub page; Visual Studio Copilot owns the landing-page and repository-metadata changes.
 
-- Updated UTC: 2026-09-17T12:06:00Z.
-- Task / blueprint gate: Reconcile repository-owned README and active instruction documents with the current native WinUI 3 Studio, completed unified Workspace, shared backend, GPU-first policy, compatibility surfaces, and qualification boundaries.
-- Branch / base commit / dirty state: `codex/Unified` based on `92c3ee5ff0d3a1a47af03a3c0e9da401808838de`, initially matching `origin/codex/Unified`; documentation changes and the formerly untracked `WORKSPACE_UNIFIED_BLUEPRINT_TASK.md` are ready for the requested commit.
-- Owned files or work areas: 24 tracked README/instruction/blueprint files plus `WORKSPACE_UNIFIED_BLUEPRINT_TASK.md` and this Implementer section. Vendored LTX documentation, historical chat logs, and test-fixture records remain unchanged.
-- Completed since last update: Documented the native Workspace as the Windows control room; preserved specialist surfaces; labeled React/Electron as Linux/compatibility; corrected backend, model-cache, ComfyUI, Unreal, JUCE, testing, and toolchain commands to preserve the selected accelerator; recorded Workspace commits and honest qualification boundaries.
-- Remaining / blockers: Stage, commit, push, and verify local/remote HEAD equality. No blocker.
-- Validation: From repository root, `git diff --check` exited 0. Repository instruction searches found no unsafe default CPU synchronization in current guidance; remaining `--extra cpu` references are explicitly CPU-only legacy/provisioning examples, and historical `ChatLog4.md` remains unchanged. Final scope is 24 modified tracked files plus one new task document. Product builds/tests were not run for this documentation-only change; no dependency synchronization, launch, real-model inference, device audio, render, signing, Store, or clean-machine qualification occurred. No separate log file was created.
-- Next step: Commit with the required co-author trailer, push to `origin/codex/Unified`, and verify the remote commit.
-- Reviewer findings addressed: GPU-environment preservation and evidence boundaries are now explicit across current Studio guidance; no documentation-specific Reviewer blocker remains.
+- Updated UTC: 2026-09-17T11:19:16Z.
+- Task / blueprint gate: Improve the public GitHub repository landing experience so it accurately presents the current native WinUI 3 Studio and unified Workspace.
+- Branch / base commit / dirty state: `codex/Unified` at `15bc96795af54cd8104b38094fb35e1d1ae7296f`, initially matching `origin/codex/Unified`. The pre-existing deletion of `studio/edmg-studio-winui/docs/workspace-command-center.md` is not owned and will remain untouched.
+- Owned files or work areas: Root `README.md`, repository About metadata, and this Implementer section.
+- Completed since last update: Confirmed GitHub Pages is not configured. Added a branded README hero, concise product promise, current architecture callout, and direct navigation to WinUI, setup, documentation, and roadmap material. Published the repository About description and discovery topics for WinUI 3, .NET, generative AI/video, audio-reactive visualization, FastAPI, CUDA, Whisper, and Qwen.
+- Remaining / blockers: Commit and push the owned documentation files, then verify the public landing page and local/remote HEAD. No blocker.
+- Validation: From repository root, all six README image/link targets exist and `git diff --check -- README.md STUDIO_PROGRESS.md` exited 0. GitHub API readback returned the expected description and ten topics and confirmed GitHub Pages remains disabled. Product builds/tests were not run for this documentation/metadata-only task; no dependency synchronization, launch, model inference, device audio, rendering, signing, Store, or clean-machine qualification occurred. No log file was created.
+- Next step: Commit and push only `README.md` and `STUDIO_PROGRESS.md`, preserving the unrelated deleted Workspace guide.
+- Reviewer findings addressed: Existing GPU-environment and evidence boundaries remain unchanged; no task-specific Reviewer blocker is present.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 
