@@ -32,17 +32,17 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions, consolidated blueprint, phase history, regression references, and the latest Reviewer update are loaded. The user directly assigned an update to the repository's public GitHub page; Visual Studio Copilot owns the landing-page and repository-metadata changes.
+**Acknowledgement:** Repository instructions, consolidated blueprint, phase history, regression references, and the latest Reviewer update are loaded. The user directly assigned repair of Timeline WASAPI shared playback after `FormatNotSupported`; Visual Studio Copilot owns the narrow audio-engine fix and focused regression coverage.
 
-- Updated UTC: 2026-09-17T11:19:16Z.
-- Task / blueprint gate: Improve the public GitHub repository landing experience so it accurately presents the current native WinUI 3 Studio and unified Workspace.
-- Branch / base commit / dirty state: `codex/Unified` at `15bc96795af54cd8104b38094fb35e1d1ae7296f`, initially matching `origin/codex/Unified`. The pre-existing deletion of `studio/edmg-studio-winui/docs/workspace-command-center.md` is not owned and will remain untouched.
-- Owned files or work areas: Root `README.md`, repository About metadata, and this Implementer section.
-- Completed since last update: Confirmed GitHub Pages is not configured. Added a branded README hero, concise product promise, current architecture callout, and direct navigation to WinUI, setup, documentation, and roadmap material. Published the repository About description and discovery topics for WinUI 3, .NET, generative AI/video, audio-reactive visualization, FastAPI, CUDA, Whisper, and Qwen.
-- Remaining / blockers: Commit and push the owned documentation files, then verify the public landing page and local/remote HEAD. No blocker.
-- Validation: From repository root, all six README image/link targets exist and `git diff --check -- README.md STUDIO_PROGRESS.md` exited 0. GitHub API readback returned the expected description and ten topics and confirmed GitHub Pages remains disabled. Product builds/tests were not run for this documentation/metadata-only task; no dependency synchronization, launch, model inference, device audio, rendering, signing, Store, or clean-machine qualification occurred. No log file was created.
-- Next step: Commit and push only `README.md` and `STUDIO_PROGRESS.md`, preserving the unrelated deleted Workspace guide.
-- Reviewer findings addressed: Existing GPU-environment and evidence boundaries remain unchanged; no task-specific Reviewer blocker is present.
+- Updated UTC: 2026-09-17T11:52:13Z.
+- Task / blueprint gate: Gate C — make shared-mode Timeline playback negotiate the selected Windows render endpoint format instead of forcing an incompatible project PCM format.
+- Branch / base commit / dirty state: `codex/Unified` at `f29f907565c1de95ac7b10859e37d8ba99bbf66f`, matching `origin/codex/Unified` at task start; candidate is dirty with the two owned implementation/test files, this handoff, and the unrelated pre-existing deletion of `studio/edmg-studio-winui/docs/workspace-command-center.md`, which remains untouched.
+- Owned files or work areas: `studio/edmg-studio-winui/Services/WindowsAudioEngine.cs`, `studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/WindowsAudioEngineTests.cs`, and this Implementer section.
+- Completed since last update: Removed the forced project-rate stereo PCM graph format so AudioGraph negotiates the selected shared-mode endpoint’s configured sample rate and channel count. Project-rate transport and source-position arithmetic remain unchanged. Added focused regression coverage proving graph settings no longer force encoding properties.
+- Remaining / blockers: No implementation blocker. Real device playback must be retried in the running app because automated tests do not qualify the workstation endpoint.
+- Validation: From repository root, `dotnet test studio\edmg-studio-winui\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj --no-restore --configuration Release -p:PlatformTarget=x64 --nologo --filter FullyQualifiedName~WindowsAudioEngineTests` exited 0 with 4 passed, 0 failed, 0 skipped; log `%TEMP%\wasapi-device-format-tests.log`. `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 0 warnings and 0 errors; log `%TEMP%\wasapi-device-format-build.log`. An earlier parallel build attempt exited 1 because the simultaneous test process locked `EdmgStudio.Core.dll`; the serial rerun passed. `git diff --check` exited 0. No dependency synchronization, application launch, model inference, real-device playback qualification, rendering, signing, Store, or clean-machine qualification occurred.
+- Next step: Reload the Timeline on the affected workstation endpoint and confirm playback initializes without `FormatNotSupported`.
+- Reviewer findings addressed: The fix preserves the Reviewer’s explicit boundary that AudioGraph mixer integration and real device qualification remain open; this task addresses graph format negotiation only.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 
