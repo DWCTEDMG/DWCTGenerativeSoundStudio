@@ -769,6 +769,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         PopulateProject();
         RestoreCommand(project.Project);
         await LoadCommandTranscriptionAsync(cancellationToken);
+        await RefreshCommandQwenReadinessAsync(cancellationToken);
         await RefreshMediaPoolAsync(projectId, cancellationToken);
         await LoadWorkflowAsync(projectId, cancellationToken);
         await LoadDirectorAsync(projectId, cancellationToken);
@@ -1743,6 +1744,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             : "—";
         AnalysisSectionCountText.Text = project.SectionCount.ToString();
         TranscriptStatusText.Text = project.TranscriptStatus;
+        CommandAnalysisStatus.Text = WorkspaceReadinessSummary.Analysis(project);
 
         if (!TryGetMetadataObject(project.Meta, "analysis", out JsonElement analysis))
         {
@@ -2155,6 +2157,11 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         VariantItems.Clear();
         StoryboardItems.Clear();
         ProjectStatusText.Text = message;
+        CommandProviderStatus.Text = "Provider: managed internal Qwen; no project selected.";
+        CommandQwenStatus.Text = "Qwen: readiness not checked because no project is selected.";
+        CommandTranscriptionStatus.Text = "Whisper: readiness not checked because no project is selected.";
+        CommandAnalysisStatus.Text = "Analysis: no project selected.";
+        CommandStatus.Text = message;
         AnalysisSummaryText.Text = "No project analysis loaded.";
         AnalysisJsonTextBox.Text = "{}";
         VariantJsonTextBox.Text = "{}";

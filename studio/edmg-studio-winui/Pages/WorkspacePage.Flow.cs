@@ -10,6 +10,9 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class WorkspacePage
 {
+    private const string DefaultQwenModelId = "hf_qwen3_vl_8b_gguf_director";
+    private const string ManagedWhisperModelId = "hf_whisper_large_v3_turbo_internal";
+
     public ObservableCollection<WorkspaceDirectionSceneItem> CommandProposalItems { get; } = [];
 
     private void CommandProvider_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -20,7 +23,16 @@ public sealed partial class WorkspacePage
         CommandModel.Visibility = internalModel ? Visibility.Collapsed : Visibility.Visible;
         CommandNativeAudio.IsEnabled = !internalModel;
         if (internalModel) CommandNativeAudio.IsChecked = false;
+        UpdateCommandProviderStatus();
+        if (!_restoringCommand) _ = RefreshCommandQwenReadinessAsync();
     }
+
+    private void CommandDirectorModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_restoringCommand) _ = RefreshCommandQwenReadinessAsync();
+    }
+
+    private void CommandModel_TextChanged(object sender, TextChangedEventArgs e) => UpdateCommandProviderStatus();
 
     private void CommandModels_Click(object sender, RoutedEventArgs e) => NavigateTo("models");
     private void CommandSettings_Click(object sender, RoutedEventArgs e) => NavigateTo("settings");
@@ -124,9 +136,54 @@ public sealed partial class WorkspacePage
             JsonElement settings = response.TryGetProperty("settings", out var nested) ? nested : response;
             string provider = settings.TryGetProperty("provider", out var value) ? value.GetString() ?? "unknown" : "unknown";
             string model = settings.TryGetProperty("model", out var selected) ? selected.GetString() ?? "" : "";
-            CommandTranscriptionStatus.Text = $"Transcription: {provider.Replace("faster_whisper", "Whisper").Replace("transformers_whisper", "Whisper (Transformers)")} {model}";
+            string device = settings.TryGetProperty("device", out var configuredDevice) ? configuredDevice.GetString() ?? "auto" : "auto";
+            string label = provider.Replace("faster_whisper", "Whisper").Replace("transformers_whisper", "Whisper (Transformers)");
+            if (provider is "faster_whisper" or "transformers_whisper")
+            {
+                ModelRuntimeStatus status = await App.Services.ApiClient.GetModelRuntimeReadinessAsync(ManagedWhisperModelId, token);
+                CommandTranscriptionStatus.Text = $"Whisper configured: {label} {model} on {device}\n" +
+                    WorkspaceReadinessSummary.Model("Managed Whisper package", status);
+            }
+            else
+            {
+                CommandTranscriptionStatus.Text = $"Transcription configured: {label} {model} on {device}. Runtime qualification is not reported by the managed Whisper package.";
+            }
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception error) { CommandTranscriptionStatus.Text = $"Transcription settings unavailable: {error.Message}"; }
+        catch (HttpRequestException error) { CommandTranscriptionStatus.Text = $"Whisper readiness unavailable: {error.Message}"; }
+        catch (StudioApiException error) { CommandTranscriptionStatus.Text = $"Whisper readiness unavailable: {error.UserFacingMessage}"; }
+        catch (InvalidOperationException error) { CommandTranscriptionStatus.Text = $"Whisper readiness unavailable: {error.Message}"; }
+        catch (JsonException error) { CommandTranscriptionStatus.Text = $"Whisper readiness unavailable: {error.Message}"; }
+    }
+
+    private void UpdateCommandProviderStatus()
+    {
+        if (CommandProviderStatus is null || CommandProvider is null || CommandModel is null) return;
+        CommandProviderStatus.Text = WorkspaceReadinessSummary.Provider(
+            GetComboTag(CommandProvider, "internal_qwen"), NullIfWhiteSpace(CommandModel.Text));
+    }
+
+    private async Task RefreshCommandQwenReadinessAsync(CancellationToken token = default)
+    {
+        if (CommandQwenStatus is null || CommandProvider is null || CommandDirectorModel is null) return;
+        if (GetComboTag(CommandProvider, "internal_qwen") != "internal_qwen")
+        {
+            CommandQwenStatus.Text = "Internal Qwen readiness is not applicable while BYOM is selected.";
+            return;
+        }
+
+        string modelId = GetComboTag(CommandDirectorModel, DefaultQwenModelId);
+        if (string.IsNullOrWhiteSpace(modelId)) modelId = DefaultQwenModelId;
+        CommandQwenStatus.Text = "Qwen: checking configuration and runtime evidence";
+        try
+        {
+            ModelRuntimeStatus status = await App.Services.ApiClient.GetModelRuntimeReadinessAsync(modelId, token);
+            CommandQwenStatus.Text = WorkspaceReadinessSummary.Model("Qwen", status);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (HttpRequestException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.Message}"; }
+        catch (StudioApiException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.UserFacingMessage}"; }
+        catch (InvalidOperationException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.Message}"; }
+        catch (JsonException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.Message}"; }
     }
 }

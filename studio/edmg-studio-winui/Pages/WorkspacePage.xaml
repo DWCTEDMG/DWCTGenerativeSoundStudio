@@ -152,15 +152,22 @@
                                 <ComboBoxItem Content="NVIDIA NIM" Tag="nemotron_cloud" />
                                 <ComboBoxItem Content="Manual / local planning" Tag="local" />
                             </ComboBox>
-                            <ComboBox x:Name="CommandDirectorModel" Header="Qwen model" SelectedIndex="0" HorizontalAlignment="Stretch">
-                                <ComboBoxItem Content="Automatic" Tag="" />
+                            <ComboBox x:Name="CommandDirectorModel" Header="Qwen model" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandDirectorModel_SelectionChanged">
+                                <ComboBoxItem Content="Automatic (managed Qwen3-VL-8B)" Tag="" />
                                 <ComboBoxItem Content="Qwen3-VL-8B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_8b_gguf_director" />
                                 <ComboBoxItem Content="Qwen3-VL-30B-A3B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_30b_gguf_director" />
                                 <ComboBoxItem Content="Qwen3-VL-8B Instruct" Tag="hf_qwen3_vl_8b_director" />
                             </ComboBox>
-                            <TextBox x:Name="CommandModel" Header="BYOM model" PlaceholderText="Configured model" Visibility="Collapsed" />
+                            <TextBox x:Name="CommandModel" Header="BYOM model" PlaceholderText="Configured model" Visibility="Collapsed" TextChanged="CommandModel_TextChanged" />
                             <CheckBox x:Name="CommandNativeAudio" Content="Send track to selected audio-capable model" />
-                            <TextBlock x:Name="CommandTranscriptionStatus" Text="Transcription: loading settings" TextWrapping="Wrap" />
+                            <Border Padding="12" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                <StackPanel Spacing="6">
+                                    <TextBlock x:Name="CommandProviderStatus" Text="Provider: managed internal Qwen; checking evidence." TextWrapping="Wrap" />
+                                    <TextBlock x:Name="CommandQwenStatus" Text="Qwen: checking configuration and runtime evidence" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="CommandTranscriptionStatus" Text="Whisper: loading settings and runtime evidence" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="CommandAnalysisStatus" Text="Analysis: no project selected" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
                             <ComboBox x:Name="CommandRenderer" Header="Video renderer" SelectedIndex="0" HorizontalAlignment="Stretch">
                                 <ComboBoxItem Content="Automatic" Tag="auto" />
                                 <ComboBoxItem Content="LTX-2.5" Tag="ltx_25" />

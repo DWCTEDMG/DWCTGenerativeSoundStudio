@@ -8,39 +8,48 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class WorkspacePage
 {
     private bool _commandRunning;
+    private bool _restoringCommand;
     private string? _commandProjectId;
 
     private void RestoreCommand(ProjectDto project)
     {
         if (_commandProjectId == project.Id) return;
         _commandProjectId = project.Id;
-        _pendingAudioPath = null;
-        PendingAudioText.Text = project.HasAudio ? $"Project audio: {project.AudioFileName}" : "No audio selected";
-        CommandRenderer.SelectedIndex = 0;
-        CommandBrief.Text = "";
-        CommandStyle.Text = "";
-        CommandModel.Text = "";
-        CommandProvider.SelectedIndex = 0;
-        CommandNativeAudio.IsChecked = false;
-        CommandDirectorModel.SelectedIndex = 0;
-        CommandProposalItems.Clear();
-        CommandProposalSection.Visibility = Visibility.Collapsed;
-        CommandProgress.Value = 0;
-        if (project.Meta.ValueKind != JsonValueKind.Object || !project.Meta.TryGetProperty("workspace_command", out JsonElement saved)) return;
-        if (saved.TryGetProperty("brief", out var brief)) CommandBrief.Text = brief.GetString() ?? "";
-        if (saved.TryGetProperty("style", out var style)) CommandStyle.Text = style.GetString() ?? "";
-        if (saved.TryGetProperty("model", out var model)) CommandModel.Text = model.GetString() ?? "";
-        if (saved.TryGetProperty("native_audio", out var audio)) CommandNativeAudio.IsChecked = audio.ValueKind == JsonValueKind.True;
-        if (saved.TryGetProperty("provider", out var provider))
-            foreach (ComboBoxItem item in CommandProvider.Items)
-                if ((string?)item.Tag == provider.GetString()) CommandProvider.SelectedItem = item;
-        if (GetComboTag(CommandProvider, "internal_qwen") == "internal_qwen")
+        _restoringCommand = true;
+        try
         {
-            foreach (ComboBoxItem item in CommandDirectorModel.Items)
-                if ((string?)item.Tag == CommandModel.Text) CommandDirectorModel.SelectedItem = item;
+            _pendingAudioPath = null;
+            PendingAudioText.Text = project.HasAudio ? $"Project audio: {project.AudioFileName}" : "No audio selected";
+            CommandRenderer.SelectedIndex = 0;
+            CommandBrief.Text = "";
+            CommandStyle.Text = "";
             CommandModel.Text = "";
+            CommandProvider.SelectedIndex = 0;
+            CommandNativeAudio.IsChecked = false;
+            CommandDirectorModel.SelectedIndex = 0;
+            CommandProposalItems.Clear();
+            CommandProposalSection.Visibility = Visibility.Collapsed;
+            CommandProgress.Value = 0;
+            if (project.Meta.ValueKind != JsonValueKind.Object || !project.Meta.TryGetProperty("workspace_command", out JsonElement saved)) return;
+            if (saved.TryGetProperty("brief", out var brief)) CommandBrief.Text = brief.GetString() ?? "";
+            if (saved.TryGetProperty("style", out var style)) CommandStyle.Text = style.GetString() ?? "";
+            if (saved.TryGetProperty("model", out var model)) CommandModel.Text = model.GetString() ?? "";
+            if (saved.TryGetProperty("native_audio", out var audio)) CommandNativeAudio.IsChecked = audio.ValueKind == JsonValueKind.True;
+            if (saved.TryGetProperty("provider", out var provider))
+                foreach (ComboBoxItem item in CommandProvider.Items)
+                    if ((string?)item.Tag == provider.GetString()) CommandProvider.SelectedItem = item;
+            if (GetComboTag(CommandProvider, "internal_qwen") == "internal_qwen")
+            {
+                foreach (ComboBoxItem item in CommandDirectorModel.Items)
+                    if ((string?)item.Tag == CommandModel.Text) CommandDirectorModel.SelectedItem = item;
+                CommandModel.Text = "";
+            }
         }
-        CommandProvider_SelectionChanged(CommandProvider, null!);
+        finally
+        {
+            CommandProvider_SelectionChanged(CommandProvider, null!);
+            _restoringCommand = false;
+        }
     }
 
     private async void CancelCommand_Click(object sender, RoutedEventArgs e)
@@ -88,15 +97,25 @@ public sealed partial class WorkspacePage
                         PendingAudioText.Text = "Project audio selected";
                         await RefreshProjectSnapshotAsync(projectId, token);
                         CommandStatus.Text = "Analyzing imported audio";
+                        CommandAnalysisStatus.Text = "Analysis: active - extracting audio features and running the configured Whisper provider.";
                         AnalysisResponse importedAnalysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, token);
-                        if (!importedAnalysis.Ok) throw new InvalidOperationException("Audio analysis did not complete.");
+                        if (!importedAnalysis.Ok)
+                        {
+                            CommandAnalysisStatus.Text = "Analysis: failed - imported audio remains available for retry.";
+                            throw new InvalidOperationException("Audio analysis did not complete.");
+                        }
                         await RefreshProjectSnapshotAsync(projectId, token);
                     }
                     if (_projectResponse?.Project.HasAnalysis != true)
                     {
                         CommandStatus.Text = "Analyzing audio";
+                        CommandAnalysisStatus.Text = "Analysis: active - extracting audio features and running the configured Whisper provider.";
                         AnalysisResponse analysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, token);
-                        if (!analysis.Ok) throw new InvalidOperationException("Audio analysis did not complete.");
+                        if (!analysis.Ok)
+                        {
+                            CommandAnalysisStatus.Text = "Analysis: failed - project audio remains available for retry.";
+                            throw new InvalidOperationException("Audio analysis did not complete.");
+                        }
                         await RefreshProjectSnapshotAsync(projectId, token);
                     }
                     token.ThrowIfCancellationRequested();
