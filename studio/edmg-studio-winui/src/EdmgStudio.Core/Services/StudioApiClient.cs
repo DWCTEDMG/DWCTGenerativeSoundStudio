@@ -887,10 +887,12 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
         string projectId,
         string mode,
         string engine,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        string? modelId = null) =>
         SendJsonAsync<JsonElement>(
             HttpMethod.Get,
-            $"/v1/projects/{EscapeIdentifier(projectId)}/director/readiness?mode={Uri.EscapeDataString(mode)}&engine={Uri.EscapeDataString(engine)}",
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/readiness?mode={Uri.EscapeDataString(mode)}&engine={Uri.EscapeDataString(engine)}" +
+                (string.IsNullOrWhiteSpace(modelId) ? "" : $"&model_id={Uri.EscapeDataString(modelId)}"),
             null,
             true,
             cancellationToken);

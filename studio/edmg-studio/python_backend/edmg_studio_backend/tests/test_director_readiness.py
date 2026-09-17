@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from edmg_studio_backend.api.director import create_director_router
 from edmg_studio_backend.domain.director_readiness import (
@@ -12,6 +13,46 @@ from edmg_studio_backend.domain.director_readiness import (
     resolve_director_readiness,
 )
 from edmg_studio_backend.store.projects import ProjectStore
+
+
+@pytest.mark.parametrize("model_id", [
+    "hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director",
+])
+def test_workspace_exact_model_override_retains_runtime_admission(model_id):
+    models = {
+        STANDARD_DIRECTOR_MODEL_ID: True,
+        model_id: {"installed": True, "runtime_ready": True, "device": "cuda:0", "blockers": []},
+    }
+    result = resolve_director_readiness(
+        {"backend": "cuda", "vram_gb": 48, "ram_gb": 64},
+        installed_models=models, director_model_id=model_id,
+    )
+    assert result.director.model_id == model_id
+    assert result.director.ready
+    models[model_id]["runtime_ready"] = False
+    models[model_id]["blockers"] = ["Smoke test required"]
+    blocked = resolve_director_readiness(
+        {"backend": "cuda", "vram_gb": 48, "ram_gb": 64},
+        installed_models=models, director_model_id=model_id,
+    )
+    assert not blocked.director.ready
+    assert blocked.director.model_id == model_id
+    assert "Smoke test required" in blocked.director.reason
+
+
+def test_workspace_exact_missing_model_does_not_silently_use_installed_model():
+    result = resolve_director_readiness(
+        {"backend": "cuda", "vram_gb": 48, "ram_gb": 64},
+        installed_models={STANDARD_DIRECTOR_MODEL_ID: True},
+        director_model_id="hf_qwen3_vl_30b_gguf_director",
+    )
+    assert not result.director.ready
+    assert result.director.model_id == "hf_qwen3_vl_30b_gguf_director"
+
+
+def test_workspace_rejects_unknown_internal_model():
+    with pytest.raises(ValueError, match="Unsupported internal Director model"):
+        resolve_director_readiness(director_model_id="untrusted-model")
 
 
 def test_low_hardware_automatic_resolves_standard_director_and_hunyuan_admission():

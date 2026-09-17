@@ -144,15 +144,23 @@
                             <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Creative direction" />
                             <TextBox x:Name="CommandBrief" Header="Creative brief" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80" AutomationProperties.AutomationId="Workspace.Command.Brief" />
                             <TextBox x:Name="CommandStyle" Header="Visual style" AutomationProperties.AutomationId="Workspace.Command.Style" />
-                            <ComboBox x:Name="CommandProvider" Header="Creative model provider" SelectedIndex="0" HorizontalAlignment="Stretch">
+                            <ComboBox x:Name="CommandProvider" Header="Creative model provider" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandProvider_SelectionChanged">
+                                <ComboBoxItem Content="Internal Qwen Director" Tag="internal_qwen" />
                                 <ComboBoxItem Content="Configured provider" Tag="configured" />
                                 <ComboBoxItem Content="Qwen / other model through Ollama" Tag="ollama" />
                                 <ComboBoxItem Content="OpenAI-compatible endpoint" Tag="openai_compat" />
                                 <ComboBoxItem Content="NVIDIA NIM" Tag="nemotron_cloud" />
                                 <ComboBoxItem Content="Manual / local planning" Tag="local" />
                             </ComboBox>
-                            <TextBox x:Name="CommandModel" Header="Model" PlaceholderText="Configured model" />
+                            <ComboBox x:Name="CommandDirectorModel" Header="Qwen model" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                <ComboBoxItem Content="Automatic" Tag="" />
+                                <ComboBoxItem Content="Qwen3-VL-8B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_8b_gguf_director" />
+                                <ComboBoxItem Content="Qwen3-VL-30B-A3B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_30b_gguf_director" />
+                                <ComboBoxItem Content="Qwen3-VL-8B Instruct" Tag="hf_qwen3_vl_8b_director" />
+                            </ComboBox>
+                            <TextBox x:Name="CommandModel" Header="BYOM model" PlaceholderText="Configured model" Visibility="Collapsed" />
                             <CheckBox x:Name="CommandNativeAudio" Content="Send track to selected audio-capable model" />
+                            <TextBlock x:Name="CommandTranscriptionStatus" Text="Transcription: loading settings" TextWrapping="Wrap" />
                             <ComboBox x:Name="CommandRenderer" Header="Video renderer" SelectedIndex="0" HorizontalAlignment="Stretch">
                                 <ComboBoxItem Content="Automatic" Tag="auto" />
                                 <ComboBoxItem Content="LTX-2.5" Tag="ltx_25" />
@@ -162,16 +170,39 @@
                             </ComboBox>
                             <TextBlock Text="{Binding Text, ElementName=PendingAudioText}" TextWrapping="Wrap" />
                             <TextBlock x:Name="CommandStatus" Text="Ready" TextWrapping="Wrap" AutomationProperties.AutomationId="Workspace.Command.Status" />
+                            <ProgressBar x:Name="CommandProgress" Minimum="0" Maximum="100" Value="0" AutomationProperties.AutomationId="Workspace.Command.Progress" />
                             <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Stretch">
                                 <AppBarButton Icon="Audio" Label="Choose audio" Click="ChooseAudioButton_Click" />
                                 <AppBarButton x:Name="MakeCommandButton" Icon="Play" Label="Make this" Click="MakeCommand_Click" AutomationProperties.AutomationId="Workspace.Command.Make" />
-                                <AppBarButton Icon="Cancel" Label="Cancel" Click="CancelCommand_Click" />
-                                <AppBarButton Icon="Forward" Label="Apply and open Render" Click="CommandRender_Click" />
+                                <AppBarButton x:Name="CancelCommandButton" Icon="Cancel" Label="Cancel" Click="CancelCommand_Click" IsEnabled="False" />
+                                <AppBarButton x:Name="CommandReviewButton" Icon="View" Label="Recover Director draft" Click="CommandReview_Click" />
+                                <AppBarButton x:Name="CommandRenderButton" Icon="Forward" Label="Apply and open Render" Click="CommandRender_Click" />
                                 <CommandBar.SecondaryCommands>
                                     <AppBarButton Label="Director" Click="OpenFullDirectorButton_Click" />
+                                    <AppBarButton Label="Models" Icon="Library" Click="CommandModels_Click" />
+                                    <AppBarButton Label="Transcription and BYOM settings" Icon="Setting" Click="CommandSettings_Click" />
                                 </CommandBar.SecondaryCommands>
                             </CommandBar>
                         </StackPanel>
+
+                        <Expander x:Name="CommandProposalSection" Header="Qwen draft review" Visibility="Collapsed" IsExpanded="True" HorizontalAlignment="Stretch">
+                            <StackPanel Spacing="12" HorizontalAlignment="Stretch">
+                                <TextBlock x:Name="CommandProposalSummary" TextWrapping="Wrap" />
+                                <ListView ItemsSource="{x:Bind CommandProposalItems}" SelectionMode="None" MaxHeight="480">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="local:WorkspaceDirectionSceneItem">
+                                            <StackPanel Spacing="6" Padding="0,8">
+                                                <TextBlock Text="{x:Bind Timing}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{x:Bind Intent}" TextWrapping="Wrap" />
+                                                <TextBlock Text="{x:Bind Actions}" TextWrapping="Wrap" />
+                                                <TextBlock Text="{x:Bind Camera}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <Button x:Name="UseCommandProposalButton" Content="Use draft and refine" Click="UseCommandProposal_Click" />
+                            </StackPanel>
+                        </Expander>
 
                         <Expander
                             x:Name="AudioAnalysisExpander"

@@ -232,6 +232,7 @@ def resolve_director_readiness(
     engine: str | None = "automatic",
     installed_models: dict[str, Any] | None = None,
     allow_external: bool = False,
+    director_model_id: str | None = None,
 ) -> DirectorReadiness:
     """Resolve a pipeline and report blockers without loading any model.
 
@@ -257,6 +258,14 @@ def resolve_director_readiness(
         tier,
         installed_models=installed,
     )
+    if director_model_id:
+        if director_model_id not in {
+            STANDARD_DIRECTOR_MODEL_ID, HIGH_TIER_DIRECTOR_MODEL_ID,
+            STANDARD_GGUF_ID, HIGH_GGUF_ID,
+        }:
+            raise ValueError(f"Unsupported internal Director model: {director_model_id}")
+        director_model = director_model_id
+        director_warnings = []
     warnings = renderer_warnings + director_warnings
 
     director_profile = (

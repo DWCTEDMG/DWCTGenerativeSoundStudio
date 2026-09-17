@@ -19,7 +19,10 @@ public sealed record DirectorGenerationRequest(
     string? StartSample = null,
     [property: JsonPropertyName("end_sample")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? EndSample = null);
+    string? EndSample = null,
+    [property: JsonPropertyName("model_id")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ModelId = null);
 
 public sealed record DirectorApplyRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision);

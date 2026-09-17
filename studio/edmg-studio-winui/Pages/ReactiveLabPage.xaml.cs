@@ -11,6 +11,7 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
 {
+    public bool HasUnsavedEdits => _keyframesDirty;
     private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
     private static readonly SemaphoreSlim _localStateWriteLock = new(1, 1);

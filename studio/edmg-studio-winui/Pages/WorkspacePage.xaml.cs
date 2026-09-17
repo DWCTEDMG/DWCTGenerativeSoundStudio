@@ -53,6 +53,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     public WorkspacePage()
     {
         InitializeComponent();
+        CommandProvider_SelectionChanged(CommandProvider, null!);
     }
 
     public ObservableCollection<WorkspaceAssetItem> AssetItems { get; } = [];
@@ -183,6 +184,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void ChooseAudioButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_commandRunning) return;
         string? path = await PickFileAsync(
             "Select audio",
             [".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"]);
@@ -766,6 +768,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _projectResponse = project;
         PopulateProject();
         RestoreCommand(project.Project);
+        await LoadCommandTranscriptionAsync(cancellationToken);
         await RefreshMediaPoolAsync(projectId, cancellationToken);
         await LoadWorkflowAsync(projectId, cancellationToken);
         await LoadDirectorAsync(projectId, cancellationToken);
@@ -1094,6 +1097,17 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private bool ProtectUnsavedWorkflowEdits()
     {
+        if (_directorDocument is not null && !WorkspaceDirectorInputsMatchDocument())
+        {
+            ShowStatus("Save Director changes", "Save your advanced direction edits before changing the shared draft or project.", InfoBarSeverity.Warning);
+            return true;
+        }
+        if (WorkspacePlannerFrame.Content is AiPlannerLabPage { HasUnsavedEdits: true } ||
+            WorkspaceReactiveFrame.Content is ReactiveLabPage { HasUnsavedEdits: true })
+        {
+            ShowStatus("Save editor changes", "Save your Planner and Reactive edits before changing the shared draft or project.", InfoBarSeverity.Warning);
+            return true;
+        }
         if (!HasUnsavedWorkflowEdits())
         {
             return false;
@@ -2073,6 +2087,11 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private void SetWorkspaceMode(bool isStoryboard, bool isPlanner, bool isReactive)
     {
+        if (_commandRunning && _operationCts is not null)
+        {
+            ShowStatus("Workspace is busy", "Wait for the current creation step or cancel it before starting another action.", InfoBarSeverity.Informational);
+            return;
+        }
         bool allTools = !isStoryboard && !isPlanner && !isReactive;
         OverviewScrollViewer.Visibility = Visibility.Visible;
         OverviewPanel.Visibility = isStoryboard || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;

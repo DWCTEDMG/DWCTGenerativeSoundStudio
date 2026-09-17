@@ -11,6 +11,7 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
 {
+    public bool HasUnsavedEdits => _isVariantDirty;
     private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
     private readonly StudioSessionService _session = App.Services.Session;

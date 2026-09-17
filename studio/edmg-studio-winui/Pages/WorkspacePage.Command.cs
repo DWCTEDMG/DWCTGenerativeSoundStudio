@@ -22,6 +22,10 @@ public sealed partial class WorkspacePage
         CommandModel.Text = "";
         CommandProvider.SelectedIndex = 0;
         CommandNativeAudio.IsChecked = false;
+        CommandDirectorModel.SelectedIndex = 0;
+        CommandProposalItems.Clear();
+        CommandProposalSection.Visibility = Visibility.Collapsed;
+        CommandProgress.Value = 0;
         if (project.Meta.ValueKind != JsonValueKind.Object || !project.Meta.TryGetProperty("workspace_command", out JsonElement saved)) return;
         if (saved.TryGetProperty("brief", out var brief)) CommandBrief.Text = brief.GetString() ?? "";
         if (saved.TryGetProperty("style", out var style)) CommandStyle.Text = style.GetString() ?? "";
@@ -30,31 +34,59 @@ public sealed partial class WorkspacePage
         if (saved.TryGetProperty("provider", out var provider))
             foreach (ComboBoxItem item in CommandProvider.Items)
                 if ((string?)item.Tag == provider.GetString()) CommandProvider.SelectedItem = item;
+        if (GetComboTag(CommandProvider, "internal_qwen") == "internal_qwen")
+        {
+            foreach (ComboBoxItem item in CommandDirectorModel.Items)
+                if ((string?)item.Tag == CommandModel.Text) CommandDirectorModel.SelectedItem = item;
+            CommandModel.Text = "";
+        }
+        CommandProvider_SelectionChanged(CommandProvider, null!);
     }
 
-    private void CancelCommand_Click(object sender, RoutedEventArgs e)
+    private async void CancelCommand_Click(object sender, RoutedEventArgs e)
     {
         CancelCurrentOperation();
         CommandStatus.Text = "Canceled. Completed stages remain in the project.";
+        if (_directorDraftJobStatus is "queued" or "running" or "paused" &&
+            _directorProjectId is string projectId && _directorDraftJobId is string jobId)
+        {
+            await RunBusyAsync("Canceling Director", async token =>
+            {
+                var response = await App.Services.ApiClient.CancelJobAsync(projectId, jobId, token);
+                _directorDraftJobStatus = response.Job.Status;
+            });
+        }
     }
 
     private async void MakeCommand_Click(object sender, RoutedEventArgs e)
     {
         if (_commandRunning || !TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits()) return;
-        string provider = GetComboTag(CommandProvider, "configured");
+        string provider = GetComboTag(CommandProvider, "internal_qwen");
+        bool internalModel = provider == "internal_qwen";
+        string? directorModel = NullIfWhiteSpace(GetComboTag(CommandDirectorModel, ""));
         string? model = NullIfWhiteSpace(CommandModel.Text);
         string? brief = NullIfWhiteSpace(CommandBrief.Text);
         string? style = NullIfWhiteSpace(CommandStyle.Text);
         bool nativeAudio = CommandNativeAudio.IsChecked == true;
-        _commandRunning = true;
-        MakeCommandButton.IsEnabled = false;
-        ProjectComboBox.IsEnabled = false;
+        SetCommandBusy(true);
         try
         {
             await RunBusyAsync("Creating direction", async token =>
             {
                 try
                 {
+                    if (internalModel)
+                    {
+                        CommandStatus.Text = "Checking Qwen readiness";
+                        var readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
+                            projectId, "automatic", "automatic", token, directorModel);
+                        var director = readiness.GetProperty("director");
+                        if (!director.GetProperty("ready").GetBoolean())
+                            throw new InvalidOperationException(director.GetProperty("reason").GetString());
+                    }
+                    if (_projectResponse?.Project.HasAudio != true && string.IsNullOrWhiteSpace(_pendingAudioPath))
+                        throw new InvalidOperationException("Choose source audio before creating direction.");
+                    CommandProgress.Value = 5;
                     if (!string.IsNullOrWhiteSpace(_pendingAudioPath))
                     {
                         CommandStatus.Text = "Importing audio";
@@ -77,34 +109,67 @@ public sealed partial class WorkspacePage
                         await RefreshProjectSnapshotAsync(projectId, token);
                     }
                     token.ThrowIfCancellationRequested();
+                    CommandProgress.Value = 30;
                     CommandStatus.Text = "Creating story, scenes, and visual direction";
-                    _generatedPlan = await App.Services.ApiClient.GeneratePlanAsync(projectId,
+                    // Reuse reviewed camera/motion data when Qwen already has a current draft.
+                    await LoadWorkflowAsync(projectId, token);
+                    if (!internalModel || WorkflowSceneItems.Count == 0)
+                    {
+                        _generatedPlan = await App.Services.ApiClient.GeneratePlanAsync(projectId,
                         new PlanRequest(_projectResponse?.Project.Name, brief, style,
                             NumberOfVariants: 1, MaximumScenes: 24,
                             ExpectedRevision: StudioPageHelpers.ExpectedRevision(_projectResponse?.Project),
-                            Provider: provider, Model: model, NativeAudio: nativeAudio),
-                        provider == "local" ? "local" : "ai", token);
+                            Provider: internalModel ? "local" : provider, Model: internalModel ? null : model, NativeAudio: nativeAudio),
+                        internalModel || provider == "local" ? "local" : "ai", token);
+                    }
                     await RefreshProjectSnapshotAsync(projectId, token);
                     _session.SelectedVariantIndex = 0;
                     CommandStatus.Text = "Preparing editable direction and motion";
                     // Plan generation already publishes the shared planner draft.
                     // Preparing again would replace it with the previously saved direction.
                     await LoadSelectedProjectAsync(projectId, token);
+                    if (internalModel)
+                    {
+                        CommandStatus.Text = "Queuing Qwen direction";
+                        string instruction = string.Join("\n", new[] { brief, style is null ? null : "Visual style: " + style }
+                            .Where(value => !string.IsNullOrWhiteSpace(value)));
+                        if (instruction.Length == 0)
+                            instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
+                        var request = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(),
+                            instruction, ModelId: directorModel);
+                        JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);
+                        _directorDraftJobId = queued.GetProperty("job_id").GetString()!;
+                        _directorDraftJobStatus = queued.GetProperty("status").GetString();
+                        _directorRevision = queued.GetProperty("revision").GetInt64();
+                        _session.SetSelectedJob(projectId, _directorDraftJobId);
+                        await WaitForCommandDirectorAsync(projectId, _directorDraftJobId, token);
+                        return;
+                    }
                     string actualProvider = _generatedPlan?.AdditionalData?.GetValueOrDefault("provider").ToString() ?? provider;
                     CommandStatus.Text = $"Draft ready ({actualProvider}). Edit below or continue to Render.";
+                    CommandProgress.Value = 100;
                 }
                 catch (OperationCanceledException) { CommandStatus.Text = "Canceled. Completed stages remain in the project."; throw; }
-                catch { CommandStatus.Text = "Creation failed. Your saved project and completed stages are retained."; throw; }
+                catch (Exception error) { CommandStatus.Text = $"Creation stopped: {error.Message}"; throw; }
             });
         }
-        finally { _commandRunning = false; MakeCommandButton.IsEnabled = true; ProjectComboBox.IsEnabled = true; }
+        finally { SetCommandBusy(false); }
     }
 
     private async void CommandRender_Click(object sender, RoutedEventArgs e)
     {
         if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
+        if (WorkspacePlannerFrame.Content is AiPlannerLabPage { HasUnsavedEdits: true } ||
+            WorkspaceReactiveFrame.Content is ReactiveLabPage { HasUnsavedEdits: true })
+        {
+            ShowStatus("Save editor changes", "Save your Planner and Reactive edits before applying the combined draft.", InfoBarSeverity.Warning);
+            return;
+        }
+        if (_directorReviewedJobId is not null && ProtectUnsavedWorkflowEdits()) return;
         await RunBusyAsync("Preparing render handoff", async token =>
         {
+            await UseCommandProposalAsync(projectId, token);
+            if (!HasUnsavedWorkflowEdits()) await LoadWorkflowAsync(projectId, token);
             if (_workflowStatus == "draft" && _workflowDraftId is string draftId)
             {
                 using JsonDocument document = JsonDocument.Parse(BuildWorkflowDocument().ToJsonString());
@@ -113,6 +178,8 @@ public sealed partial class WorkspacePage
                 ApplyWorkflowResponse(projectId, response);
                 await RefreshProjectSnapshotAsync(projectId, token);
             }
+            else if (_workflowStatus != "applied")
+                throw new InvalidOperationException("Create or recover a shared draft before opening Render.");
             token.ThrowIfCancellationRequested();
             _session.SetRenderContext("workspace-engine:" + GetComboTag(CommandRenderer, "auto"));
             NavigateTo("render");

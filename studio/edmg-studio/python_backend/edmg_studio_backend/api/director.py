@@ -44,6 +44,10 @@ class DirectorGenerationRequest(BaseModel):
     allow_external: bool = False
     start_sample: str | None = None
     end_sample: str | None = None
+    model_id: Literal[
+        "hf_qwen3_vl_8b_director", "hf_qwen3_vl_30b_director",
+        "hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director",
+    ] | None = None
 
 
 class DirectorApplyRequest(BaseModel):
@@ -125,6 +129,7 @@ def create_director_router(
         mode: str = "automatic",
         engine: str = "automatic",
         allow_external: bool = False,
+        model_id: str | None = None,
     ):
         project = get_store().get(project_id)
         if project is None:
@@ -136,6 +141,7 @@ def create_director_router(
                 engine=engine,
                 installed_models=installed_models(),
                 allow_external=allow_external,
+                director_model_id=model_id,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -168,7 +174,7 @@ def create_director_router(
                     "output_policy": "draft"}
         if project.revision != request.expected_revision:
             raise HTTPException(409, "Project changed; refresh direction before generating")
-        model_id = STANDARD_DIRECTOR_MODEL_ID
+        model_id = request.model_id or STANDARD_DIRECTOR_MODEL_ID
         readiness_snapshot = None
         hardware = hardware_profile() if get_hardware is not None else {}
         runtime_settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
@@ -180,6 +186,7 @@ def create_director_router(
                     engine=request.renderer_engine,
                     installed_models=installed_models(),
                     allow_external=request.allow_external,
+                    director_model_id=request.model_id,
                 )
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
@@ -273,6 +280,10 @@ def create_director_router(
                 raise HTTPException(409, "Operation ID already used for different direction")
 
             def persist_generation(current, active_job):
+                current.meta["workspace_command"] = {
+                    "provider": "internal_qwen", "model": model_id,
+                    "brief": request.instruction, "style": "", "native_audio": False,
+                }
                 if workflow:
                     current.meta["director_workflow"] = deepcopy(workflow)
                 current.meta["director_generation_context"] = {
