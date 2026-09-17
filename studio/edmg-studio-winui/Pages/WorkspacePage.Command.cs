@@ -75,15 +75,6 @@ public sealed partial class WorkspacePage
             {
                 try
                 {
-                    if (internalModel)
-                    {
-                        CommandStatus.Text = "Checking Qwen readiness";
-                        var readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
-                            projectId, "automatic", "automatic", token, directorModel);
-                        var director = readiness.GetProperty("director");
-                        if (!director.GetProperty("ready").GetBoolean())
-                            throw new InvalidOperationException(director.GetProperty("reason").GetString());
-                    }
                     if (_projectResponse?.Project.HasAudio != true && string.IsNullOrWhiteSpace(_pendingAudioPath))
                         throw new InvalidOperationException("Choose source audio before creating direction.");
                     CommandProgress.Value = 5;
@@ -130,19 +121,47 @@ public sealed partial class WorkspacePage
                     await LoadSelectedProjectAsync(projectId, token);
                     if (internalModel)
                     {
-                        CommandStatus.Text = "Queuing Qwen direction";
-                        string instruction = string.Join("\n", new[] { brief, style is null ? null : "Visual style: " + style }
-                            .Where(value => !string.IsNullOrWhiteSpace(value)));
-                        if (instruction.Length == 0)
-                            instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
-                        var request = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(),
-                            instruction, ModelId: directorModel);
-                        JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);
-                        _directorDraftJobId = queued.GetProperty("job_id").GetString()!;
-                        _directorDraftJobStatus = queued.GetProperty("status").GetString();
-                        _directorRevision = queued.GetProperty("revision").GetInt64();
-                        _session.SetSelectedJob(projectId, _directorDraftJobId);
-                        await WaitForCommandDirectorAsync(projectId, _directorDraftJobId, token);
+                        CommandStatus.Text = "Baseline ready. Checking Qwen readiness";
+                        JsonElement readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
+                            projectId, "automatic", "automatic", token, directorModel);
+                        JsonElement director = readiness.GetProperty("director");
+                        if (!director.GetProperty("ready").GetBoolean())
+                        {
+                            string reason = director.TryGetProperty("reason", out JsonElement reasonValue)
+                                ? reasonValue.GetString() ?? "The selected Qwen runtime is unavailable."
+                                : "The selected Qwen runtime is unavailable.";
+                            CommandStatus.Text = $"Baseline draft ready. Qwen was not run: {reason}";
+                            CommandProgress.Value = 100;
+                            ShowStatus("Baseline draft retained", reason, InfoBarSeverity.Warning);
+                            return;
+                        }
+
+                        try
+                        {
+                            CommandStatus.Text = "Queuing Qwen direction";
+                            string instruction = string.Join("\n", new[] { brief, style is null ? null : "Visual style: " + style }
+                                .Where(value => !string.IsNullOrWhiteSpace(value)));
+                            if (instruction.Length == 0)
+                                instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
+                            var request = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(),
+                                instruction, ModelId: directorModel);
+                            JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);
+                            _directorDraftJobId = queued.GetProperty("job_id").GetString()!;
+                            _directorDraftJobStatus = queued.GetProperty("status").GetString();
+                            _directorRevision = queued.GetProperty("revision").GetInt64();
+                            _session.SetSelectedJob(projectId, _directorDraftJobId);
+                            await WaitForCommandDirectorAsync(projectId, _directorDraftJobId, token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception error) when (error is HttpRequestException or InvalidOperationException)
+                        {
+                            CommandStatus.Text = $"Baseline draft ready. Qwen stopped: {error.Message}";
+                            CommandProgress.Value = 100;
+                            ShowStatus("Baseline draft retained", error.Message, InfoBarSeverity.Warning);
+                        }
                         return;
                     }
                     string actualProvider = _generatedPlan?.AdditionalData?.GetValueOrDefault("provider").ToString() ?? provider;

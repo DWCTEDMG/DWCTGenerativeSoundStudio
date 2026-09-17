@@ -44,7 +44,7 @@ public sealed partial class WorkspacePage
         MediaPoolExpander.IsEnabled = !busy;
         ReferenceAssetsExpander.IsEnabled = !busy;
         PlanExpander.IsEnabled = !busy;
-        DirectorPanel.IsEnabled = !busy;
+        DirectorExpander.IsEnabled = !busy;
         WorkflowScenesList.IsEnabled = !busy;
         WorkflowThemeTextBox.IsEnabled = !busy && _workflowStatus == "draft";
         WorkflowStyleTextBox.IsEnabled = !busy && _workflowStatus == "draft";

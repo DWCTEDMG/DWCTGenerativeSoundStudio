@@ -367,7 +367,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Expander Header="Advanced: edit shared direction with Qwen" AutomationProperties.AutomationId="Workspace.Director.Advanced">
+                        <Expander x:Name="DirectorExpander" Header="Advanced: edit shared direction with Qwen" AutomationProperties.AutomationId="Workspace.Director.Advanced">
                             <StackPanel x:Name="DirectorPanel" Spacing="16">
                                 <Border Style="{StaticResource WorkspaceCardStyle}">
                                     <StackPanel Spacing="12">
