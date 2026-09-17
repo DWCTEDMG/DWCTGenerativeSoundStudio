@@ -51,18 +51,19 @@ From the repo root:
 
 ```powershell
 uv lock --project studio/edmg-studio/python_backend --check
-uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py
 ```
 
-- The runner performs a frozen CPU-profile sync, runs the repo-level test scope
-  first, then runs the backend-local pytest scope.
+- The runner preserves installed dependencies, runs the repo-level test scope
+  first, then runs the backend-local pytest scope. Add `--sync` only when the
+  selected accelerator environment must be provisioned; CPU requires explicit
+  `--accelerator-profile cpu`.
 
 From `studio/edmg-studio/python_backend/`:
 
 ```powershell
 uv lock --check
-uv sync --frozen --extra cpu --extra core --extra audio --group test
-uv run --frozen --extra cpu --extra core --extra audio --group test python -m pytest
+uv run --frozen --no-sync --group test python -m pytest
 ```
 
 That backend-local command follows `pyproject.toml` and covers both:

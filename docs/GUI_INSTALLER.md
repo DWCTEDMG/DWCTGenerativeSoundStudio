@@ -1,8 +1,12 @@
-# GUI Installer (Automatic) — EDMG
+# Legacy GUI Installer (Automatic) — EDMG
 
-This repo includes a **CPU-first GUI installer** that can:
+This standalone installer is retained for compatibility and explicit CPU-only
+setups. It is not the current WinUI Studio installer and must not be used to
+replace an active CUDA or DirectML environment.
 
-- Create `.venv`
+It can:
+
+- Create a standalone `.venv`
 - Install Python dependencies (Full or Minimal)
 - Clone and configure external backends (optional):
   - Automatic1111 + Deforum extension (CPU mode)

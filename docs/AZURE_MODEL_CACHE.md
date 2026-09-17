@@ -20,12 +20,18 @@ az login
 az account set --subscription YOUR_SUBSCRIPTION_ID
 ```
 
-Install the optional backend dependencies:
+Provision the selected backend environment with the optional Azure capability only
+when it is not already installed. Preserve the active CUDA profile; on supported
+Windows systems without CUDA, select DirectML. CPU is an explicit opt-in rather
+than the default:
 
 ```powershell
 uv lock --project studio/edmg-studio/python_backend --check
-uv sync --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra azure
+uv sync --project studio/edmg-studio/python_backend --frozen --extra cuda --extra core --extra azure
 ```
+
+Use `--extra directml` instead of `--extra cuda` for the DirectML lane, or
+`--extra cpu` only for an intentionally CPU-only environment.
 
 ## Create Storage
 

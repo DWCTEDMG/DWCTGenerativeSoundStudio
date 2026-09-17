@@ -1,6 +1,6 @@
 # Studio implementation handoff
 
-Follow the repository's `AGENTS.md` and the user's current instructions. The active product focus is native WinUI 3 in `studio/edmg-studio-winui/`, with the shared Python backend supporting it. Read `blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md` for forward gates and `blueprint/planning.md` for accepted phase history. Preserve the regression references listed in `AGENTS.md`.
+Follow the repository's `AGENTS.md` and the user's current instructions. The active product focus is native WinUI 3 in `studio/edmg-studio-winui/`, with the shared Python backend supporting it. The unified Workspace is the primary guided flow across source media, Whisper/audio analysis, provider planning/BYOM, managed Qwen Director review, storyboard, Reactive Lab, and render handoff; preserve the dedicated specialist pages. Read `blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md` for forward gates and `blueprint/planning.md` for accepted phase history. Preserve the regression references listed in `AGENTS.md`.
 
 For the user's agreed coordination workflow, Visual Studio Copilot is the implementer and Codex is the reviewer. Use repository-root `STUDIO_PROGRESS.md` as the shared handoff:
 

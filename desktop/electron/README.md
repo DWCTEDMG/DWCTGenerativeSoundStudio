@@ -11,8 +11,9 @@ current Windows status and release-gate reference. This shell must not be used a
 candidate.
 
 This is a **JSON-first** Electron GUI for the Enhanced Deforum Music Generator.
-It starts the FastAPI backend automatically (CPU-first) and gives you a full
-Deforum settings JSON editor with:
+It starts its legacy FastAPI path automatically and gives you a full Deforum settings JSON editor.
+This shell predates the current Studio GPU-first accelerator policy; do not use its startup behavior
+to provision or qualify the active WinUI/shared-backend environment. It includes:
 
 - Audio analysis upload (tempo / beats / energy)
 - Optional Whisper-based lyrics transcription (if installed)

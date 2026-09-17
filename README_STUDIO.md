@@ -5,9 +5,12 @@ This repo includes the Studio desktop product under:
 - `studio/edmg-studio-winui/` — primary Windows frontend
 - `studio/edmg-studio/` — Electron/React frontend for Linux and compatibility
 
-Both frontends use the same local FastAPI backend and project format for the "DAW-like" Studio
-experience (projects → audio ingest → AI plan → timeline → render queue → review → outputs).
-CUDA, TensorRT, analysis, rendering, and model lifecycle remain authoritative in Python.
+Both frontends use the same local FastAPI backend and project format. On Windows, the native
+**Workspace** is the guided control room: project/source media → reusable Whisper/audio analysis →
+provider plan or BYOM → managed Qwen Director review → storyboard → Reactive Lab/timeline → explicit
+apply and render handoff → queue → review → outputs. The dedicated AI Planner, Director, Storyboard,
+Reactive Lab, Timeline, Render, Models, and Settings pages remain available for specialist work.
+CUDA, TensorRT, analysis, rendering, jobs, and model lifecycle remain authoritative in Python.
 
 The original DWCTEDMG codebase remains the engine + integrations, but Studio is the
 canonical product surface and can install the EDMG Core engine into the same workflow.
@@ -48,13 +51,14 @@ and the signed registered package for release validation.
 
 ```powershell
 uv lock --project studio\edmg-studio\python_backend --check
-uv sync --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio
-uv run --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio `
+uv run --project studio\edmg-studio\python_backend --frozen --no-sync `
   python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
 
-Python 3.12 and uv 0.11.28 are pinned repository inputs. Select one accelerator extra (`cpu`,
-`directml`, or `cuda`) when synchronizing a different backend profile.
+Python 3.12 and uv 0.11.28 are pinned repository inputs. Existing environments are GPU-first and
+must not be synchronized to CPU merely to launch or test. If dependencies genuinely need to be
+created or updated, use `scripts/run_pytest_scopes.py --sync`; it preserves detected CUDA, selects
+DirectML on supported Windows systems, and requires explicit `--accelerator-profile cpu` for CPU.
 
 2. Start Studio UI
 

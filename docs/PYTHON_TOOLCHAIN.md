@@ -22,29 +22,29 @@ choice is independent from product capability extras such as `core`, `audio`,
 `clap`, `asr`, `source-separation`, `parakeet`, `aws`, `azure`, `codex`, and
 `internal-video`.
 
-The baseline developer environment is:
+The baseline developer workflow preserves the selected accelerator environment:
 
 ```shell
 uv lock --project studio/edmg-studio/python_backend --check
-uv sync --project studio/edmg-studio/python_backend --frozen \
-  --extra cpu --extra core --extra audio --group test --group lint
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync \
+  --group test python scripts/run_pytest_scopes.py
 ```
 
+Use `python scripts/run_pytest_scopes.py --sync` only when provisioning is required.
+Automatic selection preserves CUDA and otherwise selects the supported Windows
+DirectML lane. CPU is an explicit CI or troubleshooting choice via
+`--accelerator-profile cpu`; never use it to replace an active GPU environment.
+
 Optional CLAP analysis composes with, but does not replace, the accelerator and
-audio selections. It remains local/offline-capable after the locked packages
-and model assets have been cached:
+audio selections. After the selected environment and model assets are cached,
+run its parity probe without synchronization:
 
 ```shell
-uv lock --project studio/edmg-studio/python_backend --check
-uv sync --project studio/edmg-studio/python_backend --frozen \
-  --extra cpu --extra audio --extra clap
 uv run --project studio/edmg-studio/python_backend --frozen --no-sync --offline \
-  --extra cpu --extra audio --extra clap \
   python scripts/check_clap_capability.py
 ```
 
-Switch `cpu` to exactly one of `directml` or `cuda` when testing another
-accelerator. The parity probe performs imports and version checks only; it does
+The parity probe performs imports and version checks only; it does
 not download a model. Runtime adapters must load an explicitly configured local
 CLAP model/cache and degrade cleanly when it is absent.
 
@@ -52,25 +52,25 @@ The capability uses Transformers' native `ClapModel`/`ClapProcessor` API. Do
 not add `laion-clap`: importing that package resolves a tokenizer model at
 module import time and breaks the offline contract.
 
-On PowerShell, put that `uv sync` command on one line or use PowerShell
+On PowerShell, put multiline `uv` commands on one line or use PowerShell
 backticks instead of shell backslashes.
 
-Run tools through the same frozen project:
+Run tools through the same frozen environment without synchronization:
 
 ```shell
-uv run --project studio/edmg-studio/python_backend --frozen \
-  --extra cpu --extra core --extra audio --group test python -m pytest
-uv run --project studio/edmg-studio/python_backend --frozen \
-  --extra cpu --group lint ruff check .
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync \
+  --group test python -m pytest
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync \
+  --group lint ruff check .
 ```
 
-`scripts/run_pytest_scopes.py` performs the lock check and frozen CPU sync, then
-runs both Python test scopes. Invoke it from the repository root with:
+`scripts/run_pytest_scopes.py` checks the lock and runs both Python test scopes.
+From the repository root, it preserves installed dependencies unless `--sync`
+is explicitly supplied:
 
 ```shell
-uv run --project studio/edmg-studio/python_backend --frozen \
-  --extra cpu --extra core --extra audio --group test \
-  python scripts/run_pytest_scopes.py
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync \
+  --group test python scripts/run_pytest_scopes.py
 ```
 
 ## Release environments

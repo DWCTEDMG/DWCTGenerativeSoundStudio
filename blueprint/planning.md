@@ -71,8 +71,19 @@ Relevant pushed commits:
 | `2fe075f` | Add versioned mixer snapshots and audibility planning | Phase 5 control-state and mute/solo foundation |
 | `418f5a4` | Add isolated VST3 discovery and quarantine | Phase 5 plugin discovery safety foundation |
 | `a592ff1` | Add timeline mixer persistence and channel controls | Phase 5 persistence and synchronized Timeline UI slice |
+| `aaca973` / `5d8d7de` | Establish combined Workspace and guided-orchestration checkpoint | Unified Workspace Phases 1-2 foundation |
+| `de6bdae` | Complete unified Workspace orchestration | Guided analysis, planning, Qwen review/fallback, and handoff |
+| `361ff13` | Add honest Workspace readiness states | Qwen, Whisper, BYOM, and analysis evidence boundaries |
+| `92c3ee5` | Record unified Workspace regression evidence | Workspace Phase 4 verification record |
 
-The user requested one commit and push per phase. Phase 3 and Phase 4 were combined in the already-pushed `936f3aa` commit by concurrent work. The shared default branch will not be rewritten to manufacture separate historical commits. Both phase gates must instead be recorded against that immutable commit and its validation evidence. Future phases must return to one phase per commit.
+The unified Workspace commits are later product-surface work layered over this historical Professional
+DAW phase ledger. They do not renumber or erase the accepted DAW phases, and their deterministic
+evidence does not establish interactive UI, device, model-inference, render, or release qualification.
+
+The user requested one commit and push per phase. Phase 3 and Phase 4 of the historical DAW sequence
+were combined in the already-pushed `936f3aa` commit by concurrent work. The shared default branch
+will not be rewritten to manufacture separate historical commits; both gates remain recorded against
+that immutable commit and its validation evidence.
 
 ## 5. Current Architecture
 

@@ -825,25 +825,25 @@ Keep capability extras such as `audio`, `asr`, `source-separation`, `parakeet`, 
 
 #### Canonical commands
 
+The migration examples below are preserved as accelerator-specific provisioning patterns. They are
+not the normal source test/launch path and must not be used to replace an active CUDA environment
+with CPU packages. Current routine validation preserves the selected environment:
+
 ```shell
-# Developer CPU environment
-uv lock --check
-uv sync --frozen --extra cpu --group test --group lint
-uv run --frozen --extra cpu --group test pytest
-uv run --frozen --extra cpu --group lint ruff check .
+uv lock --project studio/edmg-studio/python_backend --check
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py
 
-# Windows DirectML build environment
-uv lock --check
-uv sync --frozen --extra directml --group build
-uv run --frozen --extra directml --group build pyinstaller pyinstaller.spec --clean --noconfirm
+# Provision only when necessary; auto preserves CUDA and otherwise selects supported Windows DirectML.
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync python scripts/run_pytest_scopes.py --sync
 
-# CUDA build environment, using the fixed index/profile encoded in pyproject + uv.lock
-uv lock --check
-uv sync --frozen --extra cuda --group build
-uv run --frozen --extra cuda --group build pyinstaller pyinstaller.spec --clean --noconfirm
+# CPU is explicit opt-in.
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync python scripts/run_pytest_scopes.py --sync --accelerator-profile cpu
 ```
 
-Use the actual backend working directory or `--project studio/edmg-studio/python_backend` consistently in root-level scripts. Do not rely on whichever directory a user happened to launch from.
+Release bundling continues to select an explicit locked `cpu`, `directml`, or `cuda` profile through
+the packaging scripts. Use the actual backend working directory or `--project
+studio/edmg-studio/python_backend` consistently in root-level scripts. Do not rely on whichever
+directory a user happened to launch from.
 
 #### Release-bundle migration — mandatory
 
@@ -864,11 +864,11 @@ This is the decisive reproducibility rule: development, CI, and packaged release
 
 | Lane | Required command pattern | Purpose |
 |---|---|---|
-| Windows CPU | `uv sync --frozen --extra cpu --group test --group lint` | deterministic baseline and backend tests |
-| Ubuntu CPU | `uv sync --frozen --extra cpu --group test --group lint` | deterministic baseline and backend tests |
-| Windows DirectML | `uv sync --frozen --extra directml --group test` | DirectML import, provider, model, and packaging smoke tests |
-| CUDA runner | `uv sync --frozen --extra cuda --group test` | scheduled/manual GPU compatibility and model benchmarks |
-| Release CPU/DirectML/CUDA | `uv sync --frozen --extra <profile> --group build` | PyInstaller artifact from the exact committed resolution |
+| Existing developer environment | `uv run --frozen --no-sync ... scripts/run_pytest_scopes.py` | preserve selected accelerator while running both test scopes |
+| Explicit CPU CI | runner `--sync --accelerator-profile cpu` | deterministic CPU baseline where the lane requests CPU |
+| Windows DirectML | runner `--sync --accelerator-profile directml` | DirectML import, provider, model, and packaging smoke tests |
+| CUDA runner | runner `--sync --accelerator-profile cuda` | scheduled/manual GPU compatibility and model benchmarks |
+| Release CPU/DirectML/CUDA | packaging script with explicit locked profile | PyInstaller artifact from the exact committed resolution |
 
 Cache the uv download/package cache using the committed lockfile as part of the key; never cache and reuse an untracked environment as release truth. CI must fail if `uv lock --check` reports drift or if any supported script still performs a direct unconstrained pip install.
 

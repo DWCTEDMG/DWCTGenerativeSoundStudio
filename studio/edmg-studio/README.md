@@ -12,7 +12,10 @@ for the current status, capability boundaries, and release gates.
 
 The shared Studio stack includes:
 
-- Local **FastAPI** backend for projects, assets, planning, rendering, outputs, and managed runtimes
+- Local **FastAPI** backend for projects, assets, analysis/transcription, planning, Director review,
+  shared workflows, rendering, outputs, and managed runtimes
+- Native WinUI **Workspace** as the guided Windows control room, with dedicated specialist pages
+  retained for AI Planner, Director, Storyboard, Reactive Lab, Timeline, Render, Models, and Settings
 - **Electron** shell + **React** UI for Linux, browser development, and compatibility
 - Bundled **EDMG Director** MCP sidecar for ChatGPT connector workflows and Studio-native directing handoff
 - Integrates with:
@@ -44,16 +47,16 @@ The shared Studio stack includes:
 ### Backend
 ```bash
 uv lock --project python_backend --check
-uv sync --project python_backend --frozen \
-  --extra cpu --extra core --extra audio --group test --group lint
-uv run --project python_backend --frozen \
-  --extra cpu --extra core --extra audio \
+uv run --project python_backend --frozen --no-sync \
   python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
 
-Replace `cpu` with exactly one of `directml` (Windows) or `cuda` when that is
-the environment you are validating. PyTorch indexes are fixed in
-`pyproject.toml` and `uv.lock`; do not supply an index URL at runtime.
+This launch preserves the existing locked environment. For a missing or intentionally changed
+environment, run the repository-root `scripts/run_pytest_scopes.py --sync` helper so automatic
+accelerator selection preserves CUDA when present and otherwise selects the supported Windows
+DirectML lane. CPU requires explicit `--accelerator-profile cpu` or
+`EDMG_BACKEND_ACCELERATOR_PROFILE=cpu`. PyTorch indexes are fixed in `pyproject.toml` and `uv.lock`;
+do not supply an index URL at runtime.
 
 ### Lightning backend helpers
 From `studio/edmg-studio/`:
@@ -303,26 +306,36 @@ EDMG Core integration:
   - Export Deforum settings JSON per variant
   - Fetch the Deforum template
 
-## Workflow
-1. Create a project
-2. Upload audio
-3. Analyze + transcribe (in-process provider by default; optional external AI service)
-4. Generate plan variants
-5. Render with the internal renderer by default, or use ComfyUI optionally for supported still/motion workflows
-6. Assemble MP4 (FFmpeg slideshow + audio)
-7. Export Deforum settings (optional)
+## Current Studio workflow
+
+On Windows, **Workspace → All tools** is the default guided surface:
+
+1. Create or open a project and select source media.
+2. Upload pending audio, then run or reuse Whisper/audio analysis.
+3. Generate a baseline plan with the selected provider/model or BYOM override.
+4. When a managed Qwen Director is ready, generate and review a Director draft; otherwise keep the
+   baseline plan and show the blocker without discarding edits.
+5. Review the shared workflow and storyboard, then refine cues, camera, motion, and keyframes in the
+   embedded or dedicated Reactive Lab and Timeline surfaces.
+6. Explicitly apply the reviewed workflow and hand the current project context to Render.
+7. Preflight and queue a qualified internal/hosted renderer or an optional supported ComfyUI path,
+   then review outputs and export Deforum settings when needed.
+
+The Linux/compatibility UI exposes the same backend data but may organize these controls differently.
 
 ## Creator workflow features (2026 beta)
 
-These source-candidate surfaces are documented here while the dedicated documentation relaunch
-(P5-06) remains incomplete. Their presence in source is not packaged-release evidence.
+These are React/Electron compatibility-client routes. They share authoritative backend data with the
+native app but are not WinUI navigation or packaged-Windows qualification evidence.
 
 ### Understand — Music Graph v1
 
-After **Analyze**, open **Workspace → Audio** to inspect Music Graph v1: tempo, beats, sections with energy/confidence, stems, semantic tags, and ASR lyric lines. The same graph powers Director, Render Conductor, timeline section markers, and live cue export.
+In the compatibility client, open **Workspace → Audio** after **Analyze** to inspect Music Graph v1:
+tempo, beats, sections with energy/confidence, stems, semantic tags, and ASR lyric lines. In WinUI,
+the unified Workspace shows analysis status and the specialist workflow consumes the same graph.
 
 - API: `GET /v1/projects/{id}/music_graph`
-- UI: `UnderstandPanel` on Workspace (no separate Understand route yet; P2-05 partial)
+- Compatibility UI: `UnderstandPanel` on Workspace
 
 ### Review — variant compare and approval
 
@@ -348,7 +361,9 @@ From **Workspace** handoff and **Review → Labs**, preview cue protocols compil
 
 ### Template handoff
 
-**Workspace → Handoff** exports and imports versioned template packages (Visual DNA, director mode, stem modulation, and related project metadata).
+In the compatibility client, **Workspace → Handoff** exports and imports versioned template packages
+(Visual DNA, director mode, stem modulation, and related project metadata). In WinUI, use the
+Workspace handoff/debug tools associated with the active project.
 
 - API: `GET /v1/projects/{id}/template_package/export`, `POST .../template_package/import`
 
@@ -413,12 +428,13 @@ Studio also supports **motion clips per scene** via two optional, local-friendly
 
 ### Verify ComfyUI capabilities
 
-From the Studio UI (Workspace), you’ll see availability checks (✓/×).  
-Backend endpoint: `GET /v1/comfyui/capabilities` (uses ComfyUI’s `/object_info`). 
+The React/Electron compatibility Workspace shows ComfyUI availability checks. The native Render page
+uses backend preflight and exposes supported routes without treating ComfyUI as required.
+Backend endpoint: `GET /v1/comfyui/capabilities` (uses ComfyUI's `/object_info`).
 
-### Rendering motion
+### Rendering motion in the compatibility client
 
-- Workspace → Render → Mode → **Motion (AnimateDiff)** or **Motion (SVD)**  
+- Open **Workspace → Render → Mode**, then choose **Motion (AnimateDiff)** or **Motion (SVD)**.
 - Click **Enqueue motion scenes**, then use **Tick worker** repeatedly (or run a simple loop).
 
 Outputs:

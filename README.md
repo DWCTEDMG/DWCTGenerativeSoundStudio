@@ -30,6 +30,18 @@ analysis, AI/provider integration, CUDA/TensorRT inference, rendering, jobs,
 outputs, and model lifecycle stay in
 `studio/edmg-studio/python_backend/`; WinUI does not duplicate those engines.
 
+### Unified Workspace
+
+On Windows, **Workspace → All tools** is the primary guided session: choose source media, run or reuse
+Whisper/audio analysis, create a provider/BYOM baseline plan, optionally strengthen it with a
+runtime-ready managed Qwen Director, review the Director draft and storyboard, refine Reactive Lab
+motion/camera/keyframes, explicitly apply the workflow, and continue to Render. Qwen failure does not
+discard the baseline plan or user edits.
+
+AI Planner, Director, Storyboard, Reactive Lab, Timeline, Render, Models, and Settings remain available
+as dedicated specialist pages. The combined Workspace coordinates those capabilities; it does not
+replace or reduce them.
+
 ## Managed model runtimes
 
 The backend includes executable adapters for five managed packages:
@@ -50,11 +62,10 @@ not installed, runtime unavailable, or degraded. See the
 configuration, and opt-in real-model test details.
 
 The legacy standalone web UI prototypes have been retired from the active product
-surface. Their planning and audio-reactive workflows now live inside Studio
-workbenches such as:
-
-- `studio/edmg-studio/src/workbenches/AiNlpWorkbench.tsx`
-- `studio/edmg-studio/src/workbenches/AudioReactiveWorkbench.tsx`
+surface. Their supported planning and audio-reactive workflows are available through
+the native Workspace and specialist pages. React workbenches under
+`studio/edmg-studio/src/workbenches/` remain part of the Linux/compatibility client,
+not the active Windows product surface.
 
 ## Canonical launch
 
@@ -243,11 +254,14 @@ Additional strategy and operator docs:
 - Run both scopes from the repo root with:
 
 ```bash
-uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py
+uv lock --project studio/edmg-studio/python_backend --check
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py
 ```
 
-- The runner checks the committed lock and performs a frozen CPU-profile sync
-  before executing either scope.
+- The runner checks the committed lock and preserves the active environment by default. Use
+  `scripts/run_pytest_scopes.py --sync` only when provisioning is required; automatic selection
+  preserves CUDA and otherwise selects the supported Windows DirectML lane. CPU requires explicit
+  `--accelerator-profile cpu` or `EDMG_BACKEND_ACCELERATOR_PROFILE=cpu`.
 
 ## Notes
 

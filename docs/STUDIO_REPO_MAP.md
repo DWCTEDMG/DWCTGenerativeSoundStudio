@@ -108,7 +108,7 @@ Key validation commands:
 - `studio/edmg-studio-winui/`:
   `dotnet test .\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj -p:Platform=x64 -p:Configuration=Release`
 - Repo root:
-  `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`
+  `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py`
 - `studio/edmg-studio/`:
   `pnpm run check:tooling`
 - `studio/edmg-studio/`:

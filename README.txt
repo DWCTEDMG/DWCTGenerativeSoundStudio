@@ -2,12 +2,13 @@ IMPORTANT: this file describes a legacy standalone/full-bundle workflow, not the
 
 For the current repo:
 - Primary packaged Windows frontend: `studio/edmg-studio-winui/`
+- Primary guided flow: native `Workspace` **All tools** mode, with specialist pages preserved
 - Shared FastAPI backend and Linux/compatibility Electron frontend: `studio/edmg-studio/`
 - Canonical launchers: `RUN_ME.bat` or `./run_me.sh`
 - Canonical release docs: `README_STUDIO.md`, `RELEASE.md`, `docs/STUDIO_RELEASE_RUNBOOK.md`
 - Canonical repo map: `docs/STUDIO_REPO_MAP.md`
 
-Keep using the instructions below only if you intentionally want the older standalone engine/bootstrap flow.
+Keep using the instructions below only if you intentionally want the older standalone engine/bootstrap flow. Its Python versions, CPU variants, setup sequence, and model claims are historical and must not be used to modify or qualify the active Studio environment.
 
 EDMG Full Installation + Use Guide (Start-to-Finish)
 

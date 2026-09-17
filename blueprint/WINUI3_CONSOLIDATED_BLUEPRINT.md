@@ -17,7 +17,12 @@
 
 ## 2. Canonical WinUI product flow
 
-`Create/Open → Import → Analyze → Director/Planner → Review schedule → Apply → Timeline/Reactive Lab → Render preflight → Queue → Review → Outputs → Save/Reopen/Recover → Export`
+`Workspace / All tools → Create/Open → Import → Analyze or reuse → Provider/BYOM plan → Optional managed Qwen Director → Review storyboard/workflow → Apply → Timeline/Reactive Lab → Render preflight → Queue → Review → Outputs → Save/Reopen/Recover → Export`
+
+Workspace is the guided default, while AI Planner, Director, Storyboard, Reactive Lab, Timeline,
+Render, Models, and Settings remain dedicated specialist surfaces. Managed Qwen strengthens a
+baseline plan only when its runtime is ready; its absence or failure must leave the baseline and user
+edits usable. BYOM selection is configuration, not endpoint or inference qualification.
 
 The backend remains authoritative for project identity, revisions, persistence, jobs, media authorization, renderer selection, model readiness, and artifact publication. WinUI owns native navigation, editing, controls, diagnostics, and user approval.
 
@@ -32,7 +37,13 @@ The backend remains authoritative for project identity, revisions, persistence, 
 
 ## 3. Current implementation state
 
-The latest repository history records completion of Professional DAW Phases 5 through 13, including managed mixer, automation/editing, Director, Hunyuan, LTX, Director Review, provider normalization, remote controls, Quick Controls, and professional post contracts. The newer hardening, qualification, documentation, and render-idempotency work is now committed in `388faaf`, `358fa49`, and `0c9c6d1`. Those commits are part of the current candidate, but they do not make every qualification gate complete until the corresponding tests, build, review, and runtime evidence are recorded.
+The latest repository history records completion of Professional DAW Phases 5 through 13, including managed mixer, automation/editing, Director, Hunyuan, LTX, Director Review, provider normalization, remote controls, Quick Controls, and professional post contracts. The newer hardening, qualification, documentation, and render-idempotency work is committed in `388faaf`, `358fa49`, and `0c9c6d1`.
+
+The unified Workspace was delivered in `aaca973`, `5d8d7de`, `de6bdae`, and `361ff13`; final
+regression evidence was recorded in `92c3ee5`. That evidence includes a Release x64 build, 520 Core
+tests, and 87 focused backend tests with one real-audio test skipped because `STUDIO_TEST_AUDIO` was
+unset. It does not qualify interactive GUI behavior, device audio, real Qwen/Whisper inference, a
+long render, signing, Store submission, or a clean-machine release.
 
 ### Phase and evidence reconciliation
 
@@ -41,6 +52,7 @@ The latest repository history records completion of Professional DAW Phases 5 th
 | Professional DAW Phases 5–11 | Accepted in repository history and reflected in `blueprint/planning.md` | Preserve; use acceptance records as regression requirements. |
 | Phase 12 Quick Controls and command/input work | Implemented with focused tests and x64 build evidence in `planning.md` | Preserve; keep hardware/MIDI qualification separate. |
 | Phase 13 professional post contracts | Implemented with focused tests and x64 build evidence in `planning.md` | Preserve; finish running-app qualification and real media/device checks. |
+| Unified Workspace | Combined All-tools surface, guided analysis/planning/Qwen review, specialist preservation, fallback, and evidence-aware readiness are implemented through `92c3ee5` | Preserve revisions and specialist routes; finish interactive and real-runtime qualification separately. |
 | Current candidate hardening and qualification files | Committed in the current candidate (`388faaf`, `358fa49`, `0c9c6d1`, `20df73e`, `e4426ea`) | Review, test, and accept individually; compilation alone is not completion. |
 | Workflow fixture and review-contract tests | Focused renderer/workflow coverage preserves explicit media fixtures, source-hash invalidation, reviewed-before-apply behavior, and temporary-store publication boundaries | Preserve these contracts; broader release and native UI gates remain separate. |
 | Aggregate Python qualification | The canonical isolated runner passes: repository scope 164 passed/4 skipped and backend-package scope 987 passed/4 skipped | Keep `scripts/run_pytest_scopes.py` as the required frozen-environment regression gate. |
@@ -58,7 +70,7 @@ open; the heading must not be read as evidence that earlier accepted phases were
 
 - Versioned project/timeline contracts, exact sample positions, migration, extension preservation, revision-safe commands, undo/redo, autosave, and recovery.
 - Media import, probing, project media pool, waveform/thumbnail/proxy derivatives, containment, signed media, and artifact provenance.
-- Native Workspace, Director, Planner, Reactive Lab, Timeline, Render, Queue, Review, Outputs, Models, Settings, and Setup surfaces.
+- Native unified Workspace with All-tools guidance, provider/BYOM baseline planning, managed-Qwen review/fallback, and explicit render handoff, plus preserved Director, Planner, Storyboard, Reactive Lab, Timeline, Render, Queue, Review, Outputs, Models, Settings, and Setup specialist surfaces.
 - Shared Director/Reactive Lab draft identity and reviewed camera/motion keyframe persistence.
 - HunyuanVideo-1.5 through WSL2/external Linux and LTX-2.5 through isolated runtimes, both fail-closed until real qualification.
 - Durable provider envelopes, local/hosted provider lifecycle, idempotency, cancellation fencing, and WinUI provider controls.

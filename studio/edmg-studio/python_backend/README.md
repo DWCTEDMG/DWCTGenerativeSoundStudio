@@ -8,14 +8,16 @@ are in the [WinUI 3 consolidated blueprint](../../../blueprint/WINUI3_CONSOLIDAT
 ## Run
 ```bash
 uv lock --check
-uv sync --frozen --extra cpu --extra core --extra audio --extra asr --extra internal-video
-uv run --frozen --extra cpu --extra core --extra audio --extra asr --extra internal-video \
+uv run --frozen --no-sync \
   python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
 
-Python is pinned to 3.12 and uv to 0.11.28. Choose exactly one accelerator
-profile (`cpu`, `directml`, or `cuda`) and compose it with the capabilities the
-deployment needs. PyTorch sources are explicit lock inputs, not runtime index
+Python is pinned to 3.12 and uv to 0.11.28. The normal source launch preserves the existing
+environment. Do not synchronize an active CUDA environment to CPU for convenience. When an
+environment must be created or updated, use the repository-root `scripts/run_pytest_scopes.py
+--sync` workflow: automatic selection preserves CUDA, otherwise selects DirectML on supported
+Windows systems, and CPU requires an explicit `--accelerator-profile cpu` or
+`EDMG_BACKEND_ACCELERATOR_PROFILE=cpu`. PyTorch sources are explicit lock inputs, not runtime index
 overrides.
 
 ## Docker (backend only)
@@ -51,24 +53,23 @@ Notes:
 - The image installs the Studio backend bundle plus FFmpeg, `libsndfile`, and OpenMP runtime support for the current analysis/transcription stack.
 
 ## Tests
-Synchronize the frozen CPU test environment and run pytest through uv:
+
+From the repository root, run both Python scopes without changing the active environment:
 
 ```bash
-uv lock --check
-uv sync --frozen --extra cpu --extra core --extra audio --group test
-uv run --frozen --extra cpu --extra core --extra audio --group test python -m pytest
+uv lock --project studio/edmg-studio/python_backend --check
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test \
+  python scripts/run_pytest_scopes.py
 ```
 
-Run that command from `studio/edmg-studio/python_backend/`. The backend-local
-pytest scope covers both:
+The runner covers repository tests and backend-local tests under
+`enhanced_deforum_music_generator/tests` and `edmg_studio_backend/tests`. Use `--sync` only when the
+locked environment must actually be provisioned; add `--accelerator-profile cpu` only for an
+intentional CPU environment. To run only the repository-level pytest scope, use:
 
-- `enhanced_deforum_music_generator/tests`
-- `edmg_studio_backend/tests`
-
-From the repo root:
-
-- `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --group test python -m pytest` runs repo-level tests only
-- `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py` runs repo-level tests, then backend-local tests
+```bash
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python -m pytest
+```
 
 ## Managed model runtimes
 
@@ -136,7 +137,7 @@ $env:REAL_MODEL_TESTS = "1"
 $env:EDMG_REAL_MODEL_IDS = "hf_ltx_25_distilled_internal"
 $env:EDMG_REAL_MODEL_ROOTS = '{"hf_ltx_25_distilled_internal":"D:\EDMG\models\internal\video\hf_ltx_25_distilled_internal"}'
 $env:EDMG_REAL_MODEL_DEVICE = "cuda:0"
-uv run --project studio\edmg-studio\python_backend --frozen --extra cpu --extra core --extra audio --group test `
+uv run --project studio\edmg-studio\python_backend --frozen --no-sync --group test `
   python -m pytest studio\edmg-studio\python_backend\edmg_studio_backend\tests\test_model_runtime_registry.py `
   -k opt_in_real_model_runtime_smoke_tests -v
 ```

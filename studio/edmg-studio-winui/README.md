@@ -17,7 +17,13 @@ The primary native workflow is implemented:
 - Windows 11-style `NavigationView`, Mica title bar, light/dark theme integration, keyboard navigation, and accessible headings.
 - Dashboard with live backend, project, runtime, storage, and AI-provider status.
 - Projects library with empty, loading, error, refresh, create, and open states.
-- Workspace with a native Windows audio picker and the authoritative create → upload → analyze/transcribe → plan-variants flow.
+- Unified Workspace with an **All tools** default view that coordinates source audio upload, cached or
+  fresh Whisper/audio analysis, provider planning/BYOM, managed Qwen Director generation and review,
+  shared workflow editing, storyboard review, Reactive Lab refinement, and explicit Render handoff.
+- Dedicated AI Planner, Director, Storyboard, Reactive Lab, Timeline, Render, Models, and Settings
+  surfaces remain available; the combined Workspace reuses those workflows rather than replacing them.
+- Revision-aware Director draft recovery/application, unsaved-edit protection, and baseline-plan
+  preservation when managed Qwen is unavailable or fails.
 - Field-preserving lane/clip Timeline editing with JSON access, undo/redo, save, autosave, and recovery.
 - Advanced Render settings for diffusion, hosted, CUDA, and TensorRT modes with backend preflight.
 - Render Queue progress, pause/resume/cancel/retry actions, logs, and event diagnostics.
@@ -65,6 +71,10 @@ engines. It communicates with the backend over bearer-authenticated localhost HT
 same project format as the compatibility client.
 
 ### Managed model readiness
+
+Workspace shows provider/BYOM, Qwen, Whisper, and analysis readiness without promoting configuration
+or installation to working inference. Analysis is identified as absent, cached/reusable, active, or
+failed. Selecting BYOM records the requested provider/model but does not qualify that endpoint.
 
 The Models page distinguishes package installation from runtime readiness. Its four states are
 `not_installed`, `installed_runtime_unavailable`, `runtime_degraded`, and `runtime_ready`. Only a

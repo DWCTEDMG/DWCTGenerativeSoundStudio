@@ -62,15 +62,17 @@ The importer expects these files inside the selected bundle directory:
 
 You can inspect the import plan without Unreal:
 
-```bash
-uv run --project studio/edmg-studio/python_backend --frozen --extra cpu ^
-  python studio/edmg-studio/tools/unreal/import_unreal_bridge_bundle.py ^
-  --bundle-dir F:\path\to\bundle ^
-  --dry-run ^
+```powershell
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync `
+  python studio/edmg-studio/tools/unreal/import_unreal_bridge_bundle.py `
+  --bundle-dir F:\path\to\bundle `
+  --dry-run `
   --plan-json F:\path\to\bundle\unreal_import_plan.json
 ```
 
-Studio can also generate the same `unreal_import_plan.json` directly from the Outputs page via `Build import plan`. Studio Forge links to that canonical surface rather than duplicating the action.
+The dry run does not need to replace the selected Studio accelerator environment with CPU packages.
+Studio can also generate the same `unreal_import_plan.json` directly from the Outputs page via
+**Build import plan**. Studio Forge links to that canonical surface rather than duplicating the action.
 
 ## Run inside Unreal Editor
 

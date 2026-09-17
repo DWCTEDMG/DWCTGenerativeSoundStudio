@@ -1,26 +1,27 @@
 # Architecture
 
 ## Goals
-- EDMG Studio provides a desktop UI (Electron) backed by a local FastAPI service.
+- EDMG Studio provides a native WinUI 3 Windows UI backed by a local FastAPI service.
+- The unified Workspace is the guided control room; dedicated specialist pages remain available.
 - The backend exposes a stable JSON API envelope: `{ "ok": true|false, ... }`.
 - Errors intended for users follow a structured `UserFacingError` format.
 
 ## High-level components
-### Desktop App (Node/TS)
-- Package root: `studio/edmg-studio/`
-- Package manager: `pnpm@10.33.0` via `packageManager`
-- Typecheck: `pnpm run typecheck`
-- Dev: `pnpm run dev`
-
 ### Native Windows App (WinUI 3 / MSIX)
 - Package root: `studio/edmg-studio-winui/`
 - Target: `net10.0-windows10.0.26100.0`, Windows App SDK 2.3.1, x64
-- The native client uses the same authenticated localhost API and Python/CUDA backend as Electron.
+- The native client uses the authenticated localhost API and shared Python backend.
 - It does not implement inference, rendering, ASR, or model lifecycle in DirectX.
+
+### Linux and compatibility client (Electron/React)
+- Package root: `studio/edmg-studio/`
+- Package manager: `pnpm@10.33.0` via `packageManager`
+- Typecheck: `pnpm run typecheck`
+- Browser development: `pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`
 
 ### Python Backend (FastAPI)
 - Toolchain: Python 3.12 and uv 0.11.28 with committed `uv.lock`
-- Run: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`
+- Run without changing the selected accelerator environment: `uv run --project studio/edmg-studio/python_backend --frozen --no-sync python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863`
 - `edmg_studio_backend/app.py` sets up routes + exception handlers
 - `edmg_studio_backend/errors.py` defines user-facing error model
 - Logging via `enhanced_deforum_music_generator/utils/logging_utils.py`
@@ -87,8 +88,9 @@ dedicated renderer worker ──► reusable D3D11 upload texture
 - Avoid printing secrets/tokens/API keys
 
 ## Testing
-- Check the backend lock before synchronization: `uv lock --project studio/edmg-studio/python_backend --check`.
-- Combined Python scope from the repo root: `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py`.
+- Check the backend lock before provisioning: `uv lock --project studio/edmg-studio/python_backend --check`.
+- Combined Python scope from the repo root, preserving the existing environment: `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py`.
+- Provision only when required with `scripts/run_pytest_scopes.py --sync`; automatic selection preserves CUDA, otherwise selects supported Windows DirectML, and CPU requires explicit `--accelerator-profile cpu`.
 - CI, cloud bootstraps, and release builds consume the same frozen project; see
   [`PYTHON_TOOLCHAIN.md`](PYTHON_TOOLCHAIN.md).
-- Node/TS: Vitest + jsdom smoke tests under `studio/edmg-studio/src/test`
+- Node/TS compatibility client: Vitest + jsdom smoke tests under `studio/edmg-studio/src/test`

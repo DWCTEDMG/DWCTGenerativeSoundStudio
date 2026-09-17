@@ -10,11 +10,17 @@ Copilot instructions live in `.github/copilot-instructions.md`; the optional che
 
 ## Product / UX priority (user preference)
 
-The **Studio UI is the priority**. When adding or changing functionality, surface it in the
-Studio desktop UI (`studio/edmg-studio/src/`), not just as a backend API endpoint. New backend
-capabilities should come with the corresponding UI controls (e.g. on the Render, Workspace,
-Models, or Settings pages) so users can drive them without curl/API calls. Assume the user wants
-every feature available in the UI unless they say otherwise.
+The **native WinUI 3 Studio UI is the priority**. When adding or changing functionality, surface it
+in `studio/edmg-studio-winui/`, not just as a backend API endpoint or only in the React/Electron
+compatibility client under `studio/edmg-studio/src/`. New backend capabilities should come with the
+corresponding native controls (for example on Workspace, Render, Models, Settings, or the appropriate
+specialist page) so users can drive them without curl/API calls. Assume the user wants every feature
+available in WinUI unless they say otherwise.
+
+The unified Workspace is the default guided control room for source media, reusable Whisper/audio
+analysis, provider planning/BYOM, managed Qwen Director review, storyboard, Reactive Lab, and render
+handoff. Keep AI Planner, Director, Storyboard, Reactive Lab, Timeline, Render, Models, and Settings
+available as specialist surfaces; do not collapse or remove their expert workflows.
 
 ## Studio regression reference set
 

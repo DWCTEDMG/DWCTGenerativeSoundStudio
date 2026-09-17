@@ -28,9 +28,12 @@ cmake --build build --config Release -j
 Start the Studio backend from the repository root with the pinned Python 3.12/uv environment:
 
 ```bash
-uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio \
+uv run --project studio/edmg-studio/python_backend --frozen --no-sync \
   python -m edmg_studio_backend serve --host 127.0.0.1 --port 7863
 ```
+
+This reuses the selected accelerator environment. Provisioning CPU is an explicit opt-in, not a
+connectivity-test prerequisite.
 
 Then run the client on Linux/macOS:
 

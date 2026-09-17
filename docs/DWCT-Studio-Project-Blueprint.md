@@ -300,8 +300,8 @@ The commands below are the intended validation ladder. Run the narrowest relevan
 
 | Layer | Focused validation | Broader validation |
 |---|---|---|
-| Backend | Signature, media containment, preview limits, metadata, revisions, migration, ownership, cancellation, planner schedule, and storyboard handoff tests. | `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python -m pytest` |
-| Python scopes | Affected test modules with a unique temporary project/data directory. | `uv run --project studio/edmg-studio/python_backend --frozen --extra cpu --extra core --extra audio --group test python scripts/run_pytest_scopes.py` |
+| Backend | Signature, media containment, preview limits, metadata, revisions, migration, ownership, cancellation, planner schedule, and storyboard handoff tests. | `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python -m pytest` |
+| Python scopes | Affected test modules with a unique temporary project/data directory. | `uv run --project studio/edmg-studio/python_backend --frozen --no-sync --group test python scripts/run_pytest_scopes.py` |
 | Electron | `pnpm exec vitest run <focused-test-file> --maxWorkers=1` from `studio/edmg-studio`. | `pnpm run test:ui`, `pnpm run lint`, and `pnpm run typecheck` from `studio/edmg-studio`. |
 | WinUI | Focused `EdmgStudio.Core.Tests` for affected API and workflow classes. | Full Core test project followed by application build with the pinned SDK. |
 | Go, launcher, installers | Path-scoped support tests and non-mutating shell syntax/checksum-policy checks. | Relevant project test suites once focused checks pass. |
