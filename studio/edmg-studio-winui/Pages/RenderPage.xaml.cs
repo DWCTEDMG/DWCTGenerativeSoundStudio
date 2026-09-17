@@ -1,307 +1,311 @@
-using System.Globalization;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.Windows.Storage.Pickers;
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Windows.Storage;
 
 namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class RenderPage : Page
 {
-    private const string HunyuanModelId = "hf_hunyuan_video15_internal";
-    private const string LtxModelId = "hf_ltx_25_distilled_internal";
-    private string? _projectId;
-    private bool _isBusy;
-    private bool _modelGuidanceUiReady;
-    private bool _isApplyingVariant;
-    private IDisposable? _jobsActivityLease;
-    private CancellationTokenSource? _pageCancellation;
-    private ModelCatalogueResponse? _modelCatalogue;
-    private ModelRenderGuidance? _modelGuidance;
-    private JsonElement? _hardwareProfile;
-    private IReadOnlyList<GenerationProviderDefinition> _generationProviders = [];
-    private GenerationProviderDefinition? _generationProvider;
+  private const string HunyuanModelId = "hf_hunyuan_video15_internal";
+  private const string LtxModelId = "hf_ltx_25_distilled_internal";
+  private string? _projectId;
+  private bool _isBusy;
+  private readonly bool _modelGuidanceUiReady;
+  private bool _isApplyingVariant;
+  private IDisposable? _jobsActivityLease;
+  private CancellationTokenSource? _pageCancellation;
+  private ModelCatalogueResponse? _modelCatalogue;
+  private ModelRenderGuidance? _modelGuidance;
+  private JsonElement? _hardwareProfile;
+  private IReadOnlyList<GenerationProviderDefinition> _generationProviders = [];
+  private GenerationProviderDefinition? _generationProvider;
 
-    private sealed record ModelPickerItem(
-        string ModelId,
-        string DisplayName,
-        string Detail,
-        string Status);
+  private sealed record ModelPickerItem(
+      string ModelId,
+      string DisplayName,
+      string Detail,
+      string Status);
 
-    public RenderPage()
+  public RenderPage()
+  {
+    InitializeComponent();
+    _modelGuidanceUiReady = true;
+    HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
+    ApplyAdvancedMode();
+    UpdateVideoEngineControls();
+    RestoreSavedPreset();
+    UpdateReadinessCard();
+  }
+
+  protected override void OnNavigatedTo(NavigationEventArgs e)
+  {
+    base.OnNavigatedTo(e);
+    _pageCancellation?.Cancel();
+    _pageCancellation?.Dispose();
+    _pageCancellation = new CancellationTokenSource();
+
+    string activeProjectId = App.Services.Session.ActiveProjectId;
+    _projectId = string.IsNullOrWhiteSpace(activeProjectId) ? null : activeProjectId.Trim();
+    ActiveProjectText.Text = _projectId is null
+        ? "No active project"
+        : $"Project {StudioPageHelpers.ShortId(_projectId)}";
+    ApplySelectedVariant();
+    SetBusyState();
+
+    if (_projectId is null)
     {
-        InitializeComponent();
-        _modelGuidanceUiReady = true;
-        HeaderVariantBox.ValueChanged += HeaderVariantBox_ValueChanged;
-        ApplyAdvancedMode();
-        UpdateVideoEngineControls();
-        RestoreSavedPreset();
-        UpdateReadinessCard();
+      ShowStatus(
+          "Choose an active project before running a project render workflow.",
+          InfoBarSeverity.Warning);
+    }
+    else
+    {
+      ShowStatus(
+          "Render tools are ready. Results and backend diagnostics appear below.",
+          InfoBarSeverity.Informational);
     }
 
-    protected override void OnNavigatedTo(NavigationEventArgs e)
+    _ = LoadModelGuidanceAsync(_pageCancellation.Token);
+    _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
+    _ = LoadGenerationProviderAsync(_pageCancellation.Token);
+    App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
+    _jobsActivityLease = App.Services.JobsActivity.Activate();
+    _ = LoadQueueSummaryAsync(_pageCancellation.Token);
+  }
+
+  protected override void OnNavigatedFrom(NavigationEventArgs e)
+  {
+    App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
+    _jobsActivityLease?.Dispose();
+    _jobsActivityLease = null;
+    _pageCancellation?.Cancel();
+    base.OnNavigatedFrom(e);
+  }
+
+  private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
+  {
+    _ = DispatcherQueue.TryEnqueue(
+        DispatcherQueuePriority.Normal,
+        () => ApplyQueueSnapshot(snapshot));
+  }
+
+  private async Task LoadQueueSummaryAsync(CancellationToken cancellationToken)
+  {
+    if (_projectId is null)
     {
-        base.OnNavigatedTo(e);
-        _pageCancellation?.Cancel();
-        _pageCancellation?.Dispose();
-        _pageCancellation = new CancellationTokenSource();
-
-        string activeProjectId = App.Services.Session.ActiveProjectId;
-        _projectId = string.IsNullOrWhiteSpace(activeProjectId) ? null : activeProjectId.Trim();
-        ActiveProjectText.Text = _projectId is null
-            ? "No active project"
-            : $"Project {StudioPageHelpers.ShortId(_projectId)}";
-        ApplySelectedVariant();
-        SetBusyState();
-
-        if (_projectId is null)
-        {
-            ShowStatus(
-                "Choose an active project before running a project render workflow.",
-                InfoBarSeverity.Warning);
-        }
-        else
-        {
-            ShowStatus(
-                "Render tools are ready. Results and backend diagnostics appear below.",
-                InfoBarSeverity.Informational);
-        }
-
-        _ = LoadModelGuidanceAsync(_pageCancellation.Token);
-        _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
-        _ = LoadGenerationProviderAsync(_pageCancellation.Token);
-        App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
-        _jobsActivityLease = App.Services.JobsActivity.Activate();
-        _ = LoadQueueSummaryAsync(_pageCancellation.Token);
+      RenderQueueSummaryText.Text = "Choose a project to view its render queue.";
+      RenderQueueProgressBar.Value = 0;
+      return;
     }
 
-    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    try
     {
-        App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
-        _jobsActivityLease?.Dispose();
-        _jobsActivityLease = null;
-        _pageCancellation?.Cancel();
-        base.OnNavigatedFrom(e);
+      await App.Services.JobsActivity.RefreshAsync(cancellationToken);
+      ApplyQueueSnapshot(App.Services.JobsActivity.Snapshot);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+  }
+
+  private void ApplyQueueSnapshot(StudioJobsActivitySnapshot activity)
+  {
+    if (activity.Error is not null)
+    {
+      RenderQueueSummaryText.Text = $"Queue status unavailable: {StudioPageHelpers.GetUserFacingError(activity.Error)}";
+      return;
     }
 
-    private void JobsActivity_SnapshotChanged(object? sender, StudioJobsActivitySnapshot snapshot)
+    IReadOnlyList<StudioJob> projectJobs = _projectId is null
+        ? []
+        : activity.Jobs.Where(job => string.Equals(job.ProjectId, _projectId, StringComparison.OrdinalIgnoreCase)).ToArray();
+    RenderQueueSnapshot snapshot = RenderQueueSnapshot.Create(projectJobs);
+    RenderQueueSummaryText.Text = snapshot.Summary;
+    RenderQueueProgressBar.Value = snapshot.ActiveProgress;
+  }
+
+  private async Task LoadModelGuidanceAsync(CancellationToken cancellationToken)
+  {
+    ModelGuidanceProgressRing.IsActive = true;
+    ModelGuidanceProgressRing.Visibility = Visibility.Visible;
+    ModelGuidanceSummaryText.Text = "Loading the model catalogue. Manual render controls remain available.";
+
+    try
     {
-        DispatcherQueue.TryEnqueue(
-            DispatcherQueuePriority.Normal,
-            () => ApplyQueueSnapshot(snapshot));
+      _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync(cancellationToken);
+      UpdateModelGuidance();
+      UpdateModelSuggestions(QuickModelBox.Text);
+      UpdateRuntimeCapabilityUi();
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+      _modelCatalogue = null;
+      _modelGuidance = null;
+      ModelGuidanceSummaryText.Text =
+          $"Model guidance is unavailable: {ex.Message} Manual render controls remain available.";
+      PrimaryModelGuidanceText.Text = "Primary model: catalogue unavailable";
+      VideoModelGuidanceText.Text = "Video model: catalogue unavailable";
+      ModelGuidanceBlockersText.Visibility = Visibility.Collapsed;
+      ApplyRecommendedPrimaryModelButton.IsEnabled = false;
+      ApplyRecommendedVideoModelButton.IsEnabled = false;
+      UpdateRuntimeCapabilityUi();
+    }
+    finally
+    {
+      ModelGuidanceProgressRing.IsActive = false;
+      ModelGuidanceProgressRing.Visibility = Visibility.Collapsed;
+    }
+  }
+
+  private async Task LoadHardwareCapabilitiesAsync(CancellationToken cancellationToken)
+  {
+    RuntimeCapabilityProgressRing.IsActive = true;
+    RuntimeCapabilityProgressRing.Visibility = Visibility.Visible;
+    RuntimeAcceleratorText.Text = "Checking backend hardware and accelerator settings...";
+
+    try
+    {
+      _hardwareProfile = await App.Services.ApiClient.GetHardwareAsync(cancellationToken);
+      UpdateRuntimeCapabilityUi();
     }
 
-    private async Task LoadQueueSummaryAsync(CancellationToken cancellationToken)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
-        if (_projectId is null)
-        {
-            RenderQueueSummaryText.Text = "Choose a project to view its render queue.";
-            RenderQueueProgressBar.Value = 0;
-            return;
-        }
+    }
+    catch (Exception ex)
+    {
+      _hardwareProfile = null;
+      RuntimeAcceleratorText.Text = $"Compute readiness is unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
+      RuntimeCudaText.Text = "CUDA status could not be loaded. Manual render controls remain available.";
+      RuntimeTensorCoreText.Text = "RTX Tensor Core hardware was not confirmed.";
+      RuntimeTensorRtText.Text = _modelCatalogue?.TensorRtMigration?.Canonical.RendererReady == true
+          ? "TensorRT SD 1.5 keyframe renderer is installed and verified."
+          : "TensorRT readiness is available from Models when the backend reconnects.";
+      RuntimeTritonText.Text = "Triton is backend-managed and has no independent render switch.";
+    }
+    finally
+    {
+      RuntimeCapabilityProgressRing.IsActive = false;
+      RuntimeCapabilityProgressRing.Visibility = Visibility.Collapsed;
+    }
+  }
 
-        try
-        {
-            await App.Services.JobsActivity.RefreshAsync(cancellationToken);
-            ApplyQueueSnapshot(App.Services.JobsActivity.Snapshot);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
+  private async Task LoadGenerationProviderAsync(CancellationToken cancellationToken)
+  {
+    try
+    {
+      GenerationProviderListResponse response = await App.Services.ApiClient.GetGenerationProvidersAsync(cancellationToken);
+      _generationProviders = response.Providers;
+      GenerationProviderComboBox.ItemsSource = _generationProviders;
+      GenerationProviderComboBox.SelectedItem =
+          _generationProviders.FirstOrDefault(provider => provider.Id == "edmg.internal")
+          ?? _generationProviders.FirstOrDefault();
+      UpdateGenerationProviderSelection();
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+      _generationProvider = null;
+      _generationProviders = [];
+      GenerationProviderText.Text = $"Provider unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
+    }
+  }
+
+  private void GenerationProvider_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    UpdateGenerationProviderSelection();
+  }
+
+  private void GenerationOperation_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    UpdateGenerationProviderStatus();
+  }
+
+  private void UpdateGenerationProviderSelection()
+  {
+    _generationProvider = GenerationProviderComboBox.SelectedItem as GenerationProviderDefinition;
+    GenerationOperationComboBox.ItemsSource = _generationProvider?.Operations;
+    GenerationOperationComboBox.SelectedItem = _generationProvider?.Operations.Contains("video") == true
+        ? "video"
+        : _generationProvider?.Operations.FirstOrDefault();
+    UpdateGenerationProviderStatus();
+  }
+
+  private void UpdateGenerationProviderStatus()
+  {
+    if (_generationProvider is null)
+    {
+      GenerationProviderText.Text = "Provider unavailable";
+      return;
     }
 
-    private void ApplyQueueSnapshot(StudioJobsActivitySnapshot activity)
-    {
-        if (activity.Error is not null)
-        {
-            RenderQueueSummaryText.Text = $"Queue status unavailable: {StudioPageHelpers.GetUserFacingError(activity.Error)}";
-            return;
-        }
+    string runtime = string.IsNullOrWhiteSpace(_generationProvider.HardwareBackend)
+        ? _generationProvider.Kind
+        : _generationProvider.HardwareBackend;
+    GenerationProviderText.Text = $"{_generationProvider.Name} · {runtime} · "
+        + $"{(_generationProvider.Ready ? "ready" : "blocked")} · {_generationProvider.ReadinessDetail}";
+  }
 
-        IReadOnlyList<StudioJob> projectJobs = _projectId is null
-            ? []
-            : activity.Jobs.Where(job => string.Equals(job.ProjectId, _projectId, StringComparison.OrdinalIgnoreCase)).ToArray();
-        RenderQueueSnapshot snapshot = RenderQueueSnapshot.Create(projectJobs);
-        RenderQueueSummaryText.Text = snapshot.Summary;
-        RenderQueueProgressBar.Value = snapshot.ActiveProgress;
+  private void UpdateRuntimeCapabilityUi()
+  {
+    if (_hardwareProfile is not JsonElement hardware)
+    {
+      return;
     }
 
-    private async Task LoadModelGuidanceAsync(CancellationToken cancellationToken)
+    try
     {
-        ModelGuidanceProgressRing.IsActive = true;
-        ModelGuidanceProgressRing.Visibility = Visibility.Visible;
-        ModelGuidanceSummaryText.Text = "Loading the model catalogue. Manual render controls remain available.";
-
-        try
-        {
-            _modelCatalogue = await App.Services.ApiClient.GetTypedModelCatalogueAsync(cancellationToken);
-            UpdateModelGuidance();
-            UpdateModelSuggestions(QuickModelBox.Text);
-            UpdateRuntimeCapabilityUi();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _modelCatalogue = null;
-            _modelGuidance = null;
-            ModelGuidanceSummaryText.Text =
-                $"Model guidance is unavailable: {ex.Message} Manual render controls remain available.";
-            PrimaryModelGuidanceText.Text = "Primary model: catalogue unavailable";
-            VideoModelGuidanceText.Text = "Video model: catalogue unavailable";
-            ModelGuidanceBlockersText.Visibility = Visibility.Collapsed;
-            ApplyRecommendedPrimaryModelButton.IsEnabled = false;
-            ApplyRecommendedVideoModelButton.IsEnabled = false;
-            UpdateRuntimeCapabilityUi();
-        }
-        finally
-        {
-            ModelGuidanceProgressRing.IsActive = false;
-            ModelGuidanceProgressRing.Visibility = Visibility.Collapsed;
-        }
+      RenderRuntimeCapabilities capabilities = RenderRuntimeCapabilities.Evaluate(
+          hardware,
+          _modelCatalogue);
+      RuntimeAcceleratorText.Text = capabilities.AcceleratorSummary;
+      RuntimeCudaText.Text = capabilities.CudaSummary;
+      RuntimeTensorCoreText.Text = capabilities.TensorCoreSummary;
+      RuntimeTensorRtText.Text = capabilities.TensorRtSummary;
+      RuntimeTritonText.Text = capabilities.TritonSummary;
+    }
+    catch (ArgumentException ex)
+    {
+      RuntimeAcceleratorText.Text = $"Backend hardware report could not be read: {ex.Message}";
     }
 
-    private async Task LoadHardwareCapabilitiesAsync(CancellationToken cancellationToken)
+    UpdateReadinessCard();
+  }
+
+  private async void RefreshRuntimeCapabilities_Click(object sender, RoutedEventArgs e)
+  {
+    if (_pageCancellation is null)
     {
-        RuntimeCapabilityProgressRing.IsActive = true;
-        RuntimeCapabilityProgressRing.Visibility = Visibility.Visible;
-        RuntimeAcceleratorText.Text = "Checking backend hardware and accelerator settings...";
-
-        try
-        {
-            _hardwareProfile = await App.Services.ApiClient.GetHardwareAsync(cancellationToken);
-            UpdateRuntimeCapabilityUi();
-        }
-
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _hardwareProfile = null;
-            RuntimeAcceleratorText.Text = $"Compute readiness is unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
-            RuntimeCudaText.Text = "CUDA status could not be loaded. Manual render controls remain available.";
-            RuntimeTensorCoreText.Text = "RTX Tensor Core hardware was not confirmed.";
-            RuntimeTensorRtText.Text = _modelCatalogue?.TensorRtMigration?.Canonical.RendererReady == true
-                ? "TensorRT SD 1.5 keyframe renderer is installed and verified."
-                : "TensorRT readiness is available from Models when the backend reconnects.";
-            RuntimeTritonText.Text = "Triton is backend-managed and has no independent render switch.";
-        }
-        finally
-        {
-            RuntimeCapabilityProgressRing.IsActive = false;
-            RuntimeCapabilityProgressRing.Visibility = Visibility.Collapsed;
-        }
+      return;
     }
 
-    private async Task LoadGenerationProviderAsync(CancellationToken cancellationToken)
+    await Task.WhenAll(
+        LoadHardwareCapabilitiesAsync(_pageCancellation.Token),
+        LoadModelGuidanceAsync(_pageCancellation.Token),
+        LoadGenerationProviderAsync(_pageCancellation.Token));
+  }
+
+  private void UpdateModelGuidance()
+  {
+    if (!_modelGuidanceUiReady || _modelCatalogue is null)
     {
-        try
-        {
-            GenerationProviderListResponse response = await App.Services.ApiClient.GetGenerationProvidersAsync(cancellationToken);
-            _generationProviders = response.Providers;
-            GenerationProviderComboBox.ItemsSource = _generationProviders;
-            GenerationProviderComboBox.SelectedItem =
-                _generationProviders.FirstOrDefault(provider => provider.Id == "edmg.internal")
-                ?? _generationProviders.FirstOrDefault();
-            UpdateGenerationProviderSelection();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _generationProvider = null;
-            _generationProviders = [];
-            GenerationProviderText.Text = $"Provider unavailable: {StudioPageHelpers.GetUserFacingError(ex)}";
-        }
+      return;
     }
 
-    private void GenerationProvider_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        UpdateGenerationProviderSelection();
-
-    private void GenerationOperation_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        UpdateGenerationProviderStatus();
-
-    private void UpdateGenerationProviderSelection()
-    {
-        _generationProvider = GenerationProviderComboBox.SelectedItem as GenerationProviderDefinition;
-        GenerationOperationComboBox.ItemsSource = _generationProvider?.Operations;
-        GenerationOperationComboBox.SelectedItem = _generationProvider?.Operations.Contains("video") == true
-            ? "video"
-            : _generationProvider?.Operations.FirstOrDefault();
-        UpdateGenerationProviderStatus();
-    }
-
-    private void UpdateGenerationProviderStatus()
-    {
-        if (_generationProvider is null)
-        {
-            GenerationProviderText.Text = "Provider unavailable";
-            return;
-        }
-
-        string runtime = string.IsNullOrWhiteSpace(_generationProvider.HardwareBackend)
-            ? _generationProvider.Kind
-            : _generationProvider.HardwareBackend;
-        GenerationProviderText.Text = $"{_generationProvider.Name} · {runtime} · "
-            + $"{(_generationProvider.Ready ? "ready" : "blocked")} · {_generationProvider.ReadinessDetail}";
-    }
-
-    private void UpdateRuntimeCapabilityUi()
-    {
-        if (_hardwareProfile is not JsonElement hardware)
-        {
-            return;
-        }
-
-        try
-        {
-            RenderRuntimeCapabilities capabilities = RenderRuntimeCapabilities.Evaluate(
-                hardware,
-                _modelCatalogue);
-            RuntimeAcceleratorText.Text = capabilities.AcceleratorSummary;
-            RuntimeCudaText.Text = capabilities.CudaSummary;
-            RuntimeTensorCoreText.Text = capabilities.TensorCoreSummary;
-            RuntimeTensorRtText.Text = capabilities.TensorRtSummary;
-            RuntimeTritonText.Text = capabilities.TritonSummary;
-        }
-        catch (ArgumentException ex)
-        {
-            RuntimeAcceleratorText.Text = $"Backend hardware report could not be read: {ex.Message}";
-        }
-
-        UpdateReadinessCard();
-    }
-
-    private async void RefreshRuntimeCapabilities_Click(object sender, RoutedEventArgs e)
-    {
-        if (_pageCancellation is null)
-        {
-            return;
-        }
-
-        await Task.WhenAll(
-            LoadHardwareCapabilitiesAsync(_pageCancellation.Token),
-            LoadModelGuidanceAsync(_pageCancellation.Token),
-            LoadGenerationProviderAsync(_pageCancellation.Token));
-    }
-
-    private void UpdateModelGuidance()
-    {
-        if (!_modelGuidanceUiReady || _modelCatalogue is null)
-        {
-            return;
-        }
-
-        var configuration = new ModelRenderConfiguration(
+    ModelRenderConfiguration configuration = new(
             ModelBox.Text.Trim(),
             VideoModelBox.Text.Trim(),
             Selected(ModeComboBox, "auto"),
@@ -311,1089 +315,1176 @@ public sealed partial class RenderPage : Page
             Selected(KeyframeRendererComboBox, "internal"),
             KeyframeModelBox.Text.Trim());
 
-        _modelGuidance = ModelRenderGuidanceEvaluator.Evaluate(_modelCatalogue, configuration);
-        ModelGuidanceSummaryText.Text = _modelGuidance.IsReady
-            ? "The selected models are ready for this render path."
-            : "Resolve the blockers below before rendering with this model configuration.";
-        PrimaryModelGuidanceText.Text = FormatModelGuidance("Primary model", _modelGuidance.Primary);
-        VideoModelGuidanceText.Text = configuration.TemporalMode.Equals(
-            "video_model",
-            StringComparison.OrdinalIgnoreCase)
-                ? FormatModelGuidance("Video model", _modelGuidance.Video)
-                : "Video model: not required for the selected temporal mode.";
+    _modelGuidance = ModelRenderGuidanceEvaluator.Evaluate(_modelCatalogue, configuration);
+    ModelGuidanceSummaryText.Text = _modelGuidance.IsReady
+        ? "The selected models are ready for this render path."
+        : "Resolve the blockers below before rendering with this model configuration.";
+    PrimaryModelGuidanceText.Text = FormatModelGuidance("Primary model", _modelGuidance.Primary);
+    VideoModelGuidanceText.Text = configuration.TemporalMode.Equals(
+        "video_model",
+        StringComparison.OrdinalIgnoreCase)
+            ? FormatModelGuidance("Video model", _modelGuidance.Video)
+            : "Video model: not required for the selected temporal mode.";
 
-        ModelGuidanceBlockersText.Text = string.Join(Environment.NewLine, _modelGuidance.Blockers.Select(
-            blocker => $"- {blocker}"));
-        ModelGuidanceBlockersText.Visibility =
-            _modelGuidance.Blockers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        ApplyRecommendedPrimaryModelButton.IsEnabled =
-            !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedPrimaryModelId);
-        ApplyRecommendedVideoModelButton.IsEnabled =
-            configuration.TemporalMode.Equals("video_model", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedVideoModelId);
-        UpdateReadinessCard();
+    ModelGuidanceBlockersText.Text = string.Join(Environment.NewLine, _modelGuidance.Blockers.Select(
+        blocker => $"- {blocker}"));
+    ModelGuidanceBlockersText.Visibility =
+        _modelGuidance.Blockers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+    ApplyRecommendedPrimaryModelButton.IsEnabled =
+        !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedPrimaryModelId);
+    ApplyRecommendedVideoModelButton.IsEnabled =
+        configuration.TemporalMode.Equals("video_model", StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrWhiteSpace(_modelGuidance.RecommendedVideoModelId);
+    UpdateReadinessCard();
+  }
+
+  private void UpdateReadinessCard()
+  {
+    RenderQuickSetup setup = ResolveQuickSetup();
+    string selectedModel = QuickModelBox.Text.Trim();
+    ReadinessStatusText.Text = _projectId is null
+        ? "Blocked - no active project"
+        : _modelGuidance is null
+            ? "Checking"
+            : _modelGuidance.IsReady ? "Ready" : "Warning";
+    ReadinessEngineText.Text = setup.VideoModelEngine.Equals("auto", StringComparison.OrdinalIgnoreCase)
+        ? $"Automatic · {setup.Route}"
+        : $"{setup.VideoModelEngine} · {setup.Route}";
+    ReadinessModelText.Text = string.IsNullOrWhiteSpace(selectedModel)
+        || selectedModel.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? _modelGuidance?.Primary?.Name ?? "Automatic selection"
+            : _modelGuidance?.Primary?.Name ?? selectedModel;
+    ReadinessFrameText.Text = setup.Route is "motion" or "internal"
+        ? $"Up to {setup.MaximumFrames:N0} generated frames · {setup.OutputFps} FPS output"
+        : setup.Route == "stills" ? "One still per planned scene" : "Calculated by the selected workflow";
+  }
+
+  private void AdvancedModeToggle_Toggled(object sender, RoutedEventArgs e)
+  {
+    ApplyAdvancedMode();
+  }
+
+  private void ApplyAdvancedMode()
+  {
+    bool advanced = AdvancedModeToggle.IsOn;
+    AdvancedControlsPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+    AdvancedDiagnosticsHeader.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+    GlobalResultBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+    AdvancedActivityHeader.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+    ActionLogBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+
+    for (int index = 1; index < WorkflowTabView.TabItems.Count; index++)
+    {
+      if (WorkflowTabView.TabItems[index] is TabViewItem item)
+      {
+        item.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+      }
     }
 
-    private void UpdateReadinessCard()
+    if (!advanced && WorkflowTabView.SelectedIndex != 0)
     {
-        RenderQuickSetup setup = ResolveQuickSetup();
-        string selectedModel = QuickModelBox.Text.Trim();
-        ReadinessStatusText.Text = _projectId is null
-            ? "Blocked - no active project"
-            : _modelGuidance is null
-                ? "Checking"
-                : _modelGuidance.IsReady ? "Ready" : "Warning";
-        ReadinessEngineText.Text = setup.VideoModelEngine.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? $"Automatic · {setup.Route}"
-            : $"{setup.VideoModelEngine} · {setup.Route}";
-        ReadinessModelText.Text = string.IsNullOrWhiteSpace(selectedModel)
-            || selectedModel.Equals("auto", StringComparison.OrdinalIgnoreCase)
-                ? _modelGuidance?.Primary?.Name ?? "Automatic selection"
-                : _modelGuidance?.Primary?.Name ?? selectedModel;
-        ReadinessFrameText.Text = setup.Route is "motion" or "internal"
-            ? $"Up to {setup.MaximumFrames:N0} generated frames · {setup.OutputFps} FPS output"
-            : setup.Route == "stills" ? "One still per planned scene" : "Calculated by the selected workflow";
+      WorkflowTabView.SelectedIndex = 0;
+    }
+  }
+
+  private static string FormatModelGuidance(string label, ModelRenderCandidate? candidate)
+  {
+    if (candidate is null)
+    {
+      return $"{label}: no compatible selection";
     }
 
-    private void AdvancedModeToggle_Toggled(object sender, RoutedEventArgs e) => ApplyAdvancedMode();
+    string installed = candidate.IsInstalled ? "installed" : "not installed";
+    string lane = string.IsNullOrWhiteSpace(candidate.Lane) ? "unclassified lane" : $"{candidate.Lane} lane";
+    string license = string.IsNullOrWhiteSpace(candidate.LicenseId)
+        ? string.Empty
+        : $", license {candidate.LicenseId}";
+    return $"{label}: {candidate.Name} ({candidate.ModelId}) - {installed}, {lane}{license}.";
+  }
 
-    private void ApplyAdvancedMode()
+  private void ModelGuidanceSelection_Changed(object sender, SelectionChangedEventArgs e)
+  {
+    if (!_modelGuidanceUiReady)
     {
-        bool advanced = AdvancedModeToggle.IsOn;
-        AdvancedControlsPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        AdvancedDiagnosticsHeader.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        GlobalResultBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        AdvancedActivityHeader.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        ActionLogBox.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-
-        for (int index = 1; index < WorkflowTabView.TabItems.Count; index++)
-        {
-            if (WorkflowTabView.TabItems[index] is TabViewItem item)
-            {
-                item.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-            }
-        }
-
-        if (!advanced && WorkflowTabView.SelectedIndex != 0)
-        {
-            WorkflowTabView.SelectedIndex = 0;
-        }
+      return;
     }
 
-    private static string FormatModelGuidance(string label, ModelRenderCandidate? candidate)
+    if (ReferenceEquals(sender, VideoModelEngineComboBox))
     {
-        if (candidate is null)
-        {
-            return $"{label}: no compatible selection";
-        }
+      UpdateVideoEngineControls();
+    }
+    UpdateModelGuidance();
+  }
 
-        string installed = candidate.IsInstalled ? "installed" : "not installed";
-        string lane = string.IsNullOrWhiteSpace(candidate.Lane) ? "unclassified lane" : $"{candidate.Lane} lane";
-        string license = string.IsNullOrWhiteSpace(candidate.LicenseId)
-            ? string.Empty
-            : $", license {candidate.LicenseId}";
-        return $"{label}: {candidate.Name} ({candidate.ModelId}) - {installed}, {lane}{license}.";
+  private void UpdateVideoEngineControls()
+  {
+    string engine = Selected(VideoModelEngineComboBox, "auto");
+    bool hunyuan = engine.Equals("hunyuan_video15", StringComparison.OrdinalIgnoreCase);
+    bool ltx = engine.Equals("ltx_25", StringComparison.OrdinalIgnoreCase);
+    Visibility hunyuanVisibility = hunyuan ? Visibility.Visible : Visibility.Collapsed;
+    HunyuanGenerationPanel.Visibility = hunyuanVisibility;
+    HunyuanLowVramPanel.Visibility = hunyuanVisibility;
+    HunyuanChunkSizePanel.Visibility = hunyuanVisibility;
+    HunyuanChunkOverlapPanel.Visibility = hunyuanVisibility;
+    LtxRenderGuidanceText.Visibility = ltx ? Visibility.Visible : Visibility.Collapsed;
+
+    string currentModel = VideoModelBox.Text.Trim();
+    if (ltx && (currentModel.Length == 0 || currentModel == HunyuanModelId))
+    {
+      VideoModelBox.Text = LtxModelId;
+    }
+    else if (hunyuan && (currentModel.Length == 0 || currentModel == LtxModelId))
+    {
+      VideoModelBox.Text = HunyuanModelId;
+    }
+    else if (engine == "auto" && (currentModel == HunyuanModelId || currentModel == LtxModelId))
+    {
+      VideoModelBox.Text = string.Empty;
+    }
+  }
+
+  private void ModelGuidanceText_Changed(object sender, TextChangedEventArgs e)
+  {
+    UpdateModelGuidance();
+  }
+
+  private void QuickModelBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+  {
+    if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+    {
+      UpdateModelSuggestions(sender.Text);
     }
 
-    private void ModelGuidanceSelection_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_modelGuidanceUiReady)
-        {
-            return;
-        }
+    UpdateReadinessCard();
+  }
 
-        if (ReferenceEquals(sender, VideoModelEngineComboBox))
-        {
-            UpdateVideoEngineControls();
-        }
-        UpdateModelGuidance();
+  private void QuickModelBox_SuggestionChosen(
+      AutoSuggestBox sender,
+      AutoSuggestBoxSuggestionChosenEventArgs args)
+  {
+    if (args.SelectedItem is ModelPickerItem item)
+    {
+      sender.Text = item.ModelId;
+    }
+  }
+
+  private void QuickModelBox_QuerySubmitted(
+      AutoSuggestBox sender,
+      AutoSuggestBoxQuerySubmittedEventArgs args)
+  {
+    if (args.ChosenSuggestion is ModelPickerItem item)
+    {
+      sender.Text = item.ModelId;
     }
 
-    private void UpdateVideoEngineControls()
-    {
-        string engine = Selected(VideoModelEngineComboBox, "auto");
-        bool hunyuan = engine.Equals("hunyuan_video15", StringComparison.OrdinalIgnoreCase);
-        bool ltx = engine.Equals("ltx_25", StringComparison.OrdinalIgnoreCase);
-        Visibility hunyuanVisibility = hunyuan ? Visibility.Visible : Visibility.Collapsed;
-        HunyuanGenerationPanel.Visibility = hunyuanVisibility;
-        HunyuanLowVramPanel.Visibility = hunyuanVisibility;
-        HunyuanChunkSizePanel.Visibility = hunyuanVisibility;
-        HunyuanChunkOverlapPanel.Visibility = hunyuanVisibility;
-        LtxRenderGuidanceText.Visibility = ltx ? Visibility.Visible : Visibility.Collapsed;
+    _ = ApplyQuickSetup();
+  }
 
-        string currentModel = VideoModelBox.Text.Trim();
-        if (ltx && (currentModel.Length == 0 || currentModel == HunyuanModelId))
-        {
-            VideoModelBox.Text = LtxModelId;
-        }
-        else if (hunyuan && (currentModel.Length == 0 || currentModel == LtxModelId))
-        {
-            VideoModelBox.Text = HunyuanModelId;
-        }
-        else if (engine == "auto" && (currentModel == HunyuanModelId || currentModel == LtxModelId))
-        {
-            VideoModelBox.Text = string.Empty;
-        }
+  private void UpdateModelSuggestions(string query)
+  {
+    string normalized = query.Trim();
+    IEnumerable<ModelRenderCandidate> candidates = _modelGuidance?.PrimaryAlternatives ?? [];
+    if (normalized.Length > 0 && !normalized.Equals("auto", StringComparison.OrdinalIgnoreCase))
+    {
+      candidates = candidates.Where(candidate =>
+          candidate.ModelId.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+          || candidate.Name.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+          || candidate.Engine.Contains(normalized, StringComparison.OrdinalIgnoreCase)
+          || candidate.Source.Contains(normalized, StringComparison.OrdinalIgnoreCase));
     }
 
-    private void ModelGuidanceText_Changed(object sender, TextChangedEventArgs e) =>
-        UpdateModelGuidance();
+    QuickModelBox.ItemsSource = candidates.Take(20).Select(candidate => new ModelPickerItem(
+        candidate.ModelId,
+        candidate.Name,
+        $"{DisplayValue(candidate.Engine, "Automatic engine")} · {candidate.VramRequirement} · "
+        + (candidate.IsHosted ? "Hosted" : "Local"),
+        candidate.IsInstalled
+            ? candidate.IsHardwareCompatible ? "Ready" : "Incompatible"
+            : candidate.IsInstallable ? "Install" : "Unavailable")).ToArray();
+  }
 
-    private void QuickModelBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+  private static string DisplayValue(string value, string fallback)
+  {
+    return string.IsNullOrWhiteSpace(value) ? fallback : value;
+  }
+
+  private void ApplyRecommendedPrimaryModel_Click(object sender, RoutedEventArgs e)
+  {
+    if (!string.IsNullOrWhiteSpace(_modelGuidance?.RecommendedPrimaryModelId))
     {
-        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
-        {
-            UpdateModelSuggestions(sender.Text);
-        }
+      ModelBox.Text = _modelGuidance.RecommendedPrimaryModelId;
+    }
+  }
 
-        UpdateReadinessCard();
+  private void ApplyRecommendedVideoModel_Click(object sender, RoutedEventArgs e)
+  {
+    if (!string.IsNullOrWhiteSpace(_modelGuidance?.RecommendedVideoModelId))
+    {
+      VideoModelBox.Text = _modelGuidance.RecommendedVideoModelId;
+    }
+  }
+
+  private async void RefreshModelGuidance_Click(object sender, RoutedEventArgs e)
+  {
+    if (_pageCancellation is not null)
+    {
+      await LoadModelGuidanceAsync(_pageCancellation.Token);
+    }
+  }
+
+  private void OpenModels_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("models");
+  }
+
+  private void ApplySelectedVariant()
+  {
+    int variantIndex = Math.Max(0, App.Services.Session.SelectedVariantIndex);
+    _isApplyingVariant = true;
+    HeaderVariantBox.Value = variantIndex;
+    WorkflowVariantBox.Value = variantIndex;
+    ToolsVariantBox.Value = variantIndex;
+    TensorVariantBox.Value = variantIndex;
+    AssemblyVariantBox.Value = variantIndex;
+    DeforumVariantBox.Value = variantIndex;
+    ComfyExportVariantBox.Value = variantIndex;
+    _isApplyingVariant = false;
+  }
+
+  private void HeaderVariantBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+  {
+    if (!_modelGuidanceUiReady || _isApplyingVariant || double.IsNaN(args.NewValue))
+    {
+      return;
     }
 
-    private void QuickModelBox_SuggestionChosen(
-        AutoSuggestBox sender,
-        AutoSuggestBoxSuggestionChosenEventArgs args)
+    App.Services.Session.SelectedVariantIndex = Math.Max(0, (int)args.NewValue);
+    ApplySelectedVariant();
+  }
+
+  private void OpenWorkspace_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("workspace");
+  }
+
+  private void OpenQueue_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("queue");
+  }
+
+  private void OpenOutputs_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("outputs");
+  }
+
+  private JsonElement BuildInternalRenderRequest()
+  {
+    string prompt = PromptBox.Text.Trim();
+    long seed = LongNumber(SeedBox, -1);
+    InternalVideoRenderSettings settings = new()
     {
-        if (args.SelectedItem is ModelPickerItem item)
-        {
-            sender.Text = item.ModelId;
-        }
-    }
-
-    private void QuickModelBox_QuerySubmitted(
-        AutoSuggestBox sender,
-        AutoSuggestBoxQuerySubmittedEventArgs args)
-    {
-        if (args.ChosenSuggestion is ModelPickerItem item)
-        {
-            sender.Text = item.ModelId;
-        }
-
-        ApplyQuickSetup();
-    }
-
-    private void UpdateModelSuggestions(string query)
-    {
-        string normalized = query.Trim();
-        IEnumerable<ModelRenderCandidate> candidates = _modelGuidance?.PrimaryAlternatives ?? [];
-        if (normalized.Length > 0 && !normalized.Equals("auto", StringComparison.OrdinalIgnoreCase))
-        {
-            candidates = candidates.Where(candidate =>
-                candidate.ModelId.Contains(normalized, StringComparison.OrdinalIgnoreCase)
-                || candidate.Name.Contains(normalized, StringComparison.OrdinalIgnoreCase)
-                || candidate.Engine.Contains(normalized, StringComparison.OrdinalIgnoreCase)
-                || candidate.Source.Contains(normalized, StringComparison.OrdinalIgnoreCase));
-        }
-
-        QuickModelBox.ItemsSource = candidates.Take(20).Select(candidate => new ModelPickerItem(
-            candidate.ModelId,
-            candidate.Name,
-            $"{DisplayValue(candidate.Engine, "Automatic engine")} · {candidate.VramRequirement} · "
-            + (candidate.IsHosted ? "Hosted" : "Local"),
-            candidate.IsInstalled
-                ? candidate.IsHardwareCompatible ? "Ready" : "Incompatible"
-                : candidate.IsInstallable ? "Install" : "Unavailable")).ToArray();
-    }
-
-    private static string DisplayValue(string value, string fallback) =>
-        string.IsNullOrWhiteSpace(value) ? fallback : value;
-
-    private void ApplyRecommendedPrimaryModel_Click(object sender, RoutedEventArgs e)
-    {
-        if (!string.IsNullOrWhiteSpace(_modelGuidance?.RecommendedPrimaryModelId))
-        {
-            ModelBox.Text = _modelGuidance.RecommendedPrimaryModelId;
-        }
-    }
-
-    private void ApplyRecommendedVideoModel_Click(object sender, RoutedEventArgs e)
-    {
-        if (!string.IsNullOrWhiteSpace(_modelGuidance?.RecommendedVideoModelId))
-        {
-            VideoModelBox.Text = _modelGuidance.RecommendedVideoModelId;
-        }
-    }
-
-    private async void RefreshModelGuidance_Click(object sender, RoutedEventArgs e)
-    {
-        if (_pageCancellation is not null)
-        {
-            await LoadModelGuidanceAsync(_pageCancellation.Token);
-        }
-    }
-
-    private void OpenModels_Click(object sender, RoutedEventArgs e) =>
-        App.Navigate("models");
-
-    private void ApplySelectedVariant()
-    {
-        int variantIndex = Math.Max(0, App.Services.Session.SelectedVariantIndex);
-        _isApplyingVariant = true;
-        HeaderVariantBox.Value = variantIndex;
-        WorkflowVariantBox.Value = variantIndex;
-        ToolsVariantBox.Value = variantIndex;
-        TensorVariantBox.Value = variantIndex;
-        AssemblyVariantBox.Value = variantIndex;
-        DeforumVariantBox.Value = variantIndex;
-        ComfyExportVariantBox.Value = variantIndex;
-        _isApplyingVariant = false;
-    }
-
-    private void HeaderVariantBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
-    {
-        if (!_modelGuidanceUiReady || _isApplyingVariant || double.IsNaN(args.NewValue))
-        {
-            return;
-        }
-
-        App.Services.Session.SelectedVariantIndex = Math.Max(0, (int)args.NewValue);
-        ApplySelectedVariant();
-    }
-
-    private void OpenWorkspace_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
-
-    private void OpenQueue_Click(object sender, RoutedEventArgs e) => App.Navigate("queue");
-
-    private void OpenOutputs_Click(object sender, RoutedEventArgs e) => App.Navigate("outputs");
-
-    private JsonElement BuildInternalRenderRequest()
-    {
-        string prompt = PromptBox.Text.Trim();
-        long seed = LongNumber(SeedBox, -1);
-        var settings = new InternalVideoRenderSettings
-        {
-            VariantIndex = App.Services.Session.SelectedVariantIndex,
-            OutputFps = (int)Number(FpsBox, 24),
-            RenderFps = (int)Number(RenderFpsBox, 3),
-            Width = (int)Number(WidthBox, 1280),
-            Height = (int)Number(HeightBox, 720),
-            Steps = (int)Number(StepsBox, 28),
-            Cfg = Number(CfgBox, 7.0),
-            Sampler = Selected(SamplerComboBox, "euler"),
-            Seed = seed < 0 ? null : seed,
-            KeyframeIntervalSeconds = Number(KeyframeIntervalBox, 5.0),
-            KeyframeContinuityMode = Selected(KeyframeContinuityModeComboBox, "scene"),
-            InterpolationEngine = Selected(InterpolationComboBox, "auto"),
-            ModelId = EmptyToNull(ModelBox.Text) ?? "auto",
-            RenderMode = Selected(ModeComboBox, "auto"),
-            RenderTier = Selected(TierComboBox, "balanced"),
-            DevicePreference = Selected(DeviceComboBox, "auto"),
-            AllowHostedFallback = HostedFallbackToggle.IsOn,
-            HostedService = Selected(HostedProviderComboBox, "default"),
-            HostedModel = EmptyToNull(HostedModelBox.Text),
-            HostedStylePreset = EmptyToNull(HostedStyleBox.Text),
-            NegativePrompt = NegativePromptBox.Text,
-            Loras = LorasBox.Text,
-            Vae = EmptyToNull(VaeBox.Text),
-            RefinerEnabled = EnableRefinerToggle.IsOn,
-            RefinerModelId = EmptyToNull(RefinerModelBox.Text),
-            RefinerSwitchAt = Number(RefinerSwitchBox, 0.8),
-            TemporalMode = Selected(TemporalModeComboBox, "keyframes"),
-            TemporalStrength = Number(TemporalConsistencyBox, 0.75),
-            TemporalSteps = NullableNumber(TemporalStepsBox),
-            RefineEveryNFrames = (int)Number(RefineEveryBox, 1),
-            AnchorStrength = Number(AnchorStrengthBox, 0.2),
-            PromptBlend = PromptBlendToggle.IsOn,
-            ResumeExistingFrames = ResumeFramesToggle.IsOn,
-            MotionStrategy = Selected(MotionStrategyComboBox, "manual"),
-            StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
-            VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
-            VideoModelId = EmptyToNull(VideoModelBox.Text),
-            VideoModelMaxFramesPerScene = (int)Number(FramesBox, 8),
-            VideoModelMotionBucketId = (int)Number(MotionBucketBox, 127),
-            VideoModelNoiseAugStrength = Number(NoiseAugBox, 0.02),
-            VideoModelDecodeChunkSize = (int)Number(DecodeChunkBox, 8),
-            VideoModelGenerationMode = Selected(VideoGenerationModeComboBox, "auto"),
-            VideoModelLowVramMode = VideoLowVramToggle.IsOn,
-            VideoModelGenerationChunkSize = (int)Number(GenerationChunkSizeBox, 8),
-            VideoModelGenerationChunkOverlap = (int)Number(GenerationChunkOverlapBox, 2),
-            VideoModelDtype = Selected(VideoDtypeComboBox, "auto"),
-            VideoModelCpuOffload = VideoCpuOffloadToggle.IsOn,
-            VideoModelMotionScoreMode = Selected(MotionScoreModeComboBox, "auto"),
-            VideoModelManualMotionScore = (int)Number(ManualMotionScoreBox, 4),
-            VideoModelAnchorMode = Selected(VideoAnchorModeComboBox, "start"),
-            VideoModelPromptRefine = VideoPromptRefineToggle.IsOn,
-            VideoModelSceneMotion = Selected(SceneMotionComboBox, "subject"),
-            VideoModelApplyTimelineCamera = TimelineCameraToggle.IsOn,
-            VideoModelKeyframeRenderer = Selected(KeyframeRendererComboBox, "internal"),
-            VideoModelKeyframeModelId = EmptyToNull(KeyframeModelBox.Text),
-            MotionScoreSchedule = MotionScoreScheduleBox.Text,
-            NoiseAugSchedule = NoiseAugScheduleBox.Text,
-            AnchorStrengthSchedule = AnchorStrengthScheduleBox.Text,
-            ParseqEnabled = ParseqToggle.IsOn,
-            ParseqManifest = ParseqBox.Text,
-            SourceAsset = EmptyToNull(MotionSourceBox.Text),
-            SourceStrength = Number(SourceStrengthBox, 0.55),
-            DeforumPrompts = string.IsNullOrWhiteSpace(prompt)
+      VariantIndex = App.Services.Session.SelectedVariantIndex,
+      OutputFps = Number(FpsBox, 24),
+      RenderFps = Number(RenderFpsBox, 3),
+      Width = Number(WidthBox, 1280),
+      Height = Number(HeightBox, 720),
+      Steps = Number(StepsBox, 28),
+      Cfg = Number(CfgBox, 7.0),
+      Sampler = Selected(SamplerComboBox, "euler"),
+      Seed = seed < 0 ? null : seed,
+      KeyframeIntervalSeconds = Number(KeyframeIntervalBox, 5.0),
+      KeyframeContinuityMode = Selected(KeyframeContinuityModeComboBox, "scene"),
+      InterpolationEngine = Selected(InterpolationComboBox, "auto"),
+      ModelId = EmptyToNull(ModelBox.Text) ?? "auto",
+      RenderMode = Selected(ModeComboBox, "auto"),
+      RenderTier = Selected(TierComboBox, "balanced"),
+      DevicePreference = Selected(DeviceComboBox, "auto"),
+      AllowHostedFallback = HostedFallbackToggle.IsOn,
+      HostedService = Selected(HostedProviderComboBox, "default"),
+      HostedModel = EmptyToNull(HostedModelBox.Text),
+      HostedStylePreset = EmptyToNull(HostedStyleBox.Text),
+      NegativePrompt = NegativePromptBox.Text,
+      Loras = LorasBox.Text,
+      Vae = EmptyToNull(VaeBox.Text),
+      RefinerEnabled = EnableRefinerToggle.IsOn,
+      RefinerModelId = EmptyToNull(RefinerModelBox.Text),
+      RefinerSwitchAt = Number(RefinerSwitchBox, 0.8),
+      TemporalMode = Selected(TemporalModeComboBox, "keyframes"),
+      TemporalStrength = Number(TemporalConsistencyBox, 0.75),
+      TemporalSteps = NullableNumber(TemporalStepsBox),
+      RefineEveryNFrames = Number(RefineEveryBox, 1),
+      AnchorStrength = Number(AnchorStrengthBox, 0.2),
+      PromptBlend = PromptBlendToggle.IsOn,
+      ResumeExistingFrames = ResumeFramesToggle.IsOn,
+      MotionStrategy = Selected(MotionStrategyComboBox, "manual"),
+      StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
+      VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
+      VideoModelId = EmptyToNull(VideoModelBox.Text),
+      VideoModelMaxFramesPerScene = Number(FramesBox, 8),
+      VideoModelMotionBucketId = Number(MotionBucketBox, 127),
+      VideoModelNoiseAugStrength = Number(NoiseAugBox, 0.02),
+      VideoModelDecodeChunkSize = Number(DecodeChunkBox, 8),
+      VideoModelGenerationMode = Selected(VideoGenerationModeComboBox, "auto"),
+      VideoModelLowVramMode = VideoLowVramToggle.IsOn,
+      VideoModelGenerationChunkSize = Number(GenerationChunkSizeBox, 8),
+      VideoModelGenerationChunkOverlap = Number(GenerationChunkOverlapBox, 2),
+      VideoModelDtype = Selected(VideoDtypeComboBox, "auto"),
+      VideoModelCpuOffload = VideoCpuOffloadToggle.IsOn,
+      VideoModelMotionScoreMode = Selected(MotionScoreModeComboBox, "auto"),
+      VideoModelManualMotionScore = Number(ManualMotionScoreBox, 4),
+      VideoModelAnchorMode = Selected(VideoAnchorModeComboBox, "start"),
+      VideoModelPromptRefine = VideoPromptRefineToggle.IsOn,
+      VideoModelSceneMotion = Selected(SceneMotionComboBox, "subject"),
+      VideoModelApplyTimelineCamera = TimelineCameraToggle.IsOn,
+      VideoModelKeyframeRenderer = Selected(KeyframeRendererComboBox, "internal"),
+      VideoModelKeyframeModelId = EmptyToNull(KeyframeModelBox.Text),
+      MotionScoreSchedule = MotionScoreScheduleBox.Text,
+      NoiseAugSchedule = NoiseAugScheduleBox.Text,
+      AnchorStrengthSchedule = AnchorStrengthScheduleBox.Text,
+      ParseqEnabled = ParseqToggle.IsOn,
+      ParseqManifest = ParseqBox.Text,
+      SourceAsset = EmptyToNull(MotionSourceBox.Text),
+      SourceStrength = Number(SourceStrengthBox, 0.55),
+      DeforumPrompts = string.IsNullOrWhiteSpace(prompt)
                 ? string.Empty
                 : JsonSerializer.Serialize(new Dictionary<string, string> { ["0"] = prompt }),
-            DeforumNegativePrompts = DeforumNegativePromptsBox.Text,
-            DeforumZoom = DeforumZoomBox.Text,
-            DeforumAngle = DeforumAngleBox.Text,
-            DeforumTranslationX = DeforumTranslationXBox.Text,
-            DeforumTranslationY = DeforumTranslationYBox.Text,
-            DeforumTranslationZ = DeforumTranslationZBox.Text,
-            DeforumRotationX = DeforumRotationXBox.Text,
-            DeforumRotationY = DeforumRotationYBox.Text,
-            DeforumRotationZ = DeforumRotationZBox.Text,
-            DeforumFov = DeforumFovBox.Text,
-            DeforumStrength = DeforumStrengthBox.Text,
-            DeforumCfg = DeforumCfgBox.Text,
-            DeforumSteps = DeforumStepsBox.Text,
-            DeforumDenoise = DeforumDenoiseBox.Text,
-        };
-        return InternalVideoRenderRequestBuilder.Build(settings);
+      DeforumNegativePrompts = DeforumNegativePromptsBox.Text,
+      DeforumZoom = DeforumZoomBox.Text,
+      DeforumAngle = DeforumAngleBox.Text,
+      DeforumTranslationX = DeforumTranslationXBox.Text,
+      DeforumTranslationY = DeforumTranslationYBox.Text,
+      DeforumTranslationZ = DeforumTranslationZBox.Text,
+      DeforumRotationX = DeforumRotationXBox.Text,
+      DeforumRotationY = DeforumRotationYBox.Text,
+      DeforumRotationZ = DeforumRotationZBox.Text,
+      DeforumFov = DeforumFovBox.Text,
+      DeforumStrength = DeforumStrengthBox.Text,
+      DeforumCfg = DeforumCfgBox.Text,
+      DeforumSteps = DeforumStepsBox.Text,
+      DeforumDenoise = DeforumDenoiseBox.Text,
+    };
+    return InternalVideoRenderRequestBuilder.Build(settings);
+  }
+
+  private JsonElement BuildHostedVideoRequest()
+  {
+    long seed = LongNumber(SeedBox, -1);
+    return JsonSerializer.SerializeToElement(new
+    {
+      variant_index = App.Services.Session.SelectedVariantIndex,
+      width = Number(WidthBox, 1280),
+      height = Number(HeightBox, 720),
+      fps = Number(FpsBox, 24),
+      steps = Number(StepsBox, 28),
+      seed = seed < 0 ? (long?)null : seed,
+    }, StudioJson.Options);
+  }
+
+  private RenderQuickSetup ResolveQuickSetup()
+  {
+    return RenderQuickSetup.Resolve(
+          Selected(QuickGoalComboBox, "auto"),
+          Selected(QuickQualityComboBox, "balanced"),
+          Selected(QuickResolutionComboBox, "768x432"),
+          Number(QuickFpsBox, 24));
+  }
+
+  private RenderQuickSetup ApplyQuickSetup()
+  {
+    RenderQuickSetup setup = ResolveQuickSetup();
+
+    string model = QuickModelBox.Text.Trim();
+    string selectedModel = string.IsNullOrWhiteSpace(model) ? "auto" : model;
+    PromptBox.Text = QuickPromptBox.Text;
+    SelectComboValue(PipelinePresetComboBox, setup.Quality);
+    SelectComboValue(PipelineModeComboBox, "auto");
+
+    if (setup.Route == "stills")
+    {
+      StillsWidthBox.Value = setup.Width;
+      StillsHeightBox.Value = setup.Height;
+      StillsStepsBox.Value = setup.Steps;
+      StillsCfgBox.Value = setup.Cfg;
+      StillsModelBox.Text = selectedModel;
+    }
+    else if (setup.Route == "motion")
+    {
+      SelectComboValue(MotionEngineComboBox, setup.VideoModelEngine);
+      MotionWidthBox.Value = setup.Width;
+      MotionHeightBox.Value = setup.Height;
+      MotionFpsBox.Value = setup.MotionFps;
+      MotionFramesBox.Value = setup.MaximumFrames;
+      MotionStepsBox.Value = setup.Steps;
+      MotionModelBox.Text = selectedModel;
+    }
+    else if (setup.Route == "internal")
+    {
+      SelectComboValue(ModeComboBox, "auto");
+      SelectComboValue(TierComboBox, setup.RenderTier);
+      SelectComboValue(TemporalModeComboBox, setup.TemporalMode);
+      SelectComboValue(VideoModelEngineComboBox, setup.VideoModelEngine);
+      SelectComboValue(MotionStrategyComboBox, setup.MotionStrategy);
+      WidthBox.Value = setup.Width;
+      HeightBox.Value = setup.Height;
+      FpsBox.Value = setup.OutputFps;
+      RenderFpsBox.Value = setup.RenderFps;
+      StepsBox.Value = setup.Steps;
+      CfgBox.Value = setup.Cfg;
+      ModelBox.Text = selectedModel;
+      VideoModelBox.Text = selectedModel == "auto" ? string.Empty : selectedModel;
+      MotionStrengthBox.Value = 1.5;
     }
 
-    private JsonElement BuildHostedVideoRequest()
+    QuickSetupSummaryText.Text = setup.OpensTimeline
+        ? "Timeline editor · captured, imported, and rendered media"
+        : $"{QuickGoalLabel(setup.Goal)} · {setup.RenderTier} · {setup.Width} × {setup.Height} · "
+          + $"{setup.OutputFps} FPS delivery / {setup.RenderFps} FPS generation · "
+          + $"{setup.TemporalMode} · {setup.VideoModelEngine}";
+    UpdateModelGuidance();
+    UpdateReadinessCard();
+    return setup;
+  }
+
+  private void MotionStrategySelection_Changed(object sender, SelectionChangedEventArgs e)
+  {
+    if (!IsLoaded || Selected(MotionStrategyComboBox, "manual") != "storyboard_full_motion")
     {
-        long seed = LongNumber(SeedBox, -1);
-        return JsonSerializer.SerializeToElement(new
-        {
-            variant_index = App.Services.Session.SelectedVariantIndex,
-            width = (int)Number(WidthBox, 1280),
-            height = (int)Number(HeightBox, 720),
-            fps = Number(FpsBox, 24),
-            steps = (int)Number(StepsBox, 28),
-            seed = seed < 0 ? (long?)null : seed,
-        }, StudioJson.Options);
+      return;
     }
 
-    private RenderQuickSetup ResolveQuickSetup() =>
-        RenderQuickSetup.Resolve(
-            Selected(QuickGoalComboBox, "auto"),
-            Selected(QuickQualityComboBox, "balanced"),
-            Selected(QuickResolutionComboBox, "768x432"),
-            (int)Number(QuickFpsBox, 24));
-
-    private RenderQuickSetup ApplyQuickSetup()
+    SelectComboValue(TemporalModeComboBox, "video_model");
+    SelectComboValue(MotionScoreModeComboBox, "auto");
+    SelectComboValue(SceneMotionComboBox, "scene");
+    SelectComboValue(KeyframeContinuityModeComboBox, "project");
+    VideoPromptRefineToggle.IsOn = true;
+    FramesBox.Value = Math.Max(8, Number(FramesBox, 8));
+    RenderFpsBox.Value = Math.Max(2, Number(RenderFpsBox, 2));
+    FpsBox.Value = Math.Max(24, Number(FpsBox, 24));
+    if (Selected(InterpolationComboBox, "auto") == "fps")
     {
-        RenderQuickSetup setup = ResolveQuickSetup();
-
-        string model = QuickModelBox.Text.Trim();
-        string selectedModel = string.IsNullOrWhiteSpace(model) ? "auto" : model;
-        PromptBox.Text = QuickPromptBox.Text;
-        SelectComboValue(PipelinePresetComboBox, setup.Quality);
-        SelectComboValue(PipelineModeComboBox, "auto");
-
-        if (setup.Route == "stills")
-        {
-            StillsWidthBox.Value = setup.Width;
-            StillsHeightBox.Value = setup.Height;
-            StillsStepsBox.Value = setup.Steps;
-            StillsCfgBox.Value = setup.Cfg;
-            StillsModelBox.Text = selectedModel;
-        }
-        else if (setup.Route == "motion")
-        {
-            SelectComboValue(MotionEngineComboBox, setup.VideoModelEngine);
-            MotionWidthBox.Value = setup.Width;
-            MotionHeightBox.Value = setup.Height;
-            MotionFpsBox.Value = setup.MotionFps;
-            MotionFramesBox.Value = setup.MaximumFrames;
-            MotionStepsBox.Value = setup.Steps;
-            MotionModelBox.Text = selectedModel;
-        }
-        else if (setup.Route == "internal")
-        {
-            SelectComboValue(ModeComboBox, "auto");
-            SelectComboValue(TierComboBox, setup.RenderTier);
-            SelectComboValue(TemporalModeComboBox, setup.TemporalMode);
-            SelectComboValue(VideoModelEngineComboBox, setup.VideoModelEngine);
-            SelectComboValue(MotionStrategyComboBox, setup.MotionStrategy);
-            WidthBox.Value = setup.Width;
-            HeightBox.Value = setup.Height;
-            FpsBox.Value = setup.OutputFps;
-            RenderFpsBox.Value = setup.RenderFps;
-            StepsBox.Value = setup.Steps;
-            CfgBox.Value = setup.Cfg;
-            ModelBox.Text = selectedModel;
-            VideoModelBox.Text = selectedModel == "auto" ? string.Empty : selectedModel;
-            MotionStrengthBox.Value = 1.5;
-        }
-
-        QuickSetupSummaryText.Text = setup.OpensTimeline
-            ? "Timeline editor · captured, imported, and rendered media"
-            : $"{QuickGoalLabel(setup.Goal)} · {setup.RenderTier} · {setup.Width} × {setup.Height} · "
-              + $"{setup.OutputFps} FPS delivery / {setup.RenderFps} FPS generation · "
-              + $"{setup.TemporalMode} · {setup.VideoModelEngine}";
-        UpdateModelGuidance();
-        UpdateReadinessCard();
-        return setup;
+      SelectComboValue(InterpolationComboBox, "auto");
     }
 
-    private void MotionStrategySelection_Changed(object sender, SelectionChangedEventArgs e)
+    ShowStatus(
+        "Storyboard full motion enabled short motion shots, prompt refinement, whole-scene motion, and project identity continuity.",
+        InfoBarSeverity.Informational);
+  }
+
+  private void OpenAiPlanner_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("plannerLab");
+  }
+
+  private void ApplyQuickSetup_Click(object sender, RoutedEventArgs e)
+  {
+    _ = ApplyQuickSetup();
+  }
+
+  private void QuickSetupSelection_Changed(object sender, SelectionChangedEventArgs e)
+  {
+    if (_modelGuidanceUiReady)
     {
-        if (!IsLoaded || Selected(MotionStrategyComboBox, "manual") != "storyboard_full_motion")
-        {
-            return;
-        }
+      UpdateReadinessCard();
+    }
+  }
 
-        SelectComboValue(TemporalModeComboBox, "video_model");
-        SelectComboValue(MotionScoreModeComboBox, "auto");
-        SelectComboValue(SceneMotionComboBox, "scene");
-        SelectComboValue(KeyframeContinuityModeComboBox, "project");
-        VideoPromptRefineToggle.IsOn = true;
-        FramesBox.Value = Math.Max(8, Number(FramesBox, 8));
-        RenderFpsBox.Value = Math.Max(2, Number(RenderFpsBox, 2));
-        FpsBox.Value = Math.Max(24, Number(FpsBox, 24));
-        if (Selected(InterpolationComboBox, "auto") == "fps")
-        {
-            SelectComboValue(InterpolationComboBox, "auto");
-        }
+  private void QuickFpsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+  {
+    if (_modelGuidanceUiReady)
+    {
+      UpdateReadinessCard();
+    }
+  }
 
-        ShowStatus(
-            "Storyboard full motion enabled short motion shots, prompt refinement, whole-scene motion, and project identity continuity.",
-            InfoBarSeverity.Informational);
+  private void QuickPreflight_Click(object sender, RoutedEventArgs e)
+  {
+    RenderQuickSetup setup = ResolveQuickSetup();
+    if (setup.OpensTimeline)
+    {
+      _ = Frame.Navigate(typeof(TimelinePage));
+      return;
     }
 
-    private void OpenAiPlanner_Click(object sender, RoutedEventArgs e) => App.Navigate("plannerLab");
-
-    private void ApplyQuickSetup_Click(object sender, RoutedEventArgs e) => ApplyQuickSetup();
-
-    private void QuickSetupSelection_Changed(object sender, SelectionChangedEventArgs e)
+    if (setup.Route == "pipeline")
     {
-        if (_modelGuidanceUiReady)
-        {
-            UpdateReadinessCard();
-        }
+      _ = RunStructuredPipelinePreflightAsync();
+    }
+    else if (setup.Route == "internal")
+    {
+      Preflight_Click(sender, e);
+    }
+    else
+    {
+      ShowStatus(
+          $"{QuickGoalLabel(setup.Goal)} settings are ready. This render path validates when it starts.",
+          InfoBarSeverity.Informational);
+    }
+  }
+
+  private void QuickRender_Click(object sender, RoutedEventArgs e)
+  {
+    RenderQuickSetup setup = ResolveQuickSetup();
+    if (setup.OpensTimeline)
+    {
+      _ = Frame.Navigate(typeof(TimelinePage));
+      return;
     }
 
-    private void QuickFpsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    switch (setup.Route)
     {
-        if (_modelGuidanceUiReady)
-        {
-            UpdateReadinessCard();
-        }
+      case "pipeline":
+        RunPipeline_Click(sender, e);
+        break;
+      case "stills":
+        RenderStills_Click(sender, e);
+        break;
+      case "motion":
+        RenderMotionScenes_Click(sender, e);
+        break;
+      default:
+        Render_Click(sender, e);
+        break;
+    }
+  }
+
+  private async void Preflight_Click(object sender, RoutedEventArgs e)
+  {
+    await RunStructuredPreflightAsync();
+  }
+
+  private async Task RunStructuredPreflightAsync()
+  {
+    string? projectId = RequireActiveProject();
+    if (projectId is null)
+    {
+      return;
     }
 
-    private void QuickPreflight_Click(object sender, RoutedEventArgs e)
+    await RunBusyAsync("Running internal render preflight", async token =>
     {
-        RenderQuickSetup setup = ResolveQuickSetup();
-        if (setup.OpensTimeline)
-        {
-            Frame.Navigate(typeof(TimelinePage));
-            return;
-        }
+      InternalRenderPreflightResponse result = await App.Services.ApiClient.PreflightInternalRenderAsync(
+              projectId,
+              BuildInternalRenderRequest(),
+              token);
+      DisplayResult(PreflightResultBox, JsonSerializer.SerializeToElement(result, StudioJson.Options));
+      await ShowPreflightDialogAsync(result);
+      RenderButton.IsEnabled = true;
+      ShowStatus(result.Qualification.Ready
+                  ? "Internal render preflight completed."
+                  : "Internal render preflight reported issues; direct execution remains available.",
+              result.Qualification.Ready ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+      AppendLog("Internal render preflight completed; render admission remains enabled.");
+    });
+  }
 
-        if (setup.Route == "pipeline")
-        {
-            _ = RunStructuredPipelinePreflightAsync();
-        }
-        else if (setup.Route == "internal")
-        {
-            Preflight_Click(sender, e);
-        }
-        else
-        {
-            ShowStatus(
-                $"{QuickGoalLabel(setup.Goal)} settings are ready. This render path validates when it starts.",
-                InfoBarSeverity.Informational);
-        }
+  private async Task ShowPreflightDialogAsync(InternalRenderPreflightResponse result)
+  {
+    RenderCapabilityEvidence qualification = result.Qualification;
+    IReadOnlyList<string> blockers = qualification.Blockers;
+    IReadOnlyList<string> warnings = qualification.Warnings;
+    bool hasIssues = !qualification.Ready;
+    string state = hasIssues || warnings.Count > 0 ? "Advisory" : "Ready";
+
+    StackPanel content = new() { Spacing = 10, MaxWidth = 620 };
+    content.Children.Add(new InfoBar
+    {
+      IsOpen = true,
+      IsClosable = false,
+      Severity = hasIssues || warnings.Count > 0
+            ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
+      Title = state,
+      Message = hasIssues
+            ? "Direct execution remains available; review these preflight findings before rendering."
+            : warnings.Count > 0 ? "Rendering can proceed after reviewing these warnings." : "This render path passed preflight."
+    });
+    content.Children.Add(new TextBlock
+    {
+      Text = $"Route: {qualification.Route}\nRenderer: {qualification.Renderer}\nModel: {qualification.ModelId ?? "not selected"}\nDevice: {qualification.Device ?? "unknown"}\nCapability: Level {qualification.CapabilityLevel}\nEvidence: {qualification.EvidenceReceipt ?? "none"}\nFallback: {qualification.FallbackPolicy}",
+      TextWrapping = TextWrapping.Wrap
+    });
+    AddPreflightRows(content, "Blockers", blockers);
+    AddPreflightRows(content, "Warnings", warnings);
+
+    ContentDialog dialog = new()
+    {
+      XamlRoot = XamlRoot,
+      Title = "Render preflight",
+      Content = new ScrollViewer { Content = content, MaxHeight = 520 },
+      PrimaryButtonText = hasIssues ? "Open Models" : string.Empty,
+      SecondaryButtonText = hasIssues ? "Open Settings" : string.Empty,
+      CloseButtonText = "Close",
+      DefaultButton = ContentDialogButton.Close
+    };
+    ContentDialogResult dialogResult = await dialog.ShowAsync();
+    if (dialogResult == ContentDialogResult.Primary)
+    {
+      App.Navigate("models");
+    }
+    else if (dialogResult == ContentDialogResult.Secondary)
+    {
+      App.Navigate("settings");
+    }
+  }
+
+  private static void AddPreflightRows(StackPanel content, string heading, IReadOnlyList<string> rows)
+  {
+    if (rows.Count == 0)
+    {
+      return;
     }
 
-    private void QuickRender_Click(object sender, RoutedEventArgs e)
+    content.Children.Add(new TextBlock { Text = heading, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+    foreach (string row in rows)
     {
-        RenderQuickSetup setup = ResolveQuickSetup();
-        if (setup.OpensTimeline)
-        {
-            Frame.Navigate(typeof(TimelinePage));
-            return;
-        }
-
-        switch (setup.Route)
-        {
-            case "pipeline":
-                RunPipeline_Click(sender, e);
-                break;
-            case "stills":
-                RenderStills_Click(sender, e);
-                break;
-            case "motion":
-                RenderMotionScenes_Click(sender, e);
-                break;
-            default:
-                Render_Click(sender, e);
-                break;
-        }
+      content.Children.Add(new TextBlock { Text = $"• {row}", TextWrapping = TextWrapping.Wrap });
     }
+  }
 
-    private async void Preflight_Click(object sender, RoutedEventArgs e) => await RunStructuredPreflightAsync();
+  private static IReadOnlyList<string> FindStringValues(JsonElement value, params string[] propertyNames)
+  {
+    List<string> values = new();
+    CollectStringValues(value, propertyNames, values);
+    return values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+  }
 
-    private async Task RunStructuredPreflightAsync()
+  private static void CollectStringValues(JsonElement value, IReadOnlyList<string> names, ICollection<string> values)
+  {
+    if (value.ValueKind == JsonValueKind.Object)
     {
-        string? projectId = RequireActiveProject();
-        if (projectId is null)
+      foreach (JsonProperty property in value.EnumerateObject())
+      {
+        if (names.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
         {
-            return;
-        }
-
-        await RunBusyAsync("Running internal render preflight", async token =>
-        {
-            InternalRenderPreflightResponse result = await App.Services.ApiClient.PreflightInternalRenderAsync(
-                projectId,
-                BuildInternalRenderRequest(),
-                token);
-            DisplayResult(PreflightResultBox, JsonSerializer.SerializeToElement(result, StudioJson.Options));
-            await ShowPreflightDialogAsync(result);
-            RenderButton.IsEnabled = result.Qualification.Ready;
-            ShowStatus(result.Qualification.Ready ? "Internal render preflight completed." : "Internal render is blocked by preflight.",
-                result.Qualification.Ready ? InfoBarSeverity.Success : InfoBarSeverity.Error);
-            AppendLog("Internal render preflight completed.");
-        });
-    }
-
-    private async Task ShowPreflightDialogAsync(InternalRenderPreflightResponse result)
-    {
-        RenderCapabilityEvidence qualification = result.Qualification;
-        IReadOnlyList<string> blockers = qualification.Blockers;
-        IReadOnlyList<string> warnings = qualification.Warnings;
-        bool blocked = !qualification.Ready;
-        string state = blocked ? "Blocked" : warnings.Count > 0 ? "Warning" : "Ready";
-
-        var content = new StackPanel { Spacing = 10, MaxWidth = 620 };
-        content.Children.Add(new InfoBar
-        {
-            IsOpen = true,
-            IsClosable = false,
-            Severity = blocked ? InfoBarSeverity.Error : warnings.Count > 0
-                ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
-            Title = state,
-            Message = blocked
-                ? "Resolve the listed blockers before rendering."
-                : warnings.Count > 0 ? "Rendering can proceed after reviewing these warnings." : "This render path passed preflight."
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = $"Route: {qualification.Route}\nRenderer: {qualification.Renderer}\nModel: {qualification.ModelId ?? "not selected"}\nDevice: {qualification.Device ?? "unknown"}\nCapability: Level {qualification.CapabilityLevel}\nEvidence: {qualification.EvidenceReceipt ?? "none"}\nFallback: {qualification.FallbackPolicy}",
-            TextWrapping = TextWrapping.Wrap
-        });
-        AddPreflightRows(content, "Blockers", blockers);
-        AddPreflightRows(content, "Warnings", warnings);
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Render preflight",
-            Content = new ScrollViewer { Content = content, MaxHeight = 520 },
-            PrimaryButtonText = blocked ? "Open Models" : string.Empty,
-            SecondaryButtonText = blocked ? "Open Settings" : string.Empty,
-            CloseButtonText = "Close",
-            DefaultButton = ContentDialogButton.Close
-        };
-        ContentDialogResult dialogResult = await dialog.ShowAsync();
-        if (dialogResult == ContentDialogResult.Primary)
-        {
-            App.Navigate("models");
-        }
-        else if (dialogResult == ContentDialogResult.Secondary)
-        {
-            App.Navigate("settings");
-        }
-    }
-
-    private static void AddPreflightRows(StackPanel content, string heading, IReadOnlyList<string> rows)
-    {
-        if (rows.Count == 0)
-        {
-            return;
-        }
-
-        content.Children.Add(new TextBlock { Text = heading, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-        foreach (string row in rows)
-        {
-            content.Children.Add(new TextBlock { Text = $"• {row}", TextWrapping = TextWrapping.Wrap });
-        }
-    }
-
-    private static IReadOnlyList<string> FindStringValues(JsonElement value, params string[] propertyNames)
-    {
-        var values = new List<string>();
-        CollectStringValues(value, propertyNames, values);
-        return values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-
-    private static void CollectStringValues(JsonElement value, IReadOnlyList<string> names, ICollection<string> values)
-    {
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            foreach (JsonProperty property in value.EnumerateObject())
+          if (property.Value.ValueKind == JsonValueKind.Array)
+          {
+            foreach (JsonElement item in property.Value.EnumerateArray())
             {
-                if (names.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
-                {
-                    if (property.Value.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (JsonElement item in property.Value.EnumerateArray())
-                        {
-                            if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
-                            {
-                                values.Add(item.GetString()!);
-                            }
-                        }
-                    }
-                    else if (property.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(property.Value.GetString()))
-                    {
-                        values.Add(property.Value.GetString()!);
-                    }
-                }
-
-                CollectStringValues(property.Value, names, values);
+              if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+              {
+                values.Add(item.GetString()!);
+              }
             }
+          }
+          else if (property.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(property.Value.GetString()))
+          {
+            values.Add(property.Value.GetString()!);
+          }
         }
-        else if (value.ValueKind == JsonValueKind.Array)
+
+        CollectStringValues(property.Value, names, values);
+      }
+    }
+    else if (value.ValueKind == JsonValueKind.Array)
+    {
+      foreach (JsonElement item in value.EnumerateArray())
+      {
+        CollectStringValues(item, names, values);
+      }
+    }
+  }
+
+  private static bool? FindBoolean(JsonElement value, string propertyName)
+  {
+    if (value.ValueKind == JsonValueKind.Object)
+    {
+      foreach (JsonProperty property in value.EnumerateObject())
+      {
+        if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase)
+            && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
-            foreach (JsonElement item in value.EnumerateArray())
-            {
-                CollectStringValues(item, names, values);
-            }
+          return property.Value.GetBoolean();
         }
+
+        bool? nested = FindBoolean(property.Value, propertyName);
+        if (nested.HasValue)
+        {
+          return nested;
+        }
+      }
+    }
+    else if (value.ValueKind == JsonValueKind.Array)
+    {
+      foreach (JsonElement item in value.EnumerateArray())
+      {
+        bool? nested = FindBoolean(item, propertyName);
+        if (nested.HasValue)
+        {
+          return nested;
+        }
+      }
     }
 
-    private static bool? FindBoolean(JsonElement value, string propertyName)
+    return null;
+  }
+
+  private async void Render_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Queueing internal render",
+          PreflightResultBox,
+          async (projectId, token) =>
+          {
+            GenerationProviderDefinition provider = _generationProvider
+                  ?? throw new InvalidOperationException("Select a generation provider before rendering.");
+            string operation = GenerationOperationComboBox.SelectedItem as string ?? "video";
+            if (!provider.Ready)
+            {
+              throw new InvalidOperationException(provider.ReadinessDetail ?? $"{provider.Name} is not ready.");
+            }
+            JsonElement parameters = operation == "image"
+                  ? JsonSerializer.SerializeToElement(BuildSceneStillsRequest(), StudioJson.Options)
+                  : provider.Id == "edmg.internal"
+                      ? BuildInternalRenderRequest()
+                      : BuildHostedVideoRequest();
+            GenerationSubmitResponse response = await App.Services.ApiClient.StartGenerationAsync(
+                  projectId,
+                  parameters,
+                  provider.Id,
+                  operation,
+                  provider.Id == "edmg.internal" ? Selected(VideoModelEngineComboBox, "auto") : "auto",
+                  token);
+            return JsonSerializer.SerializeToElement(response, StudioJson.Options);
+          },
+          "Generation request was accepted by the provider-neutral render queue.");
+  }
+
+  private PipelineRunOptions BuildPipelineOptions()
+  {
+    return new(
+          Number(WorkflowVariantBox, 0),
+          Selected(PipelinePresetComboBox, "balanced"),
+          Selected(PipelineModeComboBox, "auto"),
+          Selected(PipelineEngineComboBox, "auto"));
+  }
+
+  private async Task RunStructuredPipelinePreflightAsync()
+  {
+    string? projectId = RequireActiveProject();
+    if (projectId is null)
     {
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            foreach (JsonProperty property in value.EnumerateObject())
-            {
-                if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase)
-                    && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                {
-                    return property.Value.GetBoolean();
-                }
-
-                bool? nested = FindBoolean(property.Value, propertyName);
-                if (nested.HasValue)
-                {
-                    return nested;
-                }
-            }
-        }
-        else if (value.ValueKind == JsonValueKind.Array)
-        {
-            foreach (JsonElement item in value.EnumerateArray())
-            {
-                bool? nested = FindBoolean(item, propertyName);
-                if (nested.HasValue)
-                {
-                    return nested;
-                }
-            }
-        }
-
-        return null;
+      return;
     }
 
-    private async void Render_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Queueing internal render",
-            PreflightResultBox,
-            async (projectId, token) =>
-            {
-                GenerationProviderDefinition provider = _generationProvider
-                    ?? throw new InvalidOperationException("Select a generation provider before rendering.");
-                string operation = GenerationOperationComboBox.SelectedItem as string ?? "video";
-                if (!provider.Ready)
-                {
-                    throw new InvalidOperationException(provider.ReadinessDetail ?? $"{provider.Name} is not ready.");
-                }
-                JsonElement parameters = operation == "image"
-                    ? JsonSerializer.SerializeToElement(BuildSceneStillsRequest(), StudioJson.Options)
-                    : provider.Id == "edmg.internal"
-                        ? BuildInternalRenderRequest()
-                        : BuildHostedVideoRequest();
-                if (operation == "video" && provider.Id == "edmg.internal")
-                {
-                    InternalRenderPreflightResponse preflight = await App.Services.ApiClient.PreflightInternalRenderAsync(projectId, parameters, token);
-                    if (!preflight.Qualification.Ready)
-                    {
-                        throw new InvalidOperationException(string.Join(" ", preflight.Qualification.Blockers));
-                    }
-                }
-                GenerationSubmitResponse response = await App.Services.ApiClient.StartGenerationAsync(
-                    projectId,
-                    parameters,
-                    provider.Id,
-                    operation,
-                    provider.Id == "edmg.internal" ? Selected(VideoModelEngineComboBox, "auto") : "auto",
-                    token);
-                return JsonSerializer.SerializeToElement(response, StudioJson.Options);
-            },
-            "Generation request was accepted by the provider-neutral render queue.");
-
-    private PipelineRunOptions BuildPipelineOptions() =>
-        new(
-            Number(WorkflowVariantBox, 0),
-            Selected(PipelinePresetComboBox, "balanced"),
-            Selected(PipelineModeComboBox, "auto"),
-            Selected(PipelineEngineComboBox, "auto"));
-
-    private async Task RunStructuredPipelinePreflightAsync()
+    await RunBusyAsync("Validating pipeline", async token =>
     {
-        string? projectId = RequireActiveProject();
-        if (projectId is null)
-        {
-            return;
-        }
+      JsonElement result = await App.Services.ApiClient.ValidatePipelineAsync(
+              projectId,
+              BuildPipelineOptions(),
+              token);
+      DisplayResult(GlobalResultBox, result);
+      ShowStatus("Pipeline validation completed.", InfoBarSeverity.Success);
+      AppendLog("Pipeline validation completed.");
+    });
+  }
 
-        await RunBusyAsync("Validating pipeline", async token =>
-        {
-            JsonElement result = await App.Services.ApiClient.ValidatePipelineAsync(
-                projectId,
-                BuildPipelineOptions(),
-                token);
-            DisplayResult(GlobalResultBox, result);
-            ShowStatus("Pipeline validation completed.", InfoBarSeverity.Success);
-            AppendLog("Pipeline validation completed.");
-        });
+  private async void ValidatePipeline_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Validating pipeline",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.ValidatePipelineAsync(
+              projectId,
+              BuildPipelineOptions(),
+              token),
+          "Pipeline validation completed.");
+  }
+
+  private async void RunPipeline_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Running pipeline",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.RunPipelineAsync(
+              projectId,
+              BuildPipelineOptions(),
+              token),
+          "Pipeline run request completed.");
+  }
+
+  private RenderConductorPlanRequest BuildConductorPlanRequest()
+  {
+    return new(
+          Number(WorkflowVariantBox, 0),
+          Selected(ConductorPresetComboBox, "balanced"),
+          Selected(ConductorAspectComboBox, "16:9"),
+          Selected(ConductorOutputModeComboBox, "full_video"),
+          Selected(ConductorQualityComboBox, "quality"),
+          Number(ConductorContinuityBox, 0.8),
+          Number(ConductorSpeedBox, 0.4),
+          Number(ConductorStyleLockBox, 0.75),
+          ParseStringList(ConductorAllowedEnginesBox.Text),
+          Selected(ConductorFallbackComboBox, "auto"),
+          []);
+  }
+
+  private async void InspectConductorPlan_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Inspecting conductor plan",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.GetRenderConductorPlanAsync(
+              projectId,
+              Number(WorkflowVariantBox, 0),
+              token),
+          "Conductor plan loaded.");
+  }
+
+  private async void CreateConductorPlan_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Creating conductor plan",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.CreateRenderConductorPlanAsync(
+              projectId,
+              BuildConductorPlanRequest(),
+              token),
+          "Conductor plan created.");
+  }
+
+  private async void PromoteConductorPlan_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Promoting conductor scenes",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.PromoteRenderConductorPlanAsync(
+              projectId,
+              new RenderConductorPromoteRequest(
+                  EmptyToNull(ConductorPlanIdBox.Text),
+                  ParseStringList(ConductorSceneIdsBox.Text),
+                  Selected(ConductorTargetEngineComboBox, "internal"),
+                  Selected(ConductorPromoteQualityComboBox, "quality"),
+                  EmptyToNull(ConductorPromoteReasonBox.Text)),
+              token),
+          "Conductor promotion request completed.");
+  }
+
+  private async void InspectConductorContinuity_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Inspecting conductor continuity",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.GetRenderConductorContinuityAsync(
+              projectId,
+              Number(WorkflowVariantBox, 0),
+              token),
+          "Conductor continuity loaded.");
+  }
+
+  private async void InspectPerformerPlan_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Inspecting performer plan",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.GetRenderPerformerPlanAsync(
+              projectId,
+              Number(WorkflowVariantBox, 0),
+              token),
+          "Performer plan loaded.");
+  }
+
+  private async void CreatePerformerPlan_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Creating performer plan",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.CreateRenderPerformerPlanAsync(
+              projectId,
+              new PerformerWorkflowPlanRequest(
+                  Number(WorkflowVariantBox, 0),
+                  ParseStringList(PerformerSceneIdsBox.Text),
+                  RequiredText(PerformerModelBox.Text, "Performer model")),
+              token),
+          "Performer plan created.");
+  }
+
+  private async void RunPerformer_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Running performer workflow",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.RunRenderPerformerAsync(
+              projectId,
+              new PerformerWorkflowRunRequest(
+                  Number(WorkflowVariantBox, 0),
+                  EmptyToNull(PerformerPlanIdBox.Text),
+                  Selected(PerformerProviderComboBox, "auto"),
+                  PerformerMockFallbackToggle.IsOn,
+                  ParseObjectDictionary(PerformerSettingsBox.Text, "Performer render settings")),
+              token),
+          "Performer run request completed.");
+  }
+
+  private MotionSequencerOptions BuildMotionOptions()
+  {
+    return new(Number(WorkflowVariantBox, 0), Number(MotionSequencerFpsBox, 24));
+  }
+
+  private async void InspectMotionSequencer_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Inspecting motion sequencer",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.GetMotionSequencerAsync(
+              projectId,
+              BuildMotionOptions(),
+              token),
+          "Motion sequencer state loaded.");
+  }
+
+  private async void ApplyMotionSequencer_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Applying motion sequencer",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.ApplyMotionSequencerAsync(
+              projectId,
+              new ParseqMotionApplyRequest(
+                  Number(WorkflowVariantBox, 0),
+                  Number(MotionSequencerFpsBox, 24),
+                  ParseOptionalElement(MotionSequencerManifestBox.Text, "Motion manifest", JsonValueKind.Object),
+                  MotionSequencerActivateToggle.IsOn),
+              token),
+          "Motion sequencer manifest applied.");
+  }
+
+  private async void AutoRender_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Running automatic render",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.AutoRenderAsync(
+              projectId,
+              new AutoAnimateRequest(
+                  RequiredText(AutoPresetBox.Text, "Auto-render preset"),
+                  Selected(AutoEngineComboBox, "auto"),
+                  Number(ToolsVariantBox, 0),
+                  EmptyToNull(AutoSourceBox.Text),
+                  AutoRunToggle.IsOn,
+                  NullableNumber(AutoFpsBox)),
+              token),
+          "Automatic render request completed.");
+  }
+
+  private LayeredAnimateRequest BuildLayeredAnimateRequest()
+  {
+    return new(
+          RequiredText(LayerSourceBox.Text, "Layer source asset"),
+          Selected(LayerModeComboBox, "parallax"),
+          EmptyToNull(LayerMotionBox.Text),
+          Number(LayerBandsBox, 3),
+          ParseLayerMasks(LayerMasksBox.Text),
+          Number(LayerSubjectMotionBox, 1.0),
+          Number(LayerBackgroundMotionBox, 0.12),
+          Number(LayerFpsBox, 24),
+          Number(LayerDurationBox, 5.0),
+          Number(LayerWidthBox, 768),
+          Number(LayerHeightBox, 432),
+          LayerIncludeAudioToggle.IsOn,
+          LayerRefineToggle.IsOn,
+          EmptyToNull(LayerRefineModelBox.Text) ?? "auto",
+          Selected(LayerDeviceComboBox, "auto"),
+          null,
+          string.Empty,
+          0.3,
+          20,
+          7.0,
+          null);
+  }
+
+  private async void AnimateLayers_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Animating layers",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.AnimateLayersAsync(
+              projectId,
+              BuildLayeredAnimateRequest(),
+              token),
+          "Animated-layer render request completed.");
+  }
+
+  private RenderScenesRequest BuildSceneStillsRequest()
+  {
+    return new(
+          variantIndex: Number(ToolsVariantBox, 0),
+          modelId: EmptyToNull(StillsModelBox.Text),
+          checkpoint: EmptyToNull(StillsCheckpointBox.Text),
+          workflowFamily: Selected(StillsWorkflowComboBox, "auto"),
+          seed: NullableLongNumber(StillsSeedBox),
+          referenceAsset: EmptyToNull(StillsReferenceBox.Text),
+          sourceAsset: EmptyToNull(StillsSourceBox.Text),
+          inpaintMask: EmptyToNull(StillsMaskBox.Text),
+          conditioningMode: "raw",
+          denoiseStrength: Number(StillsDenoiseBox, 0.75),
+          width: Number(StillsWidthBox, 1024),
+          height: Number(StillsHeightBox, 576),
+          steps: Number(StillsStepsBox, 28),
+          cfg: Number(StillsCfgBox, 7.0),
+          sampler: "euler",
+          negativePrompt: StillsNegativeBox.Text.Trim());
+  }
+
+  private async void RenderStills_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Rendering scene stills",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.RenderSceneStillsAsync(
+              projectId,
+              BuildSceneStillsRequest(),
+              token),
+          "Scene-still render request completed.");
+  }
+
+  private RenderMotionRequest BuildMotionScenesRequest()
+  {
+    return new(
+          variantIndex: Number(ToolsVariantBox, 0),
+          modelId: EmptyToNull(MotionModelBox.Text),
+          checkpoint: EmptyToNull(MotionCheckpointBox.Text),
+          engine: Selected(MotionEngineComboBox, "animatediff"),
+          fps: Number(MotionFpsBox, 12),
+          maxFramesPerScene: Number(MotionFramesBox, 240),
+          width: Number(MotionWidthBox, 768),
+          height: Number(MotionHeightBox, 432),
+          steps: Number(MotionStepsBox, 24),
+          negativePrompt: MotionNegativeBox.Text.Trim(),
+          device: Selected(MotionDeviceComboBox, "cuda"));
+  }
+
+  private async void RenderMotionScenes_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Rendering ComfyUI motion scenes",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.RenderComfyUiMotionScenesAsync(
+              projectId,
+              BuildMotionScenesRequest(),
+              token),
+          "ComfyUI motion-scene request completed.");
+  }
+
+  private async void SmartVideo_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Running smart video",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.RenderSmartVideoAsync(
+              projectId,
+              ParseRequiredElement(SmartVideoJsonBox.Text, "Smart-video request", JsonValueKind.Object),
+              token),
+          "Smart-video request completed.");
+  }
+
+  private TensorRtStandaloneRenderRequest BuildTensorRtRequest()
+  {
+    return new(
+          variantIndex: Number(TensorVariantBox, 0),
+          modelId: EmptyToNull(TensorModelBox.Text),
+          prompt: EmptyToNull(TensorPromptBox.Text),
+          seed: NullableLongNumber(TensorSeedBox),
+          width: Number(TensorWidthBox, 1024),
+          height: Number(TensorHeightBox, 1024),
+          steps: Number(TensorStepsBox, 28),
+          cfg: Number(TensorCfgBox, 7.0),
+          sampler: Selected(TensorSamplerComboBox, "pndm"),
+          negativePrompt: TensorNegativeBox.Text.Trim(),
+          batchSize: Number(TensorBatchBox, 1));
+  }
+
+  private async void PreviewTensorRt_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Generating TensorRT preview",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.PreviewTensorRtStandaloneAsync(
+              projectId,
+              BuildTensorRtRequest(),
+              token),
+          "TensorRT preview completed.");
+  }
+
+  private async void RunTensorRt_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Running standalone TensorRT render",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.RenderTensorRtStandaloneAsync(
+              projectId,
+              BuildTensorRtRequest(),
+              token),
+          "Standalone TensorRT render completed.");
+  }
+
+  private async void AssembleVideo_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Assembling video",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.AssembleVideoAsync(
+              projectId,
+              new AssembleVideoRequest(
+                  Number(AssemblyVariantBox, 0),
+                  Number(AssemblyFpsBox, 30)),
+              token),
+          "Scene assembly request completed.");
+  }
+
+  private async void ExportDeforum_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Exporting Deforum settings",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.ExportDeforumAsync(
+              projectId,
+              new ExportDeforumRequest(
+                  Number(DeforumVariantBox, 0),
+                  Number(DeforumFpsBox, 30),
+                  Number(DeforumWidthBox, 1024),
+                  Number(DeforumHeightBox, 576),
+                  Selected(DeforumPresetComboBox, "cinematic"),
+                  Number(DeforumSensitivityBox, 1.0)),
+              token),
+          "Deforum export completed.");
+  }
+
+  private ComfyUiWorkflowExportOptions BuildComfyUiExportOptions()
+  {
+    var advanced = ParseRequiredElement(
+        ComfyExportAdvancedBox.Text,
+        "ComfyUI advanced query",
+        JsonValueKind.Object);
+
+    string? JsonOption(string name)
+    {
+      return advanced.TryGetProperty(name, out var value) &&
+        value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
+            ? value.GetRawText()
+            : null;
     }
 
-    private async void ValidatePipeline_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Validating pipeline",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.ValidatePipelineAsync(
-                projectId,
-                BuildPipelineOptions(),
-                token),
-            "Pipeline validation completed.");
-
-    private async void RunPipeline_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Running pipeline",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.RunPipelineAsync(
-                projectId,
-                BuildPipelineOptions(),
-                token),
-            "Pipeline run request completed.");
-
-    private RenderConductorPlanRequest BuildConductorPlanRequest() =>
-        new(
-            Number(WorkflowVariantBox, 0),
-            Selected(ConductorPresetComboBox, "balanced"),
-            Selected(ConductorAspectComboBox, "16:9"),
-            Selected(ConductorOutputModeComboBox, "full_video"),
-            Selected(ConductorQualityComboBox, "quality"),
-            Number(ConductorContinuityBox, 0.8),
-            Number(ConductorSpeedBox, 0.4),
-            Number(ConductorStyleLockBox, 0.75),
-            ParseStringList(ConductorAllowedEnginesBox.Text),
-            Selected(ConductorFallbackComboBox, "auto"),
-            []);
-
-    private async void InspectConductorPlan_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Inspecting conductor plan",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.GetRenderConductorPlanAsync(
-                projectId,
-                Number(WorkflowVariantBox, 0),
-                token),
-            "Conductor plan loaded.");
-
-    private async void CreateConductorPlan_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Creating conductor plan",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.CreateRenderConductorPlanAsync(
-                projectId,
-                BuildConductorPlanRequest(),
-                token),
-            "Conductor plan created.");
-
-    private async void PromoteConductorPlan_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Promoting conductor scenes",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.PromoteRenderConductorPlanAsync(
-                projectId,
-                new RenderConductorPromoteRequest(
-                    EmptyToNull(ConductorPlanIdBox.Text),
-                    ParseStringList(ConductorSceneIdsBox.Text),
-                    Selected(ConductorTargetEngineComboBox, "internal"),
-                    Selected(ConductorPromoteQualityComboBox, "quality"),
-                    EmptyToNull(ConductorPromoteReasonBox.Text)),
-                token),
-            "Conductor promotion request completed.");
-
-    private async void InspectConductorContinuity_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Inspecting conductor continuity",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.GetRenderConductorContinuityAsync(
-                projectId,
-                Number(WorkflowVariantBox, 0),
-                token),
-            "Conductor continuity loaded.");
-
-    private async void InspectPerformerPlan_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Inspecting performer plan",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.GetRenderPerformerPlanAsync(
-                projectId,
-                Number(WorkflowVariantBox, 0),
-                token),
-            "Performer plan loaded.");
-
-    private async void CreatePerformerPlan_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Creating performer plan",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.CreateRenderPerformerPlanAsync(
-                projectId,
-                new PerformerWorkflowPlanRequest(
-                    Number(WorkflowVariantBox, 0),
-                    ParseStringList(PerformerSceneIdsBox.Text),
-                    RequiredText(PerformerModelBox.Text, "Performer model")),
-                token),
-            "Performer plan created.");
-
-    private async void RunPerformer_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Running performer workflow",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.RunRenderPerformerAsync(
-                projectId,
-                new PerformerWorkflowRunRequest(
-                    Number(WorkflowVariantBox, 0),
-                    EmptyToNull(PerformerPlanIdBox.Text),
-                    Selected(PerformerProviderComboBox, "auto"),
-                    PerformerMockFallbackToggle.IsOn,
-                    ParseObjectDictionary(PerformerSettingsBox.Text, "Performer render settings")),
-                token),
-            "Performer run request completed.");
-
-    private MotionSequencerOptions BuildMotionOptions() =>
-        new(Number(WorkflowVariantBox, 0), Number(MotionSequencerFpsBox, 24));
-
-    private async void InspectMotionSequencer_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Inspecting motion sequencer",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.GetMotionSequencerAsync(
-                projectId,
-                BuildMotionOptions(),
-                token),
-            "Motion sequencer state loaded.");
-
-    private async void ApplyMotionSequencer_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Applying motion sequencer",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.ApplyMotionSequencerAsync(
-                projectId,
-                new ParseqMotionApplyRequest(
-                    Number(WorkflowVariantBox, 0),
-                    Number(MotionSequencerFpsBox, 24),
-                    ParseOptionalElement(MotionSequencerManifestBox.Text, "Motion manifest", JsonValueKind.Object),
-                    MotionSequencerActivateToggle.IsOn),
-                token),
-            "Motion sequencer manifest applied.");
-
-    private async void AutoRender_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Running automatic render",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.AutoRenderAsync(
-                projectId,
-                new AutoAnimateRequest(
-                    RequiredText(AutoPresetBox.Text, "Auto-render preset"),
-                    Selected(AutoEngineComboBox, "auto"),
-                    Number(ToolsVariantBox, 0),
-                    EmptyToNull(AutoSourceBox.Text),
-                    AutoRunToggle.IsOn,
-                    NullableNumber(AutoFpsBox)),
-                token),
-            "Automatic render request completed.");
-
-    private LayeredAnimateRequest BuildLayeredAnimateRequest() =>
-        new(
-            RequiredText(LayerSourceBox.Text, "Layer source asset"),
-            Selected(LayerModeComboBox, "parallax"),
-            EmptyToNull(LayerMotionBox.Text),
-            Number(LayerBandsBox, 3),
-            ParseLayerMasks(LayerMasksBox.Text),
-            Number(LayerSubjectMotionBox, 1.0),
-            Number(LayerBackgroundMotionBox, 0.12),
-            Number(LayerFpsBox, 24),
-            Number(LayerDurationBox, 5.0),
-            Number(LayerWidthBox, 768),
-            Number(LayerHeightBox, 432),
-            LayerIncludeAudioToggle.IsOn,
-            LayerRefineToggle.IsOn,
-            EmptyToNull(LayerRefineModelBox.Text) ?? "auto",
-            Selected(LayerDeviceComboBox, "auto"),
-            null,
-            string.Empty,
-            0.3,
-            20,
-            7.0,
-            null);
-
-    private async void AnimateLayers_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Animating layers",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.AnimateLayersAsync(
-                projectId,
-                BuildLayeredAnimateRequest(),
-                token),
-            "Animated-layer render request completed.");
-
-    private RenderScenesRequest BuildSceneStillsRequest() =>
-        new(
-            variantIndex: Number(ToolsVariantBox, 0),
-            modelId: EmptyToNull(StillsModelBox.Text),
-            checkpoint: EmptyToNull(StillsCheckpointBox.Text),
-            workflowFamily: Selected(StillsWorkflowComboBox, "auto"),
-            seed: NullableLongNumber(StillsSeedBox),
-            referenceAsset: EmptyToNull(StillsReferenceBox.Text),
-            sourceAsset: EmptyToNull(StillsSourceBox.Text),
-            inpaintMask: EmptyToNull(StillsMaskBox.Text),
-            conditioningMode: "raw",
-            denoiseStrength: Number(StillsDenoiseBox, 0.75),
-            width: Number(StillsWidthBox, 1024),
-            height: Number(StillsHeightBox, 576),
-            steps: Number(StillsStepsBox, 28),
-            cfg: Number(StillsCfgBox, 7.0),
-            sampler: "euler",
-            negativePrompt: StillsNegativeBox.Text.Trim());
-
-    private async void RenderStills_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Rendering scene stills",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.RenderSceneStillsAsync(
-                projectId,
-                BuildSceneStillsRequest(),
-                token),
-            "Scene-still render request completed.");
-
-    private RenderMotionRequest BuildMotionScenesRequest() =>
-        new(
-            variantIndex: Number(ToolsVariantBox, 0),
-            modelId: EmptyToNull(MotionModelBox.Text),
-            checkpoint: EmptyToNull(MotionCheckpointBox.Text),
-            engine: Selected(MotionEngineComboBox, "animatediff"),
-            fps: Number(MotionFpsBox, 12),
-            maxFramesPerScene: Number(MotionFramesBox, 240),
-            width: Number(MotionWidthBox, 768),
-            height: Number(MotionHeightBox, 432),
-            steps: Number(MotionStepsBox, 24),
-            negativePrompt: MotionNegativeBox.Text.Trim(),
-            device: Selected(MotionDeviceComboBox, "cuda"));
-
-    private async void RenderMotionScenes_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Rendering ComfyUI motion scenes",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.RenderComfyUiMotionScenesAsync(
-                projectId,
-                BuildMotionScenesRequest(),
-                token),
-            "ComfyUI motion-scene request completed.");
-
-    private async void SmartVideo_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Running smart video",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.RenderSmartVideoAsync(
-                projectId,
-                ParseRequiredElement(SmartVideoJsonBox.Text, "Smart-video request", JsonValueKind.Object),
-                token),
-            "Smart-video request completed.");
-
-    private TensorRtStandaloneRenderRequest BuildTensorRtRequest() =>
-        new(
-            variantIndex: Number(TensorVariantBox, 0),
-            modelId: EmptyToNull(TensorModelBox.Text),
-            prompt: EmptyToNull(TensorPromptBox.Text),
-            seed: NullableLongNumber(TensorSeedBox),
-            width: Number(TensorWidthBox, 1024),
-            height: Number(TensorHeightBox, 1024),
-            steps: Number(TensorStepsBox, 28),
-            cfg: Number(TensorCfgBox, 7.0),
-            sampler: Selected(TensorSamplerComboBox, "pndm"),
-            negativePrompt: TensorNegativeBox.Text.Trim(),
-            batchSize: Number(TensorBatchBox, 1));
-
-    private async void PreviewTensorRt_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Generating TensorRT preview",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.PreviewTensorRtStandaloneAsync(
-                projectId,
-                BuildTensorRtRequest(),
-                token),
-            "TensorRT preview completed.");
-
-    private async void RunTensorRt_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Running standalone TensorRT render",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.RenderTensorRtStandaloneAsync(
-                projectId,
-                BuildTensorRtRequest(),
-                token),
-            "Standalone TensorRT render completed.");
-
-    private async void AssembleVideo_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Assembling video",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.AssembleVideoAsync(
-                projectId,
-                new AssembleVideoRequest(
-                    Number(AssemblyVariantBox, 0),
-                    Number(AssemblyFpsBox, 30)),
-                token),
-            "Scene assembly request completed.");
-
-    private async void ExportDeforum_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Exporting Deforum settings",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.ExportDeforumAsync(
-                projectId,
-                new ExportDeforumRequest(
-                    Number(DeforumVariantBox, 0),
-                    Number(DeforumFpsBox, 30),
-                    Number(DeforumWidthBox, 1024),
-                    Number(DeforumHeightBox, 576),
-                    Selected(DeforumPresetComboBox, "cinematic"),
-                    Number(DeforumSensitivityBox, 1.0)),
-                token),
-            "Deforum export completed.");
-
-    private ComfyUiWorkflowExportOptions BuildComfyUiExportOptions()
+    string? StringOption(string name)
     {
-        var advanced = ParseRequiredElement(
-            ComfyExportAdvancedBox.Text,
-            "ComfyUI advanced query",
-            JsonValueKind.Object);
+      return advanced.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? EmptyToNull(value.GetString())
+            : null;
+    }
 
-        string? JsonOption(string name) =>
-            advanced.TryGetProperty(name, out var value) &&
-            value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
-                ? value.GetRawText()
-                : null;
+    double NumberOption(string name, double fallback)
+    {
+      return advanced.TryGetProperty(name, out var value) && value.TryGetDouble(out var number)
+            ? number
+            : fallback;
+    }
 
-        string? StringOption(string name) =>
-            advanced.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-                ? EmptyToNull(value.GetString())
-                : null;
+    long? LongOption(string name)
+    {
+      return advanced.TryGetProperty(name, out var value) && value.TryGetInt64(out var number)
+            ? number
+            : null;
+    }
 
-        double NumberOption(string name, double fallback) =>
-            advanced.TryGetProperty(name, out var value) && value.TryGetDouble(out var number)
-                ? number
-                : fallback;
-
-        long? LongOption(string name) =>
-            advanced.TryGetProperty(name, out var value) && value.TryGetInt64(out var number)
-                ? number
-                : null;
-
-        return new ComfyUiWorkflowExportOptions(
+    return new ComfyUiWorkflowExportOptions(
             VariantIndex: Number(ComfyExportVariantBox, 0),
             ModelId: EmptyToNull(ComfyExportModelBox.Text),
             WorkflowFamily: Selected(ComfyExportFamilyComboBox, "auto"),
@@ -1416,722 +1507,758 @@ public sealed partial class RenderPage : Page
             HiresFixJson: JsonOption("hires_fix"),
             RefinerJson: JsonOption("refiner"),
             Upscaler: StringOption("upscaler"));
+  }
+
+  private async void ExportComfyUi_Click(object sender, RoutedEventArgs e)
+  {
+    await RunProjectJsonAsync(
+          "Exporting ComfyUI workflows",
+          GlobalResultBox,
+          (projectId, token) => App.Services.ApiClient.ExportComfyUiWorkflowsAsync(
+              projectId,
+              BuildComfyUiExportOptions(),
+              token),
+          "ComfyUI workflow export completed.");
+  }
+
+  private async void UploadReference_Click(object sender, RoutedEventArgs e)
+  {
+    await PickAndUploadAssetAsync("reference");
+  }
+
+  private async void UploadMask_Click(object sender, RoutedEventArgs e)
+  {
+    await PickAndUploadAssetAsync("mask");
+  }
+
+  private async void UploadOverlay_Click(object sender, RoutedEventArgs e)
+  {
+    await PickAndUploadAssetAsync("overlay");
+  }
+
+  private async Task PickAndUploadAssetAsync(string assetKind)
+  {
+    string? projectId = RequireActiveProject();
+    if (projectId is null)
+    {
+      return;
     }
 
-    private async void ExportComfyUi_Click(object sender, RoutedEventArgs e) =>
-        await RunProjectJsonAsync(
-            "Exporting ComfyUI workflows",
-            GlobalResultBox,
-            (projectId, token) => App.Services.ApiClient.ExportComfyUiWorkflowsAsync(
-                projectId,
-                BuildComfyUiExportOptions(),
-                token),
-            "ComfyUI workflow export completed.");
-
-    private async void UploadReference_Click(object sender, RoutedEventArgs e) =>
-        await PickAndUploadAssetAsync("reference");
-
-    private async void UploadMask_Click(object sender, RoutedEventArgs e) =>
-        await PickAndUploadAssetAsync("mask");
-
-    private async void UploadOverlay_Click(object sender, RoutedEventArgs e) =>
-        await PickAndUploadAssetAsync("overlay");
-
-    private async Task PickAndUploadAssetAsync(string assetKind)
+    if (App.MainWindowInstance is null)
     {
-        string? projectId = RequireActiveProject();
-        if (projectId is null)
-        {
-            return;
-        }
+      ShowFailure("The Studio window is not ready for file selection.");
+      return;
+    }
 
-        if (App.MainWindowInstance is null)
-        {
-            ShowFailure("The Studio window is not ready for file selection.");
-            return;
-        }
-
-        var picker = new Microsoft.Windows.Storage.Pickers.FileOpenPicker(
+    FileOpenPicker picker = new(
             App.MainWindowInstance.AppWindow.Id)
+    {
+      SuggestedStartLocation = Microsoft.Windows.Storage.Pickers.PickerLocationId.PicturesLibrary,
+      ViewMode = Microsoft.Windows.Storage.Pickers.PickerViewMode.Thumbnail,
+    };
+    picker.FileTypeFilter.Add("*");
+    var file = await picker.PickSingleFileAsync();
+    if (file is null)
+    {
+      ShowStatus("No file was selected.", InfoBarSeverity.Informational);
+      AppendLog($"Canceled {assetKind} asset selection.");
+      return;
+    }
+
+    string fileName = Path.GetFileName(file.Path);
+    string fileType = Path.GetExtension(fileName);
+    await RunBusyAsync($"Uploading {assetKind} asset", async token =>
+    {
+      await using Stream stream = File.OpenRead(file.Path);
+      string contentType = ContentTypeFor(fileType);
+      JsonElement result = assetKind switch
+      {
+        "reference" => await App.Services.ApiClient.UploadReferenceAssetAsync(
+                projectId,
+                stream,
+                fileName,
+                contentType,
+                token),
+        "mask" => await App.Services.ApiClient.UploadMaskAssetAsync(
+                projectId,
+                stream,
+                fileName,
+                contentType,
+                token),
+        "overlay" => await App.Services.ApiClient.UploadOverlayAssetAsync(
+                projectId,
+                stream,
+                fileName,
+                contentType,
+                token),
+        _ => throw new InvalidOperationException($"Unsupported asset kind '{assetKind}'."),
+      };
+      TextBox uploadedPathBox = assetKind switch
+      {
+        "reference" => UploadedReferenceBox,
+        "mask" => UploadedMaskBox,
+        "overlay" => UploadedOverlayBox,
+        _ => throw new InvalidOperationException($"Unsupported asset kind '{assetKind}'."),
+      };
+      uploadedPathBox.Text = GetProjectAssetPath(result, assetKind, fileName);
+      DisplayResult(GlobalResultBox, result);
+      ShowStatus($"{fileName} uploaded as a {assetKind} asset.", InfoBarSeverity.Success);
+      AppendLog($"Uploaded {assetKind} asset {fileName}.");
+    });
+  }
+
+  private async void WorkerTick_Click(object sender, RoutedEventArgs e)
+  {
+    await RunGlobalJsonAsync(
+          "Running one worker tick",
+          GlobalResultBox,
+          App.Services.ApiClient.TickWorkerAsync,
+          "Manual worker tick completed.");
+  }
+
+  private async void GetEdmgStatus_Click(object sender, RoutedEventArgs e)
+  {
+    await RunGlobalJsonAsync(
+          "Loading EDMG status",
+          GlobalResultBox,
+          App.Services.ApiClient.GetEdmgStatusAsync,
+          "EDMG status loaded.");
+  }
+
+  private async void VerifyEdmg_Click(object sender, RoutedEventArgs e)
+  {
+    await RunGlobalJsonAsync(
+          "Verifying EDMG environment",
+          GlobalResultBox,
+          App.Services.ApiClient.VerifyEdmgAsync,
+          "EDMG verification completed.");
+  }
+
+  private async void RefreshJobs_Click(object sender, RoutedEventArgs e)
+  {
+    string? projectId = RequireActiveProject();
+    if (projectId is null)
+    {
+      return;
+    }
+
+    await RunBusyAsync("Refreshing project jobs", async token =>
+    {
+      await App.Services.JobsActivity.RefreshAsync(token);
+      StudioJobsActivitySnapshot snapshot = App.Services.JobsActivity.Snapshot;
+      if (snapshot.Error is not null)
+      {
+        throw snapshot.Error;
+      }
+
+      StudioJobListResponse response = new(snapshot.Jobs
+              .Where(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))
+              .ToArray());
+      JsonElement result = JsonSerializer.SerializeToElement(
+              response,
+              StudioJson.GetTypeInfo<StudioJobListResponse>());
+      DisplayResult(JobFeedbackBox, result);
+      ApplyQueueSnapshot(snapshot);
+      ShowStatus($"Loaded {response.Jobs.Count} project job(s).", InfoBarSeverity.Success);
+      AppendLog($"Loaded {response.Jobs.Count} project job(s).");
+    });
+  }
+
+  private void ClearLog_Click(object sender, RoutedEventArgs e)
+  {
+    ActionLogBox.Text = string.Empty;
+  }
+
+  private void StickyPreflight_Click(object sender, RoutedEventArgs e)
+  {
+    _ = ApplyQuickSetup();
+    QuickPreflight_Click(sender, e);
+  }
+
+  private void StickyRender_Click(object sender, RoutedEventArgs e)
+  {
+    _ = ApplyQuickSetup();
+    QuickRender_Click(sender, e);
+  }
+
+  private void SavePreset_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      ApplicationDataContainer settings = ApplicationData.Current.LocalSettings;
+      settings.Values["RenderPreset.Goal"] = Selected(QuickGoalComboBox, "auto");
+      settings.Values["RenderPreset.Quality"] = Selected(QuickQualityComboBox, "balanced");
+      settings.Values["RenderPreset.Resolution"] = Selected(QuickResolutionComboBox, "768x432");
+      settings.Values["RenderPreset.Fps"] = Number(QuickFpsBox, 24);
+      settings.Values["RenderPreset.Model"] = QuickModelBox.Text.Trim();
+      settings.Values["RenderPreset.Prompt"] = QuickPromptBox.Text;
+      ShowStatus("The current Simple render preset was saved on this device.", InfoBarSeverity.Success);
+    }
+    catch (Exception exception)
+    {
+      ShowFailure($"The render preset could not be saved: {StudioPageHelpers.GetUserFacingError(exception)}");
+    }
+  }
+
+  private void RestoreSavedPreset()
+  {
+    try
+    {
+      ApplicationDataContainer settings = ApplicationData.Current.LocalSettings;
+      SelectComboValue(QuickGoalComboBox, settings.Values["RenderPreset.Goal"] as string ?? "auto");
+      SelectComboValue(QuickQualityComboBox, settings.Values["RenderPreset.Quality"] as string ?? "balanced");
+      SelectComboValue(QuickResolutionComboBox, settings.Values["RenderPreset.Resolution"] as string ?? "768x432");
+      QuickFpsBox.Value = settings.Values["RenderPreset.Fps"] is int fps ? fps : 24;
+      QuickModelBox.Text = settings.Values["RenderPreset.Model"] as string ?? "auto";
+      QuickPromptBox.Text = settings.Values["RenderPreset.Prompt"] as string ?? string.Empty;
+    }
+    catch (Exception exception)
+    {
+      AppendLog($"Saved render preset was unavailable: {StudioPageHelpers.GetUserFacingError(exception)}");
+    }
+  }
+
+  private void ResetRender_Click(object sender, RoutedEventArgs e)
+  {
+    SelectComboValue(QuickGoalComboBox, "auto");
+    SelectComboValue(QuickQualityComboBox, "balanced");
+    SelectComboValue(QuickResolutionComboBox, "768x432");
+    QuickFpsBox.Value = 24;
+    QuickModelBox.Text = "auto";
+    QuickPromptBox.Text = string.Empty;
+    _ = ApplyQuickSetup();
+    ShowStatus("Render controls were reset to the safe automatic setup.", InfoBarSeverity.Informational);
+  }
+
+  private async Task RunProjectJsonAsync(
+      string action,
+      TextBox target,
+      Func<string, CancellationToken, Task<JsonElement>> operation,
+      string successMessage)
+  {
+    string? projectId = RequireActiveProject();
+    if (projectId is null)
+    {
+      return;
+    }
+
+    await RunBusyAsync(action, async token =>
+    {
+      PostProductionOperation? postOperation = ClassifyPostOperation(action);
+      if (postOperation is not null)
+      {
+        ProjectResponse projectResponse = await App.Services.ApiClient.GetProjectAsync(projectId, token);
+        PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+                PostProductionContracts.Read(projectResponse.Project.CanonicalProject.Timeline), postOperation.Value);
+        if (!gate.Allowed)
         {
-            SuggestedStartLocation = Microsoft.Windows.Storage.Pickers.PickerLocationId.PicturesLibrary,
-            ViewMode = Microsoft.Windows.Storage.Pickers.PickerViewMode.Thumbnail,
-        };
-        picker.FileTypeFilter.Add("*");
-        var file = await picker.PickSingleFileAsync();
-        if (file is null)
-        {
-            ShowStatus("No file was selected.", InfoBarSeverity.Informational);
-            AppendLog($"Canceled {assetKind} asset selection.");
-            return;
+          throw new InvalidOperationException(gate.Explanation);
         }
+      }
+      JsonElement result = await operation(projectId, token);
+      DisplayResult(target, result);
+      ShowStatus(successMessage, InfoBarSeverity.Success);
+      AppendLog(successMessage);
+      await LoadQueueSummaryAsync(token);
+    });
+  }
 
-        string fileName = Path.GetFileName(file.Path);
-        string fileType = Path.GetExtension(fileName);
-        await RunBusyAsync($"Uploading {assetKind} asset", async token =>
-        {
-            await using Stream stream = File.OpenRead(file.Path);
-            string contentType = ContentTypeFor(fileType);
-            JsonElement result = assetKind switch
-            {
-                "reference" => await App.Services.ApiClient.UploadReferenceAssetAsync(
-                    projectId,
-                    stream,
-                    fileName,
-                    contentType,
-                    token),
-                "mask" => await App.Services.ApiClient.UploadMaskAssetAsync(
-                    projectId,
-                    stream,
-                    fileName,
-                    contentType,
-                    token),
-                "overlay" => await App.Services.ApiClient.UploadOverlayAssetAsync(
-                    projectId,
-                    stream,
-                    fileName,
-                    contentType,
-                    token),
-                _ => throw new InvalidOperationException($"Unsupported asset kind '{assetKind}'."),
-            };
-            TextBox uploadedPathBox = assetKind switch
-            {
-                "reference" => UploadedReferenceBox,
-                "mask" => UploadedMaskBox,
-                "overlay" => UploadedOverlayBox,
-                _ => throw new InvalidOperationException($"Unsupported asset kind '{assetKind}'."),
-            };
-            uploadedPathBox.Text = GetProjectAssetPath(result, assetKind, fileName);
-            DisplayResult(GlobalResultBox, result);
-            ShowStatus($"{fileName} uploaded as a {assetKind} asset.", InfoBarSeverity.Success);
-            AppendLog($"Uploaded {assetKind} asset {fileName}.");
-        });
+  private static PostProductionOperation? ClassifyPostOperation(string action)
+  {
+    if (action.StartsWith("Exporting", StringComparison.OrdinalIgnoreCase))
+    {
+      return PostProductionOperation.Export;
     }
 
-    private async void WorkerTick_Click(object sender, RoutedEventArgs e) =>
-        await RunGlobalJsonAsync(
-            "Running one worker tick",
-            GlobalResultBox,
-            token => App.Services.ApiClient.TickWorkerAsync(token),
-            "Manual worker tick completed.");
-
-    private async void GetEdmgStatus_Click(object sender, RoutedEventArgs e) =>
-        await RunGlobalJsonAsync(
-            "Loading EDMG status",
-            GlobalResultBox,
-            token => App.Services.ApiClient.GetEdmgStatusAsync(token),
-            "EDMG status loaded.");
-
-    private async void VerifyEdmg_Click(object sender, RoutedEventArgs e) =>
-        await RunGlobalJsonAsync(
-            "Verifying EDMG environment",
-            GlobalResultBox,
-            token => App.Services.ApiClient.VerifyEdmgAsync(token),
-            "EDMG verification completed.");
-
-    private async void RefreshJobs_Click(object sender, RoutedEventArgs e)
+    if (action.Contains("preview", StringComparison.OrdinalIgnoreCase))
     {
-        string? projectId = RequireActiveProject();
-        if (projectId is null)
-        {
-            return;
-        }
-
-        await RunBusyAsync("Refreshing project jobs", async token =>
-        {
-            await App.Services.JobsActivity.RefreshAsync(token);
-            StudioJobsActivitySnapshot snapshot = App.Services.JobsActivity.Snapshot;
-            if (snapshot.Error is not null)
-            {
-                throw snapshot.Error;
-            }
-
-            StudioJobListResponse response = new(snapshot.Jobs
-                .Where(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))
-                .ToArray());
-            JsonElement result = JsonSerializer.SerializeToElement(
-                response,
-                StudioJson.GetTypeInfo<StudioJobListResponse>());
-            DisplayResult(JobFeedbackBox, result);
-            ApplyQueueSnapshot(snapshot);
-            ShowStatus($"Loaded {response.Jobs.Count} project job(s).", InfoBarSeverity.Success);
-            AppendLog($"Loaded {response.Jobs.Count} project job(s).");
-        });
+      return PostProductionOperation.Preview;
     }
 
-    private void ClearLog_Click(object sender, RoutedEventArgs e)
-    {
-        ActionLogBox.Text = string.Empty;
-    }
-
-    private void StickyPreflight_Click(object sender, RoutedEventArgs e)
-    {
-        ApplyQuickSetup();
-        QuickPreflight_Click(sender, e);
-    }
-
-    private void StickyRender_Click(object sender, RoutedEventArgs e)
-    {
-        ApplyQuickSetup();
-        QuickRender_Click(sender, e);
-    }
-
-    private void SavePreset_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            ApplicationDataContainer settings = ApplicationData.Current.LocalSettings;
-            settings.Values["RenderPreset.Goal"] = Selected(QuickGoalComboBox, "auto");
-            settings.Values["RenderPreset.Quality"] = Selected(QuickQualityComboBox, "balanced");
-            settings.Values["RenderPreset.Resolution"] = Selected(QuickResolutionComboBox, "768x432");
-            settings.Values["RenderPreset.Fps"] = Number(QuickFpsBox, 24);
-            settings.Values["RenderPreset.Model"] = QuickModelBox.Text.Trim();
-            settings.Values["RenderPreset.Prompt"] = QuickPromptBox.Text;
-            ShowStatus("The current Simple render preset was saved on this device.", InfoBarSeverity.Success);
-        }
-        catch (Exception exception)
-        {
-            ShowFailure($"The render preset could not be saved: {StudioPageHelpers.GetUserFacingError(exception)}");
-        }
-    }
-
-    private void RestoreSavedPreset()
-    {
-        try
-        {
-            ApplicationDataContainer settings = ApplicationData.Current.LocalSettings;
-            SelectComboValue(QuickGoalComboBox, settings.Values["RenderPreset.Goal"] as string ?? "auto");
-            SelectComboValue(QuickQualityComboBox, settings.Values["RenderPreset.Quality"] as string ?? "balanced");
-            SelectComboValue(QuickResolutionComboBox, settings.Values["RenderPreset.Resolution"] as string ?? "768x432");
-            QuickFpsBox.Value = settings.Values["RenderPreset.Fps"] is int fps ? fps : 24;
-            QuickModelBox.Text = settings.Values["RenderPreset.Model"] as string ?? "auto";
-            QuickPromptBox.Text = settings.Values["RenderPreset.Prompt"] as string ?? string.Empty;
-        }
-        catch (Exception exception)
-        {
-            AppendLog($"Saved render preset was unavailable: {StudioPageHelpers.GetUserFacingError(exception)}");
-        }
-    }
-
-    private void ResetRender_Click(object sender, RoutedEventArgs e)
-    {
-        SelectComboValue(QuickGoalComboBox, "auto");
-        SelectComboValue(QuickQualityComboBox, "balanced");
-        SelectComboValue(QuickResolutionComboBox, "768x432");
-        QuickFpsBox.Value = 24;
-        QuickModelBox.Text = "auto";
-        QuickPromptBox.Text = string.Empty;
-        ApplyQuickSetup();
-        ShowStatus("Render controls were reset to the safe automatic setup.", InfoBarSeverity.Informational);
-    }
-
-    private async Task RunProjectJsonAsync(
-        string action,
-        TextBox target,
-        Func<string, CancellationToken, Task<JsonElement>> operation,
-        string successMessage)
-    {
-        string? projectId = RequireActiveProject();
-        if (projectId is null)
-        {
-            return;
-        }
-
-        await RunBusyAsync(action, async token =>
-        {
-            PostProductionOperation? postOperation = ClassifyPostOperation(action);
-            if (postOperation is not null)
-            {
-                ProjectResponse projectResponse = await App.Services.ApiClient.GetProjectAsync(projectId, token);
-                PostProductionOperationGate gate = PostProductionCapabilities.Gate(
-                    PostProductionContracts.Read(projectResponse.Project.CanonicalProject.Timeline), postOperation.Value);
-                if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
-            }
-            JsonElement result = await operation(projectId, token);
-            DisplayResult(target, result);
-            ShowStatus(successMessage, InfoBarSeverity.Success);
-            AppendLog(successMessage);
-            await LoadQueueSummaryAsync(token);
-        });
-    }
-
-    private static PostProductionOperation? ClassifyPostOperation(string action)
-    {
-        if (action.StartsWith("Exporting", StringComparison.OrdinalIgnoreCase)) return PostProductionOperation.Export;
-        if (action.Contains("preview", StringComparison.OrdinalIgnoreCase)) return PostProductionOperation.Preview;
-        string[] renderActions = ["Queueing", "Running pipeline", "Running automatic render", "Running performer workflow",
+    string[] renderActions = ["Queueing", "Running pipeline", "Running automatic render", "Running performer workflow",
             "Animating", "Rendering", "Running smart video", "Running standalone", "Assembling"];
-        return renderActions.Any(prefix => action.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            ? PostProductionOperation.Render
-            : null;
+    return renderActions.Any(prefix => action.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        ? PostProductionOperation.Render
+        : null;
+  }
+
+  private async Task RunGlobalJsonAsync(
+      string action,
+      TextBox target,
+      Func<CancellationToken, Task<JsonElement>> operation,
+      string successMessage)
+  {
+    await RunBusyAsync(action, async token =>
+    {
+      JsonElement result = await operation(token);
+      DisplayResult(target, result);
+      ShowStatus(successMessage, InfoBarSeverity.Success);
+      AppendLog(successMessage);
+    });
+  }
+
+  private async Task RunBusyAsync(string action, Func<CancellationToken, Task> operation)
+  {
+    if (_isBusy)
+    {
+      ShowStatus("Another render operation is already in progress.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async Task RunGlobalJsonAsync(
-        string action,
-        TextBox target,
-        Func<CancellationToken, Task<JsonElement>> operation,
-        string successMessage)
+    _isBusy = true;
+    SetBusyState(action);
+    AppendLog($"{action} started.");
+    try
     {
-        await RunBusyAsync(action, async token =>
-        {
-            JsonElement result = await operation(token);
-            DisplayResult(target, result);
-            ShowStatus(successMessage, InfoBarSeverity.Success);
-            AppendLog(successMessage);
-        });
+      CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
+      await operation(token);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+      AppendLog($"{action} canceled because the page was closed.");
+    }
+    catch (Exception exception)
+    {
+      string message = StudioPageHelpers.UserMessage(exception);
+      ShowFailure(message);
+      GlobalResultBox.Text =
+          $"{action} failed.{Environment.NewLine}{message}{Environment.NewLine}{Environment.NewLine}{exception}";
+      AppendLog($"{action} failed: {message}");
+    }
+    finally
+    {
+      _isBusy = false;
+      SetBusyState();
+    }
+  }
+
+  private string? RequireActiveProject()
+  {
+    if (_projectId is not null)
+    {
+      return _projectId;
     }
 
-    private async Task RunBusyAsync(string action, Func<CancellationToken, Task> operation)
-    {
-        if (_isBusy)
-        {
-            ShowStatus("Another render operation is already in progress.", InfoBarSeverity.Warning);
-            return;
-        }
+    const string message = "Choose an active project before running this workflow.";
+    ShowFailure(message);
+    GlobalResultBox.Text = message;
+    AppendLog(message);
+    return null;
+  }
 
-        _isBusy = true;
-        SetBusyState(action);
-        AppendLog($"{action} started.");
-        try
-        {
-            CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
-            await operation(token);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-            AppendLog($"{action} canceled because the page was closed.");
-        }
-        catch (Exception exception)
-        {
-            string message = StudioPageHelpers.UserMessage(exception);
-            ShowFailure(message);
-            GlobalResultBox.Text =
-                $"{action} failed.{Environment.NewLine}{message}{Environment.NewLine}{Environment.NewLine}{exception}";
-            AppendLog($"{action} failed: {message}");
-        }
-        finally
-        {
-            _isBusy = false;
-            SetBusyState();
-        }
+  private void SetBusyState(string? action = null)
+  {
+    WorkflowTabView.IsEnabled = !_isBusy;
+    BusyRing.IsActive = _isBusy;
+    BusyProgressBar.IsIndeterminate = _isBusy;
+    BusyProgressBar.Visibility = _isBusy ? Visibility.Visible : Visibility.Collapsed;
+    BusyText.Text = _isBusy ? action ?? "Working…" : "Ready";
+  }
+
+  private void DisplayResult(TextBox target, JsonElement result)
+  {
+    string formatted = StudioPageHelpers.PrettyJson(result);
+    target.Text = formatted;
+    GlobalResultBox.Text = formatted;
+  }
+
+  private void ShowFailure(string message)
+  {
+    ShowStatus(message, InfoBarSeverity.Error);
+  }
+
+  private void ShowStatus(string message, InfoBarSeverity severity)
+  {
+    StatusInfoBar.Title = severity switch
+    {
+      InfoBarSeverity.Success => "Completed",
+      InfoBarSeverity.Warning => "Attention",
+      InfoBarSeverity.Error => "Render workflow failed",
+      _ => "Render status",
+    };
+    StatusInfoBar.Message = message;
+    StatusInfoBar.Severity = severity;
+    StatusInfoBar.IsOpen = true;
+  }
+
+  private void AppendLog(string message)
+  {
+    string entry = $"[{DateTimeOffset.Now:HH:mm:ss}] {message}";
+    string updated = string.IsNullOrWhiteSpace(ActionLogBox.Text)
+        ? entry
+        : $"{ActionLogBox.Text}{Environment.NewLine}{entry}";
+    ActionLogBox.Text = updated.Length <= 24_000 ? updated : updated[^24_000..];
+  }
+
+  private static JsonArray ParseLoras(string value)
+  {
+    JsonArray result = new();
+    foreach (string entry in ParseStringList(value))
+    {
+      string[] parts = entry.Split('@', 2, StringSplitOptions.TrimEntries);
+      if (parts[0].Length == 0)
+      {
+        continue;
+      }
+
+      double weight = parts.Length == 2
+          && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
+              ? Math.Clamp(parsed, -4.0, 4.0)
+              : 1.0;
+      result.Add((JsonNode)new JsonObject { ["name"] = parts[0], ["weight"] = weight });
     }
 
-    private string? RequireActiveProject()
-    {
-        if (_projectId is not null)
-        {
-            return _projectId;
-        }
+    return result;
+  }
 
-        const string message = "Choose an active project before running this workflow.";
-        ShowFailure(message);
-        GlobalResultBox.Text = message;
-        AppendLog(message);
-        return null;
+  private static IReadOnlyList<RenderIntentSection> ParseRenderIntentSections(string value)
+  {
+    if (string.IsNullOrWhiteSpace(value))
+    {
+      return [];
     }
 
-    private void SetBusyState(string? action = null)
+    using JsonDocument document = ParseDocument(value, "Conductor intent sections");
+    if (document.RootElement.ValueKind != JsonValueKind.Array)
     {
-        WorkflowTabView.IsEnabled = !_isBusy;
-        BusyRing.IsActive = _isBusy;
-        BusyProgressBar.IsIndeterminate = _isBusy;
-        BusyProgressBar.Visibility = _isBusy ? Visibility.Visible : Visibility.Collapsed;
-        BusyText.Text = _isBusy ? action ?? "Working…" : "Ready";
+      throw new InvalidOperationException("Conductor intent sections must be a JSON array.");
     }
 
-    private void DisplayResult(TextBox target, JsonElement result)
+    List<RenderIntentSection> result = new();
+    foreach (JsonElement item in document.RootElement.EnumerateArray())
     {
-        string formatted = StudioPageHelpers.PrettyJson(result);
-        target.Text = formatted;
-        GlobalResultBox.Text = formatted;
+      EnsureObject(item, "Each conductor intent section");
+      result.Add(new RenderIntentSection(
+          RequiredPropertyString(item, "scene_id", "Conductor intent section"),
+          PropertyDouble(item, "start_s", 0.0),
+          PropertyDouble(item, "end_s", 0.0),
+          PropertyString(item, "creative_goal"),
+          OptionalPropertyDouble(item, "continuity_priority"),
+          OptionalPropertyDouble(item, "speed_priority"),
+          PropertyStringArray(item, "notes")));
     }
 
-    private void ShowFailure(string message) => ShowStatus(message, InfoBarSeverity.Error);
+    return result;
+  }
 
-    private void ShowStatus(string message, InfoBarSeverity severity)
+  private static IReadOnlyList<LayerMaskSpec> ParseLayerMasks(string value)
+  {
+    if (string.IsNullOrWhiteSpace(value))
     {
-        StatusInfoBar.Title = severity switch
-        {
-            InfoBarSeverity.Success => "Completed",
-            InfoBarSeverity.Warning => "Attention",
-            InfoBarSeverity.Error => "Render workflow failed",
-            _ => "Render status",
-        };
-        StatusInfoBar.Message = message;
-        StatusInfoBar.Severity = severity;
-        StatusInfoBar.IsOpen = true;
+      return [];
     }
 
-    private void AppendLog(string message)
+    using JsonDocument document = ParseDocument(value, "Layer masks");
+    if (document.RootElement.ValueKind != JsonValueKind.Array)
     {
-        string entry = $"[{DateTimeOffset.Now:HH:mm:ss}] {message}";
-        string updated = string.IsNullOrWhiteSpace(ActionLogBox.Text)
-            ? entry
-            : $"{ActionLogBox.Text}{Environment.NewLine}{entry}";
-        ActionLogBox.Text = updated.Length <= 24_000 ? updated : updated[^24_000..];
+      throw new InvalidOperationException("Layer masks must be a JSON array.");
     }
 
-    private static JsonArray ParseLoras(string value)
+    List<LayerMaskSpec> result = new();
+    foreach (JsonElement item in document.RootElement.EnumerateArray())
     {
-        var result = new JsonArray();
-        foreach (string entry in ParseStringList(value))
-        {
-            string[] parts = entry.Split('@', 2, StringSplitOptions.TrimEntries);
-            if (parts[0].Length == 0)
-            {
-                continue;
-            }
-
-            double weight = parts.Length == 2
-                && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
-                    ? Math.Clamp(parsed, -4.0, 4.0)
-                    : 1.0;
-            result.Add((JsonNode)new JsonObject { ["name"] = parts[0], ["weight"] = weight });
-        }
-
-        return result;
+      EnsureObject(item, "Each layer mask");
+      result.Add(new LayerMaskSpec(
+          RequiredPropertyString(item, "mask_asset", "Layer mask"),
+          PropertyString(item, "prompt"),
+          PropertyDouble(item, "depth", 1.0),
+          PropertyDouble(item, "motion_scale", 1.0),
+          PropertyDouble(item, "strength", 1.0)));
     }
 
-    private static IReadOnlyList<RenderIntentSection> ParseRenderIntentSections(string value)
+    return result;
+  }
+
+  private static IReadOnlyDictionary<string, JsonElement> ParseObjectDictionary(string value, string label)
+  {
+    if (string.IsNullOrWhiteSpace(value))
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return [];
-        }
-
-        using JsonDocument document = ParseDocument(value, "Conductor intent sections");
-        if (document.RootElement.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidOperationException("Conductor intent sections must be a JSON array.");
-        }
-
-        var result = new List<RenderIntentSection>();
-        foreach (JsonElement item in document.RootElement.EnumerateArray())
-        {
-            EnsureObject(item, "Each conductor intent section");
-            result.Add(new RenderIntentSection(
-                RequiredPropertyString(item, "scene_id", "Conductor intent section"),
-                PropertyDouble(item, "start_s", 0.0),
-                PropertyDouble(item, "end_s", 0.0),
-                PropertyString(item, "creative_goal"),
-                OptionalPropertyDouble(item, "continuity_priority"),
-                OptionalPropertyDouble(item, "speed_priority"),
-                PropertyStringArray(item, "notes")));
-        }
-
-        return result;
+      return new Dictionary<string, JsonElement>();
     }
 
-    private static IReadOnlyList<LayerMaskSpec> ParseLayerMasks(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return [];
-        }
-
-        using JsonDocument document = ParseDocument(value, "Layer masks");
-        if (document.RootElement.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidOperationException("Layer masks must be a JSON array.");
-        }
-
-        var result = new List<LayerMaskSpec>();
-        foreach (JsonElement item in document.RootElement.EnumerateArray())
-        {
-            EnsureObject(item, "Each layer mask");
-            result.Add(new LayerMaskSpec(
-                RequiredPropertyString(item, "mask_asset", "Layer mask"),
-                PropertyString(item, "prompt"),
-                PropertyDouble(item, "depth", 1.0),
-                PropertyDouble(item, "motion_scale", 1.0),
-                PropertyDouble(item, "strength", 1.0)));
-        }
-
-        return result;
-    }
-
-    private static IReadOnlyDictionary<string, JsonElement> ParseObjectDictionary(string value, string label)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return new Dictionary<string, JsonElement>();
-        }
-
-        using JsonDocument document = ParseDocument(value, label);
-        if (document.RootElement.ValueKind != JsonValueKind.Object)
-        {
-            throw new InvalidOperationException($"{label} must be a JSON object.");
-        }
-
-        return document.RootElement
+    using JsonDocument document = ParseDocument(value, label);
+    return document.RootElement.ValueKind != JsonValueKind.Object
+          ? throw new InvalidOperationException($"{label} must be a JSON object.")
+          : (IReadOnlyDictionary<string, JsonElement>)document.RootElement
             .EnumerateObject()
             .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
-    }
+  }
 
-    private static JsonElement ParseRequiredElement(string value, string label, JsonValueKind expectedKind)
+  private static JsonElement ParseRequiredElement(string value, string label, JsonValueKind expectedKind)
+  {
+    if (string.IsNullOrWhiteSpace(value))
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new InvalidOperationException($"{label} is required.");
-        }
-
-        using JsonDocument document = ParseDocument(value, label);
-        if (document.RootElement.ValueKind != expectedKind)
-        {
-            throw new InvalidOperationException($"{label} must be a JSON {KindLabel(expectedKind)}.");
-        }
-
-        return document.RootElement.Clone();
+      throw new InvalidOperationException($"{label} is required.");
     }
 
-    private static JsonElement? ParseOptionalElement(string value, string label, JsonValueKind expectedKind) =>
-        string.IsNullOrWhiteSpace(value)
+    using JsonDocument document = ParseDocument(value, label);
+    return document.RootElement.ValueKind != expectedKind
+          ? throw new InvalidOperationException($"{label} must be a JSON {KindLabel(expectedKind)}.")
+          : document.RootElement.Clone();
+  }
+
+  private static JsonElement? ParseOptionalElement(string value, string label, JsonValueKind expectedKind)
+  {
+    return string.IsNullOrWhiteSpace(value)
             ? null
             : ParseRequiredElement(value, label, expectedKind);
+  }
 
-    private static JsonNode? ParseOptionalNode(string value, string label, JsonValueKind expectedKind)
+  private static JsonNode? ParseOptionalNode(string value, string label, JsonValueKind expectedKind)
+  {
+    if (string.IsNullOrWhiteSpace(value))
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        JsonElement element = ParseRequiredElement(value, label, expectedKind);
-        return JsonNode.Parse(element.GetRawText());
+      return null;
     }
 
-    private static JsonNode? ParseSchedule(string value, string label)
-    {
-        string schedule = value.Trim();
-        if (schedule.Length == 0)
-        {
-            return null;
-        }
+    JsonElement element = ParseRequiredElement(value, label, expectedKind);
+    return JsonNode.Parse(element.GetRawText());
+  }
 
-        return schedule.StartsWith('{')
+  private static JsonNode? ParseSchedule(string value, string label)
+  {
+    string schedule = value.Trim();
+    return schedule.Length == 0
+          ? null
+          : schedule.StartsWith('{')
             ? ParseOptionalNode(schedule, label, JsonValueKind.Object)
             : JsonValue.Create(schedule);
-    }
+  }
 
-    private static JsonDocument ParseDocument(string value, string label)
+  private static JsonDocument ParseDocument(string value, string label)
+  {
+    try
     {
-        try
-        {
-            return JsonDocument.Parse(value);
-        }
-        catch (JsonException exception)
-        {
-            throw new InvalidOperationException($"{label} contains invalid JSON: {exception.Message}", exception);
-        }
+      return JsonDocument.Parse(value);
     }
-
-    private static void EnsureObject(JsonElement value, string label)
+    catch (JsonException exception)
     {
-        if (value.ValueKind != JsonValueKind.Object)
-        {
-            throw new InvalidOperationException($"{label} must be a JSON object.");
-        }
+      throw new InvalidOperationException($"{label} contains invalid JSON: {exception.Message}", exception);
     }
+  }
 
-    private static string RequiredPropertyString(JsonElement value, string propertyName, string label)
+  private static void EnsureObject(JsonElement value, string label)
+  {
+    if (value.ValueKind != JsonValueKind.Object)
     {
-        string? result = PropertyString(value, propertyName);
-        return string.IsNullOrWhiteSpace(result)
-            ? throw new InvalidOperationException($"{label} requires a non-empty '{propertyName}'.")
-            : result;
+      throw new InvalidOperationException($"{label} must be a JSON object.");
     }
+  }
 
-    private static string? PropertyString(JsonElement value, string propertyName)
+  private static string RequiredPropertyString(JsonElement value, string propertyName, string label)
+  {
+    string? result = PropertyString(value, propertyName);
+    return string.IsNullOrWhiteSpace(result)
+        ? throw new InvalidOperationException($"{label} requires a non-empty '{propertyName}'.")
+        : result;
+  }
+
+  private static string? PropertyString(JsonElement value, string propertyName)
+  {
+    if (!value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null)
     {
-        if (!value.TryGetProperty(propertyName, out JsonElement property)
-            || property.ValueKind == JsonValueKind.Null)
-        {
-            return null;
-        }
-
-        if (property.ValueKind != JsonValueKind.String)
-        {
-            throw new InvalidOperationException($"'{propertyName}' must be a string.");
-        }
-
-        return property.GetString();
+      return null;
     }
 
-    private static double PropertyDouble(JsonElement value, string propertyName, double fallback)
+    return property.ValueKind != JsonValueKind.String
+          ? throw new InvalidOperationException($"'{propertyName}' must be a string.")
+          : property.GetString();
+  }
+
+  private static double PropertyDouble(JsonElement value, string propertyName, double fallback)
+  {
+    if (!value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null)
     {
-        if (!value.TryGetProperty(propertyName, out JsonElement property)
-            || property.ValueKind == JsonValueKind.Null)
-        {
-            return fallback;
-        }
-
-        if (!property.TryGetDouble(out double result))
-        {
-            throw new InvalidOperationException($"'{propertyName}' must be a number.");
-        }
-
-        return result;
+      return fallback;
     }
 
-    private static double? OptionalPropertyDouble(JsonElement value, string propertyName)
+    return !property.TryGetDouble(out double result)
+          ? throw new InvalidOperationException($"'{propertyName}' must be a number.")
+          : result;
+  }
+
+  private static double? OptionalPropertyDouble(JsonElement value, string propertyName)
+  {
+    if (!value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null)
     {
-        if (!value.TryGetProperty(propertyName, out JsonElement property)
-            || property.ValueKind == JsonValueKind.Null)
-        {
-            return null;
-        }
-
-        if (!property.TryGetDouble(out double result))
-        {
-            throw new InvalidOperationException($"'{propertyName}' must be a number.");
-        }
-
-        return result;
+      return null;
     }
 
-    private static IReadOnlyList<string> PropertyStringArray(JsonElement value, string propertyName)
+    return !property.TryGetDouble(out double result)
+          ? throw new InvalidOperationException($"'{propertyName}' must be a number.")
+          : result;
+  }
+
+  private static IReadOnlyList<string> PropertyStringArray(JsonElement value, string propertyName)
+  {
+    if (!value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null)
     {
-        if (!value.TryGetProperty(propertyName, out JsonElement property)
-            || property.ValueKind == JsonValueKind.Null)
-        {
-            return [];
-        }
-
-        if (property.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidOperationException($"'{propertyName}' must be an array of strings.");
-        }
-
-        var result = new List<string>();
-        foreach (JsonElement item in property.EnumerateArray())
-        {
-            if (item.ValueKind != JsonValueKind.String)
-            {
-                throw new InvalidOperationException($"'{propertyName}' must contain only strings.");
-            }
-
-            string? text = item.GetString();
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                result.Add(text);
-            }
-        }
-
-        return result;
+      return [];
     }
 
-    private static IReadOnlyList<string> ParseStringList(string value) =>
-        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    private static string RequiredText(string value, string label) =>
-        string.IsNullOrWhiteSpace(value)
-            ? throw new InvalidOperationException($"{label} is required.")
-            : value.Trim();
-
-    private static int Number(NumberBox numberBox, int fallback) =>
-        double.IsNaN(numberBox.Value) ? fallback : Convert.ToInt32(numberBox.Value);
-
-    private static double Number(NumberBox numberBox, double fallback) =>
-        double.IsNaN(numberBox.Value) ? fallback : numberBox.Value;
-
-    private static int? NullableNumber(NumberBox numberBox) =>
-        double.IsNaN(numberBox.Value) ? null : Convert.ToInt32(numberBox.Value);
-
-    private static long LongNumber(NumberBox numberBox, long fallback) =>
-        double.IsNaN(numberBox.Value) ? fallback : Convert.ToInt64(numberBox.Value);
-
-    private static long? NullableLongNumber(NumberBox numberBox) =>
-        double.IsNaN(numberBox.Value) || numberBox.Value < 0
-            ? null
-            : Convert.ToInt64(numberBox.Value);
-
-    private static string Selected(ComboBox comboBox, string fallback) =>
-        comboBox.SelectedItem switch
-        {
-            ComboBoxItem { Tag: not null } item => item.Tag.ToString() ?? fallback,
-            ComboBoxItem { Content: not null } item => item.Content.ToString() ?? fallback,
-            string value when !string.IsNullOrWhiteSpace(value) => value,
-            _ when comboBox.SelectedValue is string value && !string.IsNullOrWhiteSpace(value) => value,
-            _ => fallback,
-        };
-
-    private static void SelectComboValue(ComboBox comboBox, string value)
+    if (property.ValueKind != JsonValueKind.Array)
     {
-        foreach (object itemValue in comboBox.Items)
-        {
-            if (itemValue is not ComboBoxItem item)
-            {
-                continue;
-            }
-
-            string candidate = item.Tag?.ToString() ?? item.Content?.ToString() ?? string.Empty;
-            if (string.Equals(candidate, value, StringComparison.OrdinalIgnoreCase))
-            {
-                comboBox.SelectedItem = item;
-                return;
-            }
-        }
+      throw new InvalidOperationException($"'{propertyName}' must be an array of strings.");
     }
 
-    private static string QuickGoalLabel(string goal) =>
-        goal switch
-        {
-            "stills" => "Still scenes",
-            "motion_ad" => "AnimateDiff motion",
-            "motion_svd" => "SVD image to video",
-            "full_video" => "Full-motion video",
-            _ => "Automatic internal",
-        };
-
-    private static string? EmptyToNull(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string KindLabel(JsonValueKind kind) =>
-        kind switch
-        {
-            JsonValueKind.Object => "object",
-            JsonValueKind.Array => "array",
-            _ => kind.ToString().ToLowerInvariant(),
-        };
-
-    private static string GetProjectAssetPath(JsonElement response, string assetKind, string fallbackFileName)
+    List<string> result = new();
+    foreach (JsonElement item in property.EnumerateArray())
     {
-        string folder = assetKind switch
-        {
-            "reference" => "refs",
-            "mask" => "masks",
-            "overlay" => "overlays",
-            _ => throw new InvalidOperationException($"Unsupported asset kind '{assetKind}'."),
-        };
+      if (item.ValueKind != JsonValueKind.String)
+      {
+        throw new InvalidOperationException($"'{propertyName}' must contain only strings.");
+      }
 
-        string? assetName = response.TryGetProperty("asset", out JsonElement asset)
-            && asset.ValueKind == JsonValueKind.String
-                ? asset.GetString()
-                : null;
-        if (string.IsNullOrWhiteSpace(assetName)
-            && response.TryGetProperty("path", out JsonElement path)
-            && path.ValueKind == JsonValueKind.String)
-        {
-            assetName = Path.GetFileName(path.GetString()?.Replace('\\', '/'));
-        }
-
-        assetName = string.IsNullOrWhiteSpace(assetName)
-            ? Path.GetFileName(fallbackFileName)
-            : Path.GetFileName(assetName);
-        return $"assets/{folder}/{assetName}";
+      string? text = item.GetString();
+      if (!string.IsNullOrWhiteSpace(text))
+      {
+        result.Add(text);
+      }
     }
 
-    private static string ContentTypeFor(string extension) =>
-        extension.ToLowerInvariant() switch
-        {
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".webp" => "image/webp",
-            ".gif" => "image/gif",
-            ".bmp" => "image/bmp",
-            ".mp4" => "video/mp4",
-            ".webm" => "video/webm",
-            ".mov" => "video/quicktime",
-            _ => "application/octet-stream",
-        };
+    return result;
+  }
+
+  private static IReadOnlyList<string> ParseStringList(string value)
+  {
+    return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+  }
+
+  private static string RequiredText(string value, string label)
+  {
+    return string.IsNullOrWhiteSpace(value)
+          ? throw new InvalidOperationException($"{label} is required.")
+          : value.Trim();
+  }
+
+  private static int Number(NumberBox numberBox, int fallback)
+  {
+    return double.IsNaN(numberBox.Value) ? fallback : Convert.ToInt32(numberBox.Value);
+  }
+
+  private static double Number(NumberBox numberBox, double fallback)
+  {
+    return double.IsNaN(numberBox.Value) ? fallback : numberBox.Value;
+  }
+
+  private static int? NullableNumber(NumberBox numberBox)
+  {
+    return double.IsNaN(numberBox.Value) ? null : Convert.ToInt32(numberBox.Value);
+  }
+
+  private static long LongNumber(NumberBox numberBox, long fallback)
+  {
+    return double.IsNaN(numberBox.Value) ? fallback : Convert.ToInt64(numberBox.Value);
+  }
+
+  private static long? NullableLongNumber(NumberBox numberBox)
+  {
+    return double.IsNaN(numberBox.Value) || numberBox.Value < 0
+          ? null
+          : Convert.ToInt64(numberBox.Value);
+  }
+
+  private static string Selected(ComboBox comboBox, string fallback)
+  {
+    return comboBox.SelectedItem switch
+    {
+      ComboBoxItem { Tag: not null } item => item.Tag.ToString() ?? fallback,
+      ComboBoxItem { Content: not null } item => item.Content.ToString() ?? fallback,
+      string value when !string.IsNullOrWhiteSpace(value) => value,
+      _ when comboBox.SelectedValue is string value && !string.IsNullOrWhiteSpace(value) => value,
+      _ => fallback,
+    };
+  }
+
+  private static void SelectComboValue(ComboBox comboBox, string value)
+  {
+    foreach (object itemValue in comboBox.Items)
+    {
+      if (itemValue is not ComboBoxItem item)
+      {
+        continue;
+      }
+
+      string candidate = item.Tag?.ToString() ?? item.Content?.ToString() ?? string.Empty;
+      if (string.Equals(candidate, value, StringComparison.OrdinalIgnoreCase))
+      {
+        comboBox.SelectedItem = item;
+        return;
+      }
+    }
+  }
+
+  private static string QuickGoalLabel(string goal)
+  {
+    return goal switch
+    {
+      "stills" => "Still scenes",
+      "motion_ad" => "AnimateDiff motion",
+      "motion_svd" => "SVD image to video",
+      "full_video" => "Full-motion video",
+      _ => "Automatic internal",
+    };
+  }
+
+  private static string? EmptyToNull(string? value)
+  {
+    return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  }
+
+  private static string KindLabel(JsonValueKind kind)
+  {
+    return kind switch
+    {
+      JsonValueKind.Object => "object",
+      JsonValueKind.Array => "array",
+      _ => kind.ToString().ToLowerInvariant(),
+    };
+  }
+
+  private static string GetProjectAssetPath(JsonElement response, string assetKind, string fallbackFileName)
+  {
+    string folder = assetKind switch
+    {
+      "reference" => "refs",
+      "mask" => "masks",
+      "overlay" => "overlays",
+      _ => throw new InvalidOperationException($"Unsupported asset kind '{assetKind}'."),
+    };
+
+    string? assetName = response.TryGetProperty("asset", out JsonElement asset)
+        && asset.ValueKind == JsonValueKind.String
+            ? asset.GetString()
+            : null;
+    if (string.IsNullOrWhiteSpace(assetName)
+        && response.TryGetProperty("path", out JsonElement path)
+        && path.ValueKind == JsonValueKind.String)
+    {
+      assetName = Path.GetFileName(path.GetString()?.Replace('\\', '/'));
+    }
+
+    assetName = string.IsNullOrWhiteSpace(assetName)
+        ? Path.GetFileName(fallbackFileName)
+        : Path.GetFileName(assetName);
+    return $"assets/{folder}/{assetName}";
+  }
+
+  private static string ContentTypeFor(string extension)
+  {
+    return extension.ToLowerInvariant() switch
+    {
+      ".png" => "image/png",
+      ".jpg" or ".jpeg" => "image/jpeg",
+      ".webp" => "image/webp",
+      ".gif" => "image/gif",
+      ".bmp" => "image/bmp",
+      ".mp4" => "video/mp4",
+      ".webm" => "video/webm",
+      ".mov" => "video/quicktime",
+      _ => "application/octet-stream",
+    };
+  }
 }

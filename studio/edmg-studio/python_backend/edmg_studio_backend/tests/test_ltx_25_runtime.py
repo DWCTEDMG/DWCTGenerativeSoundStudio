@@ -127,7 +127,11 @@ def test_runtime_probe_requires_exact_qualified_version(monkeypatch) -> None:
 def test_generate_runs_isolated_cli_and_cleans_files(tmp_path: Path, monkeypatch) -> None:
     root = _package(tmp_path / "model")
     captured: dict = {}
-    monkeypatch.setattr(ltx, "validate_runtime_version", lambda: None)
+    monkeypatch.setattr(
+        ltx,
+        "validate_runtime_version",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime probe must not gate generation")),
+    )
 
     def fake_run(command, **kwargs):
         captured["command"] = command

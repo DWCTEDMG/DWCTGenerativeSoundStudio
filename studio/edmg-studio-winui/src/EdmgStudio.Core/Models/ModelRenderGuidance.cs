@@ -220,19 +220,6 @@ public static class ModelRenderGuidanceEvaluator
             blockers.Add($"not compatible with the selected {device} device.");
         }
 
-        if (installed && runtimeStatus is not null && !runtimeReady)
-        {
-            IReadOnlyList<string> runtimeBlockers = runtimeStatus.Blockers ?? [];
-            if (runtimeBlockers.Count == 0)
-            {
-                blockers.Add(runtimeStatus.Error ?? "Runtime qualification is incomplete.");
-            }
-            else
-            {
-                blockers.AddRange(runtimeBlockers);
-            }
-        }
-
         if (!installed
             && !string.IsNullOrWhiteSpace(entry.LicenseId)
             && !AcceptedLicense(catalogue, entry.LicenseId))
@@ -288,7 +275,6 @@ public static class ModelRenderGuidanceEvaluator
     {
         int rank = candidate.IsInstalled ? 0 : 100;
         rank += candidate.IsHardwareCompatible ? 0 : 40;
-        rank += candidate.IsRuntimeReady ? 0 : 60;
         rank += candidate.Lane.ToLowerInvariant() switch
         {
             "stable" => 0,

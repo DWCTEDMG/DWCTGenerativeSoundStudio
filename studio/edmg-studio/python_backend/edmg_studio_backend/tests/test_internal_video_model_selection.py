@@ -9,31 +9,19 @@ from edmg_studio_backend.errors import UserFacingError
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
-def test_ltx_selection_is_registered_but_never_bypasses_runtime_admission(tmp_path, monkeypatch):
-    installed = _install_lookup(tmp_path, monkeypatch)
-    installed[app_module.LTX_MODEL_ID] = tmp_path / "ltx"
-    monkeypatch.setattr(app_module, "_hardware_profile", lambda: {"backend": "cuda", "vram_gb": 80, "ram_gb": 128})
-    for engine in ("auto", "ltx_25"):
-        with pytest.raises(UserFacingError) as exc:
-            app_module._resolve_internal_video_model_selection(
-                {"video_model_engine": engine, "video_model_id": app_module.LTX_MODEL_ID}, base_model_family="sd15")
-        assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
-        assert "LTX-2.5" in exc.value.hint
-
-
-def test_qualified_ltx_selection_is_admitted(tmp_path, monkeypatch):
+def test_ltx_selection_bypasses_runtime_admission(tmp_path, monkeypatch):
     from edmg_studio_backend.services import engine_packages
 
     installed = _install_lookup(tmp_path, monkeypatch)
     ltx_path = tmp_path / "ltx"
     ltx_path.mkdir()
     installed[app_module.LTX_MODEL_ID] = ltx_path
-    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
-    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {
-        "runtime_ready": True,
-        "blockers": [],
-    })
     monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+    monkeypatch.setattr(
+        engine_packages,
+        "runtime_status",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime status must not gate selection")),
+    )
 
     assert app_module._resolve_internal_video_model_selection(
         {"video_model_engine": "ltx_25", "video_model_id": app_module.LTX_MODEL_ID},
@@ -42,11 +30,9 @@ def test_qualified_ltx_selection_is_admitted(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("vram_gb", [24.0, 48.0])
-def test_auto_selection_prefers_qualified_ltx_on_high_tier_hardware(
+def test_auto_selection_prefers_installed_ltx_on_high_tier_hardware(
     tmp_path, monkeypatch, vram_gb
 ):
-    from edmg_studio_backend.services import engine_packages
-
     installed = _install_lookup(tmp_path, monkeypatch)
     ltx_path = tmp_path / "ltx"
     ltx_path.mkdir()
@@ -56,12 +42,6 @@ def test_auto_selection_prefers_qualified_ltx_on_high_tier_hardware(
         "_hardware_profile",
         lambda: {"backend": "cuda", "vram_gb": vram_gb, "ram_gb": 128},
     )
-    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
-    monkeypatch.setattr(
-        engine_packages,
-        "runtime_status",
-        lambda *args, **kwargs: {"runtime_ready": True, "blockers": []},
-    )
     monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
 
     assert app_module._resolve_internal_video_model_selection(
@@ -69,37 +49,20 @@ def test_auto_selection_prefers_qualified_ltx_on_high_tier_hardware(
     ) == ("ltx_25", app_module.LTX_MODEL_ID, ltx_path)
 
 
-@pytest.mark.parametrize(
-    ("hardware", "runtime_ready"),
-    [
-        ({"backend": "cuda", "vram_gb": 23.9, "ram_gb": 128}, True),
-        ({"backend": "cpu", "vram_gb": 48, "ram_gb": 128}, True),
-        ({"backend": "cuda", "vram_gb": 48, "ram_gb": 128}, False),
-    ],
-)
-def test_auto_selection_skips_ltx_when_not_high_tier_qualified(
-    tmp_path, monkeypatch, hardware, runtime_ready
+def test_auto_selection_uses_installed_legacy_renderer_when_ltx_hardware_is_incompatible(
+    tmp_path, monkeypatch
 ):
-    from edmg_studio_backend.services import engine_packages
-
     installed = _install_lookup(tmp_path, monkeypatch)
-    ltx_path = tmp_path / "ltx"
-    ltx_path.mkdir()
-    installed[app_module.LTX_MODEL_ID] = ltx_path
-    monkeypatch.setattr(app_module, "_hardware_profile", lambda: hardware)
-    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
+    installed[app_module.LTX_MODEL_ID] = tmp_path / "ltx"
     monkeypatch.setattr(
-        engine_packages,
-        "runtime_status",
-        lambda *args, **kwargs: {"runtime_ready": runtime_ready, "blockers": ["not qualified"]},
+        app_module,
+        "_hardware_profile",
+        lambda: {"backend": "cpu", "vram_gb": 0, "ram_gb": 128},
     )
 
-    with pytest.raises(UserFacingError) as exc:
-        app_module._resolve_internal_video_model_selection(
-            {"video_model_engine": "auto"}, base_model_family="sd15"
-        )
-    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
-    assert "Level-5" in exc.value.message
+    assert app_module._resolve_internal_video_model_selection(
+        {"video_model_engine": "auto"}, base_model_family="sd15"
+    ) == ("svd", app_module.INTERNAL_SVD_VIDEO_MODEL_ID, installed[app_module.INTERNAL_SVD_VIDEO_MODEL_ID])
 
 
 def _write_svd_layout(path: Path) -> Path:
@@ -123,8 +86,8 @@ def _write_animatediff_layout(path: Path) -> Path:
 
 def _write_hunyuan_layout(path: Path) -> Path:
     path.mkdir(parents=True)
-    (path / "model_index.json").write_text(
-        '{"_class_name": "HunyuanVideo15Pipeline"}',
+    (path / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}',
         encoding="utf-8",
     )
     return path
@@ -168,20 +131,20 @@ def test_explicit_engine_model_mismatch_is_rejected_before_render(
     assert str(tmp_path) not in (exc.value.hint or "")
 
 
-def test_auto_engine_rejects_selected_unqualified_renderer(tmp_path: Path, monkeypatch) -> None:
-    _install_lookup(tmp_path, monkeypatch)
+def test_auto_engine_admits_selected_installed_renderer(tmp_path: Path, monkeypatch) -> None:
+    installed = _install_lookup(tmp_path, monkeypatch)
 
-    with pytest.raises(UserFacingError) as exc:
-        app_module._resolve_internal_video_model_selection(
-            {
-                "video_model_engine": "auto",
-                "video_model_id": app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
-            },
-            base_model_family="sd15",
-        )
-
-    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
-    assert "Level-5" in exc.value.message
+    assert app_module._resolve_internal_video_model_selection(
+        {
+            "video_model_engine": "auto",
+            "video_model_id": app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
+        },
+        base_model_family="sd15",
+    ) == (
+        "animatediff",
+        app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
+        installed[app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID],
+    )
 
 
 def test_arbitrary_installed_model_cannot_enter_video_model_lane(tmp_path: Path, monkeypatch) -> None:
@@ -214,31 +177,7 @@ def test_invalid_selected_model_layout_fails_preflight(tmp_path: Path, monkeypat
     assert exc.value.code == "INTERNAL_VIDEO_MODEL_LAYOUT_INVALID"
 
 
-def test_hunyuan_selection_is_blocked_until_renderer_admission_is_qualified(
-    tmp_path: Path, monkeypatch
-) -> None:
-    hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
-    installed = {
-        app_module.INTERNAL_SVD_VIDEO_MODEL_ID: None,
-        app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID: None,
-        app_module.HUNYUAN_MODEL_ID: hunyuan,
-    }
-    monkeypatch.setattr(app_module.models, "installed_path", installed.get)
-
-    with pytest.raises(UserFacingError) as exc:
-        app_module._resolve_internal_video_model_selection(
-            {
-                "video_model_engine": "hunyuan_video15",
-                "video_model_id": app_module.HUNYUAN_MODEL_ID,
-            },
-            base_model_family="sd15",
-        )
-
-    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
-    assert "runtime qualification failed" in (exc.value.hint or "")
-
-
-def test_qualified_hunyuan_selection_is_admitted(tmp_path: Path, monkeypatch) -> None:
+def test_hunyuan_selection_bypasses_runtime_admission(tmp_path: Path, monkeypatch) -> None:
     from edmg_studio_backend.services import engine_packages
 
     hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
@@ -248,12 +187,11 @@ def test_qualified_hunyuan_selection_is_admitted(tmp_path: Path, monkeypatch) ->
         app_module.HUNYUAN_MODEL_ID: hunyuan,
     }
     monkeypatch.setattr(app_module.models, "installed_path", installed.get)
-    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
-    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {
-        "runtime_ready": True,
-        "blockers": [],
-    })
-    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+    monkeypatch.setattr(
+        engine_packages,
+        "runtime_status",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime status must not gate selection")),
+    )
 
     assert app_module._resolve_internal_video_model_selection(
         {
@@ -264,36 +202,20 @@ def test_qualified_hunyuan_selection_is_admitted(tmp_path: Path, monkeypatch) ->
     ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
 
 
-def test_auto_selection_uses_qualified_hunyuan_when_ltx_is_unavailable(tmp_path, monkeypatch):
-    from edmg_studio_backend.services import engine_packages
-
+def test_auto_selection_uses_installed_hunyuan_when_ltx_is_unavailable(tmp_path, monkeypatch):
     installed = _install_lookup(tmp_path, monkeypatch)
     hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
     installed[app_module.HUNYUAN_MODEL_ID] = hunyuan
     installed[app_module.LTX_MODEL_ID] = None
-    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
-    monkeypatch.setattr(engine_packages, "runtime_status", lambda model_id, *args, **kwargs: {
-        "runtime_ready": model_id == app_module.HUNYUAN_MODEL_ID, "blockers": []})
-    monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+    monkeypatch.setattr(
+        app_module,
+        "_hardware_profile",
+        lambda: {"backend": "cuda", "vram_gb": 48, "ram_gb": 128},
+    )
 
     assert app_module._resolve_internal_video_model_selection(
         {"video_model_engine": "auto"}, base_model_family="sd15"
     ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
-
-
-def test_auto_selection_reports_no_ready_renderer_even_with_legacy_models(tmp_path, monkeypatch):
-    from edmg_studio_backend.services import engine_packages
-
-    installed = _install_lookup(tmp_path, monkeypatch)
-    installed[app_module.HUNYUAN_MODEL_ID] = _write_hunyuan_layout(tmp_path / "hunyuan")
-    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {"valid": True})
-    monkeypatch.setattr(engine_packages, "runtime_status", lambda *args, **kwargs: {
-        "runtime_ready": False, "blockers": ["not qualified"]})
-    with pytest.raises(UserFacingError) as exc:
-        app_module._resolve_internal_video_model_selection(
-            {"video_model_engine": "auto"}, base_model_family="sd15")
-    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
-    assert "No installed" in exc.value.message
 
 
 @pytest.mark.parametrize(("vram_gb", "chunk_frames"), [(6.0, 8), (8.0, 12)])

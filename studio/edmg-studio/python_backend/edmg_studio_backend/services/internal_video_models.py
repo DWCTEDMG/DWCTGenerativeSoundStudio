@@ -610,12 +610,6 @@ def _run_hunyuan(
     seed: int, device: str, dtype: str, cpu_offload: bool,
     cancel_check: Callable[[], Any] | None, workspace: Path,
 ) -> list[Any]:
-    issues = validate_hunyuan_runner()
-    if issues:
-        raise UserFacingError(
-            "HunyuanVideo-1.5 Linux runtime is not configured",
-            hint="; ".join(issues), code="INTERNAL_VIDEO_MODEL_DEPS", status_code=422,
-        )
     config = hunyuan_runner_config()
     if not str(device).lower().startswith("cuda"):
         raise UserFacingError(
@@ -639,6 +633,9 @@ def _run_hunyuan(
     output_path = work / "output.mp4"
     image_path = work / "input.png"
     pid_path = work / "worker.pid"
+    stdout_path = work / "worker.stdout.log"
+    stderr_path = work / "worker.stderr.log"
+    succeeded = False
     try:
         if init_image is not None:
             init_image.convert("RGB").resize((int(width), int(height))).save(image_path)
@@ -672,34 +669,44 @@ def _run_hunyuan(
         child_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         child_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
         child_env["PYTHONPATH"] = python_path
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                start_new_session=config.mode == "external", env=child_env)
-        started = time.monotonic()
-        while True:
-            try:
-                if cancel_check and cancel_check():
-                    raise RuntimeError("HunyuanVideo-1.5 generation was cancelled")
-                remaining = config.timeout_s - (time.monotonic() - started)
-                if remaining <= 0:
-                    raise TimeoutError(f"Hunyuan generation exceeded {config.timeout_s:g} seconds")
-                stdout, stderr = proc.communicate(timeout=min(0.25, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                continue
-            except BaseException:
-                _stop_hunyuan_process(proc, config, pid_path)
-                raise
+        with stdout_path.open("w", encoding="utf-8") as stdout_log, \
+                stderr_path.open("w", encoding="utf-8") as stderr_log:
+            proc = subprocess.Popen(command, stdout=stdout_log, stderr=stderr_log, text=True,
+                                    start_new_session=config.mode == "external", env=child_env)
+            started = time.monotonic()
+            while True:
+                try:
+                    if cancel_check and cancel_check():
+                        raise RuntimeError("HunyuanVideo-1.5 generation was cancelled")
+                    remaining = config.timeout_s - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise TimeoutError(f"Hunyuan generation exceeded {config.timeout_s:g} seconds")
+                    proc.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+                except BaseException:
+                    _stop_hunyuan_process(proc, config, pid_path)
+                    raise
+        stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+        stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
         if proc.returncode:
             detail = (stderr or stdout or "worker exited without diagnostics").strip()[-4000:]
-            raise RuntimeError(f"HunyuanVideo-1.5 Linux worker failed ({proc.returncode}): {detail}")
+            raise RuntimeError(
+                f"HunyuanVideo-1.5 Linux worker failed ({proc.returncode}); complete diagnostics: {work}: {detail}"
+            )
         if not output_path.is_file() or output_path.stat().st_size <= 0:
-            raise RuntimeError("HunyuanVideo-1.5 worker did not produce a non-empty MP4")
+            raise RuntimeError(f"HunyuanVideo-1.5 worker did not produce a non-empty MP4; diagnostics: {work}")
         frames = _decode_video(output_path, width=width, height=height)
         if len(frames) != int(num_frames):
-            raise RuntimeError(f"HunyuanVideo-1.5 MP4 has {len(frames)} frames; expected {int(num_frames)}")
+            raise RuntimeError(
+                f"HunyuanVideo-1.5 MP4 has {len(frames)} frames; expected {int(num_frames)}; diagnostics: {work}"
+            )
+        succeeded = True
         return frames
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        if succeeded:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def generate_video_model_frames(

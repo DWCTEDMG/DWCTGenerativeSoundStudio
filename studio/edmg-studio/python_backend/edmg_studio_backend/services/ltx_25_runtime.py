@@ -283,7 +283,6 @@ def generate_ltx_frames(
     cpu_offload: bool = False, fp8: bool = False, timeout_s: float | None = None,
     cancel_check: Callable[[], Any] | None = None,
 ) -> list[Any]:
-    validate_runtime_version()
     workspace.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     output_path = workspace / f"ltx25-{token}.mp4"

@@ -868,10 +868,11 @@ def _render_capability_evidence(preflight: dict[str, Any]) -> dict[str, Any]:
                 package_validation=validate_package(Path(package_root), MANIFESTS[model_id]),
             )
             level = int(status.get("validation_level") or 0)
-            blockers.extend(str(value) for value in list(status.get("blockers") or []))
+            warnings.extend(str(value) for value in list(status.get("blockers") or []))
             if level == 5 and status.get("runtime_ready"):
                 receipt = "runtime-validation.json"
     blockers = list(dict.fromkeys(blockers))
+    warnings = list(dict.fromkeys(warnings))
     return {
         "ready": not blockers,
         "route": mode,
@@ -10027,31 +10028,34 @@ def _resolve_internal_video_model_selection(
         path = installed[requested_model_id]
         engine = requested_engine
     else:
-        from .services.engine_packages import MANIFESTS, runtime_status, validate_package
-
         hardware = _hardware_profile()
         selected = None
-        for model_id in (LTX_MODEL_ID, HUNYUAN_MODEL_ID):
-            if model_id == LTX_MODEL_ID and (
-                str(hardware.get("backend") or "").lower() != "cuda"
-                or float(hardware.get("vram_gb") or 0) < 24.0
-            ):
+        preferred_models = (LTX_MODEL_ID, HUNYUAN_MODEL_ID,
+                            INTERNAL_SVD_VIDEO_MODEL_ID, INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
+        for model_id in preferred_models:
+            if model_id in {LTX_MODEL_ID, HUNYUAN_MODEL_ID} and str(
+                hardware.get("backend") or ""
+            ).lower() != "cuda":
+                continue
+            if model_id == LTX_MODEL_ID and float(hardware.get("vram_gb") or 0) < 24.0:
                 continue
             candidate = installed[model_id]
             if not candidate:
                 continue
             resolved_candidate = Path(candidate)
-            package_validation = validate_package(resolved_candidate, MANIFESTS[model_id])
-            status = runtime_status(model_id, hardware, package_root=resolved_candidate,
-                                    package_validation=package_validation)
-            if status["runtime_ready"]:
-                selected = (INTERNAL_VIDEO_MODEL_ENGINES[model_id], model_id, candidate)
-                break
+            try:
+                internal_video_models.validate_video_model_layout(
+                    INTERNAL_VIDEO_MODEL_ENGINES[model_id], resolved_candidate
+                )
+            except UserFacingError:
+                continue
+            selected = (INTERNAL_VIDEO_MODEL_ENGINES[model_id], model_id, candidate)
+            break
         if selected is None:
             raise UserFacingError(
-                "No installed internal video renderer is Level-5 qualified",
-                hint="Open Models, install HunyuanVideo-1.5 or LTX-2.5 Distilled, and complete its real-inference smoke test.",
-                code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
+                "No compatible internal video renderer is installed",
+                hint="Open Models and install a compatible internal video model.",
+                code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED", status_code=422)
         engine, requested_model_id, path = selected
 
     if not path:
@@ -10061,27 +10065,9 @@ def _resolve_internal_video_model_selection(
             code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED", status_code=400)
 
     resolved_path = Path(path)
-    if engine in {"svd", "animatediff"}:
-        internal_video_models.validate_video_model_layout(engine, resolved_path)
-        raise UserFacingError(
-            "Selected internal video renderer is not Level-5 qualified",
-            hint=f"{engine} is installed but has no canonical real-inference smoke adapter and matching receipt. Use a Level-5-qualified HunyuanVideo-1.5 or LTX-2.5 package after completing its smoke test.",
-            code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
-    if engine in {"hunyuan_video15", "ltx_25"}:
-        from .services.engine_packages import MANIFESTS, runtime_status, validate_package
+    internal_video_models.validate_video_model_layout(engine, resolved_path)
 
-        package_validation = validate_package(resolved_path, MANIFESTS[requested_model_id])
-        status = runtime_status(requested_model_id, _hardware_profile(), package_root=resolved_path,
-                                package_validation=package_validation)
-        if not status["runtime_ready"]:
-            label = "HunyuanVideo-1.5" if engine == "hunyuan_video15" else "LTX-2.5"
-            raise UserFacingError(
-                "Selected engine package is not ready for local rendering",
-                hint=f"{label} runtime qualification failed. " + " ".join(status["blockers"]),
-                code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
-        internal_video_models.validate_video_model_layout(engine, resolved_path)
-
-    if engine == "animatediff" and str(base_model_family or "").lower() != "sd15":
+    if engine == "animatediff" and base_model_family != "sd15":
         raise UserFacingError(
             "AnimateDiff internal motion needs an SD 1.5 internal base model",
             hint="Switch Internal model to Stable Diffusion v1.5, or use SVD internal video model with SDXL/SD3 keyframes.",

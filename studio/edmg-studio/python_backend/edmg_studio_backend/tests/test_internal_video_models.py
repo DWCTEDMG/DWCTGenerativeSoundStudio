@@ -207,7 +207,11 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(ivm, "validate_hunyuan_runner", lambda: [])
+    monkeypatch.setattr(
+        ivm,
+        "validate_hunyuan_runner",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime probe must not gate generation")),
+    )
     monkeypatch.setattr(ivm, "_wsl_path", lambda path, _config: "/mnt/c/" + Path(path).name)
     monkeypatch.setattr(ivm, "_decode_video", lambda *_args, **_kwargs: [Image.new("RGB", (32, 32))] * 5)
     calls = []
@@ -237,6 +241,54 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
     assert any(value.startswith("PYTHONPATH=/mnt/c/HunyuanVideo-1.5:/mnt/c/python_backend") for value in command)
     assert len(frames) == 2
     assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "2"
+    assert not (tmp_path / ".hunyuan-runs" / "run").exists()
+
+
+def test_hunyuan_worker_failure_preserves_complete_diagnostics(tmp_path: Path, monkeypatch) -> None:
+    model_dir = tmp_path / "hunyuan"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}', encoding="utf-8"
+    )
+    env = {
+        "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
+        "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
+        "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        ivm,
+        "validate_hunyuan_runner",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime probe must not gate generation")),
+    )
+    monkeypatch.setattr(ivm, "_wsl_path", lambda path, _config: "/mnt/c/" + Path(path).name)
+
+    class Proc:
+        returncode = 1
+        def __init__(self, _command, **kwargs):
+            kwargs["stdout"].write("worker output\n")
+            kwargs["stdout"].flush()
+            kwargs["stderr"].write("terminal failure\n")
+            kwargs["stderr"].flush()
+        def communicate(self, timeout=None): return (None, None)
+
+    monkeypatch.setattr(ivm.uuid, "uuid4", lambda: SimpleNamespace(hex="failed-run"))
+    monkeypatch.setattr(ivm.subprocess, "Popen", Proc)
+
+    with pytest.raises(RuntimeError, match="complete diagnostics") as exc:
+        ivm.generate_video_model_frames(
+            engine="hunyuan_video15", video_model_dir=model_dir, base_model_dir=tmp_path,
+            init_image=None, prompt="p", negative_prompt="n", width=32, height=32,
+            num_frames=2, fps=24, steps=3, cfg=4.0, seed=7, device="cuda:0", workspace=tmp_path,
+        )
+
+    failed_run = tmp_path / ".hunyuan-runs" / "failed-run"
+    assert str(failed_run) in str(exc.value)
+    assert (failed_run / "request.json").is_file()
+    assert (failed_run / "worker.stdout.log").read_text(encoding="utf-8") == "worker output\n"
+    assert (failed_run / "worker.stderr.log").read_text(encoding="utf-8") == "terminal failure\n"
 
 
 def test_hunyuan_runner_fails_closed_without_explicit_configuration(monkeypatch) -> None:

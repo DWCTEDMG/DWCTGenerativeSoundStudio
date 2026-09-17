@@ -161,15 +161,22 @@ def test_duplicate_and_unknown_adapters_are_rejected(tmp_path):
         subject.status("unknown")
 
 
-def test_hunyuan_adapter_is_implemented_but_fails_closed_without_runner(tmp_path, monkeypatch):
+def test_hunyuan_adapter_validates_model_files_without_requiring_runner(tmp_path, monkeypatch):
     for name in ("RUNNER", "PYTHON", "REPO", "LLM_PATH", "BYT5_PATH", "GLYPH_PATH", "VISION_PATH"):
         monkeypatch.delenv(f"EDMG_HUNYUAN15_{name}", raising=False)
+    monkeypatch.setattr(
+        "edmg_studio_backend.services.internal_video_models.validate_hunyuan_runner",
+        lambda **_kwargs: pytest.fail("runtime probe must not run during package validation"),
+    )
     adapter = DEFAULT_RUNTIME_REGISTRY.adapter("hf_hunyuan_video15_internal")
     assert adapter.descriptor.adapter_ready
     assert adapter.descriptor.smoke_test_supported
     assert adapter.smoke_test is not None
     assert adapter.descriptor.dependency_modules == ()
-    assert any("EDMG_HUNYUAN15_RUNNER" in issue for issue in adapter.validate_config(tmp_path))
+    issues = adapter.validate_config(tmp_path)
+    assert issues
+    assert not any("EDMG_HUNYUAN15_RUNNER" in issue for issue in issues)
+    assert any("missing" in issue.lower() for issue in issues)
 
 
 def test_hunyuan_wsl_uses_driver_visible_cuda_without_promoting_native_runtimes(monkeypatch):

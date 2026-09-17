@@ -178,8 +178,6 @@ def _validate_hunyuan(root: Path) -> list[str]:
     missing = [name for name in required if not (root / name).is_file()]
     if missing:
         issues.append("Required managed Hunyuan components are missing: " + ", ".join(missing))
-    from .internal_video_models import validate_hunyuan_runner
-    issues.extend(validate_hunyuan_runner())
     return issues
 
 
@@ -215,15 +213,7 @@ def _validate_ltx(root: Path) -> list[str]:
         "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
     )
     missing = [name for name in required if not (root / name).is_file()]
-    issues = (["Required LTX-2.5 components are missing: " + ", ".join(missing)] if missing else [])
-    if not issues:
-        try:
-            from .ltx_25_runtime import validate_runtime_version
-
-            validate_runtime_version()
-        except Exception as exc:
-            issues.append(str(exc))
-    return issues
+    return ["Required LTX-2.5 components are missing: " + ", ".join(missing)] if missing else []
 
 
 def _smoke_test_ltx_25(
