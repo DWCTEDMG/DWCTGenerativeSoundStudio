@@ -9,7 +9,7 @@ from edmg_studio_backend.errors import UserFacingError
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
-def test_ltx_selection_bypasses_runtime_admission(tmp_path, monkeypatch):
+def test_ltx_selection_requires_runtime_admission(tmp_path, monkeypatch):
     from edmg_studio_backend.services import engine_packages
 
     installed = _install_lookup(tmp_path, monkeypatch)
@@ -17,10 +17,11 @@ def test_ltx_selection_bypasses_runtime_admission(tmp_path, monkeypatch):
     ltx_path.mkdir()
     installed[app_module.LTX_MODEL_ID] = ltx_path
     monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         engine_packages,
         "runtime_status",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime status must not gate selection")),
+        lambda *args, **kwargs: {"runtime_ready": True, "blockers": []},
     )
 
     assert app_module._resolve_internal_video_model_selection(
@@ -43,6 +44,7 @@ def test_auto_selection_prefers_installed_ltx_on_high_tier_hardware(
         lambda: {"backend": "cuda", "vram_gb": vram_gb, "ram_gb": 128},
     )
     monkeypatch.setattr(app_module.internal_video_models, "validate_video_model_layout", lambda *args: None)
+    _mark_managed_runtime_ready(monkeypatch)
 
     assert app_module._resolve_internal_video_model_selection(
         {"video_model_engine": "auto"}, base_model_family="sd15"
@@ -177,7 +179,7 @@ def test_invalid_selected_model_layout_fails_preflight(tmp_path: Path, monkeypat
     assert exc.value.code == "INTERNAL_VIDEO_MODEL_LAYOUT_INVALID"
 
 
-def test_hunyuan_selection_bypasses_runtime_admission(tmp_path: Path, monkeypatch) -> None:
+def test_hunyuan_selection_requires_runtime_admission(tmp_path: Path, monkeypatch) -> None:
     from edmg_studio_backend.services import engine_packages
 
     hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
@@ -187,10 +189,11 @@ def test_hunyuan_selection_bypasses_runtime_admission(tmp_path: Path, monkeypatc
         app_module.HUNYUAN_MODEL_ID: hunyuan,
     }
     monkeypatch.setattr(app_module.models, "installed_path", installed.get)
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         engine_packages,
         "runtime_status",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime status must not gate selection")),
+        lambda *args, **kwargs: {"runtime_ready": True, "blockers": []},
     )
 
     assert app_module._resolve_internal_video_model_selection(
@@ -212,10 +215,22 @@ def test_auto_selection_uses_installed_hunyuan_when_ltx_is_unavailable(tmp_path,
         "_hardware_profile",
         lambda: {"backend": "cuda", "vram_gb": 48, "ram_gb": 128},
     )
+    _mark_managed_runtime_ready(monkeypatch)
 
     assert app_module._resolve_internal_video_model_selection(
         {"video_model_engine": "auto"}, base_model_family="sd15"
     ) == ("hunyuan_video15", app_module.HUNYUAN_MODEL_ID, hunyuan)
+
+
+def _mark_managed_runtime_ready(monkeypatch) -> None:
+    from edmg_studio_backend.services import engine_packages
+
+    monkeypatch.setattr(engine_packages, "validate_package", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        engine_packages,
+        "runtime_status",
+        lambda *args, **kwargs: {"runtime_ready": True, "blockers": []},
+    )
 
 
 @pytest.mark.parametrize(("vram_gb", "chunk_frames"), [(6.0, 8), (8.0, 12)])

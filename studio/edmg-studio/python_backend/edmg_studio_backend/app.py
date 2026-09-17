@@ -896,6 +896,25 @@ def _public_render_preflight(preflight: dict[str, Any]) -> dict[str, Any]:
     return sanitized if isinstance(sanitized, dict) else {}
 
 
+def _internal_video_runtime_ready(model_id: str, package_root: Path) -> tuple[bool, str]:
+    """Require a matching real-inference receipt for managed video engines."""
+
+    if model_id not in {HUNYUAN_MODEL_ID, LTX_MODEL_ID}:
+        return True, ""
+    from .services.engine_packages import MANIFESTS, runtime_status, validate_package
+
+    status = runtime_status(
+        model_id,
+        _hardware_profile(),
+        package_root=package_root,
+        package_validation=validate_package(package_root, MANIFESTS[model_id]),
+    )
+    if status.get("runtime_ready"):
+        return True, ""
+    reasons = [str(value) for value in list(status.get("blockers") or [])]
+    return False, "; ".join(reasons) or "A matching real-inference runtime receipt is required."
+
+
 def _project_variant_for_render(proj: Any, variant_index: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     plan = proj.meta.get("last_plan") if isinstance(getattr(proj, "meta", None), dict) else {}
     variants = plan.get("variants") if isinstance(plan, dict) and isinstance(plan.get("variants"), list) else []
@@ -10062,6 +10081,9 @@ def _resolve_internal_video_model_selection(
                 )
             except UserFacingError:
                 continue
+            runtime_ready, _ = _internal_video_runtime_ready(model_id, resolved_candidate)
+            if not runtime_ready:
+                continue
             selected = (INTERNAL_VIDEO_MODEL_ENGINES[model_id], model_id, candidate)
             break
         if selected is None:
@@ -10079,6 +10101,14 @@ def _resolve_internal_video_model_selection(
 
     resolved_path = Path(path)
     internal_video_models.validate_video_model_layout(engine, resolved_path)
+    runtime_ready, runtime_reason = _internal_video_runtime_ready(requested_model_id, resolved_path)
+    if not runtime_ready:
+        raise UserFacingError(
+            "The selected internal video runtime is not qualified",
+            hint=runtime_reason,
+            code="INTERNAL_VIDEO_MODEL_RUNTIME_UNAVAILABLE",
+            status_code=422,
+        )
 
     if engine == "animatediff" and base_model_family != "sd15":
         raise UserFacingError(

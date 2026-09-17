@@ -220,6 +220,14 @@ public static class ModelRenderGuidanceEvaluator
             blockers.Add($"not compatible with the selected {device} device.");
         }
 
+        if (installed
+            && !runtimeReady
+            && (string.Equals(engine, "ltx_25", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(engine, "hunyuan_video15", StringComparison.OrdinalIgnoreCase)))
+        {
+            blockers.Add("runtime qualification is required before this video model can render.");
+        }
+
         if (!installed
             && !string.IsNullOrWhiteSpace(entry.LicenseId)
             && !AcceptedLicense(catalogue, entry.LicenseId))

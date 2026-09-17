@@ -1364,6 +1364,39 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
         <div className="workspace-mainStack">
           <div className="card workspace-featureCard">
+            <div className="workspace-sectionHead">
+              <div>
+                <div className="workspace-sectionTitle">Make this</div>
+                <div className="small">
+                  One shared creative pass from the selected audio and storyboard to direction, model choice, prompts, review, and render handoff. Open the specialist rooms whenever you want to edit one part by hand.
+                </div>
+                <div className="row workspace-actionRow" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                  <button type="button" onClick={runAnalysis} disabled={!projectId}>{analysisActionLabel}</button>
+                  <button type="button" className="secondary" onClick={generatePlan} disabled={!projectId || !analysisReady}>Generate plan</button>
+                  <button type="button" className="secondary" onClick={() => onNavigate?.("render")} disabled={!projectId || !storyboardReady}>Render selected plan</button>
+                </div>
+              </div>
+              <div className="workspace-chipRow">
+                <span className="badge">Audio</span>
+                <span className="badge">Story</span>
+                <span className="badge">Visual direction</span>
+                <span className="badge">Renderer</span>
+              </div>
+            </div>
+            <DirectorWorkspacePanel
+              backendUrl={backendUrl}
+              projectId={projectId}
+              project={project}
+              analysis={analysis}
+              plan={plan}
+              selectedVariant={selectedVariant}
+              onRefreshProject={refreshProject}
+              onNavigate={onNavigate}
+              onMutationError={reportMutationError}
+            />
+          </div>
+
+          <div className="card workspace-featureCard">
             <CreativeDirectionPanel
               projectId={projectId}
               analysis={analysis}

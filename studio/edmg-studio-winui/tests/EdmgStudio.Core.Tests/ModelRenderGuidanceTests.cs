@@ -150,7 +150,7 @@ public sealed class ModelRenderGuidanceTests
     }
 
     [TestMethod]
-    public void Evaluate_LtxRuntimeQualificationIsInformationalOnly()
+    public void Evaluate_LtxRuntimeQualificationBlocksRenderUntilReady()
     {
         ModelCatalogueEntry ltx = Entry("ltx", "LTX", "video_diffusers", true, "ltx", ["nvidia"],
             Render("internal_video_model", ["internal_video_model"], "ltx_25"));
@@ -162,9 +162,9 @@ public sealed class ModelRenderGuidanceTests
 
         ModelRenderGuidance unqualified = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
             Config(modelId: "sd15", videoModelId: "ltx", device: "cuda", temporalMode: "video_model", videoEngine: "ltx_25"));
-        Assert.IsTrue(unqualified.IsReady);
+        Assert.IsFalse(unqualified.IsReady);
         Assert.IsFalse(unqualified.Video?.IsRuntimeReady);
-        Assert.IsFalse(string.Join(" ", unqualified.Blockers).Contains("smoke test", StringComparison.OrdinalIgnoreCase));
+        Assert.IsTrue(string.Join(" ", unqualified.Blockers).Contains("runtime qualification", StringComparison.OrdinalIgnoreCase));
 
         ltx.PackageStatus = RuntimeStatus(ready: true);
         ModelRenderGuidance qualified = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
