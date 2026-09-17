@@ -765,6 +765,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         _projectResponse = project;
         PopulateProject();
+        RestoreCommand(project.Project);
         await RefreshMediaPoolAsync(projectId, cancellationToken);
         await LoadWorkflowAsync(projectId, cancellationToken);
         await LoadDirectorAsync(projectId, cancellationToken);

@@ -144,6 +144,9 @@ class ProjectRenderProfileRequest(BaseModel):
 
 
 class PlanRequest(BaseModel):
+    provider: Literal["configured", "ollama", "openai_compat", "nemotron_cloud", "local"] = "configured"
+    model: str | None = None
+    native_audio: bool = False
     expected_revision: int | None = Field(default=None, ge=1)
     title: str | None = None
     user_notes: str | None = None

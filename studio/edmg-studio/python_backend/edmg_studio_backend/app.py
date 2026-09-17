@@ -6917,11 +6917,20 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
     plan = None
     if mode_norm in ("ai", "auto"):
         try:
-            plan = ai.plan(payload)
+            if req.provider != "configured" or req.model or req.native_audio:
+                from .services.workspace_planning import plan_with_provider
+                audio_path = _project_audio_path(proj) if req.native_audio else None
+                if req.native_audio and audio_path is None:
+                    raise ValueError("Upload project audio before requesting direct audio planning.")
+                plan = plan_with_provider(payload, provider=req.provider, model=req.model, audio_path=audio_path)
+            else:
+                plan = ai.plan(payload)
+            if mode_norm == "ai" and isinstance(plan, dict) and plan.get("provider") == "rule_based":
+                raise RuntimeError("The selected AI provider returned a local fallback instead of an AI plan.")
             if isinstance(plan, dict):
                 plan.setdefault("source", "ai")
         except Exception as e:
-            if mode_norm == "ai":
+            if mode_norm == "ai" or req.provider != "configured" or req.native_audio or req.model:
                 # strict AI mode
                 raise UserFacingError(
                     message="The configured planning/transcription provider is not available.",
@@ -6956,6 +6965,10 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
         plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
 
     proj.meta["last_plan"] = plan
+    proj.meta["workspace_command"] = {
+        "brief": req.user_notes or "", "style": req.style_prefs or "",
+        "provider": req.provider, "model": req.model or "", "native_audio": req.native_audio,
+    }
     attach_schedule_drafts(proj, resulting_revision=proj.revision + 1)
     store.save(proj)
     return plan

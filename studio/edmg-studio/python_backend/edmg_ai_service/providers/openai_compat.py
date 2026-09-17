@@ -92,6 +92,14 @@ class OpenAICompatPlanner(PlanProvider):
             "temperature": 0.7,
         }
 
+        if req.input_audio:
+            message = payload["messages"][1]
+            message["content"] = [
+                {"type": "text", "text": message["content"]},
+                {"type": "input_audio", "input_audio": req.input_audio},
+            ]
+            payload["modalities"] = ["text"]
+
         try:
             r = requests.post(
                 f"{self._base_url}/v1/chat/completions",

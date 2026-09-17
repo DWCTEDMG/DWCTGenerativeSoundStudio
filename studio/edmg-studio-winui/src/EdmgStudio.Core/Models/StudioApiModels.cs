@@ -192,7 +192,10 @@ public sealed record PlanRequest(
     [property: JsonPropertyName("max_scenes")] int MaximumScenes = 12,
     [property: JsonPropertyName("expected_revision")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    long? ExpectedRevision = null);
+    long? ExpectedRevision = null,
+    [property: JsonPropertyName("provider")] string Provider = "configured",
+    [property: JsonPropertyName("model")] string? Model = null,
+    [property: JsonPropertyName("native_audio")] bool NativeAudio = false);
 
 public sealed class AnalysisResponse
 {

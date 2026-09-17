@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class PlanRequest(BaseModel):
+    input_audio: dict[str, str] | None = Field(default=None, exclude=True)
     title: str | None = None
     user_notes: str | None = None
 

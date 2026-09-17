@@ -134,11 +134,44 @@
                             </StackPanel>
                         </Border>
 
+                        <StackPanel Spacing="12" Padding="20,8">
+                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Create" />
+                            <TextBox x:Name="CommandBrief" Header="Creative brief" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80" AutomationProperties.AutomationId="Workspace.Command.Brief" />
+                            <TextBox x:Name="CommandStyle" Header="Visual style" AutomationProperties.AutomationId="Workspace.Command.Style" />
+                            <ComboBox x:Name="CommandProvider" Header="Creative model provider" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                <ComboBoxItem Content="Configured provider" Tag="configured" />
+                                <ComboBoxItem Content="Qwen / other model through Ollama" Tag="ollama" />
+                                <ComboBoxItem Content="OpenAI-compatible endpoint" Tag="openai_compat" />
+                                <ComboBoxItem Content="NVIDIA NIM" Tag="nemotron_cloud" />
+                                <ComboBoxItem Content="Manual / local planning" Tag="local" />
+                            </ComboBox>
+                            <TextBox x:Name="CommandModel" Header="Model" PlaceholderText="Configured model" />
+                            <CheckBox x:Name="CommandNativeAudio" Content="Send track to selected audio-capable model" />
+                            <ComboBox x:Name="CommandRenderer" Header="Video renderer" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                <ComboBoxItem Content="Automatic" Tag="auto" />
+                                <ComboBoxItem Content="LTX-2.5" Tag="ltx_25" />
+                                <ComboBoxItem Content="HunyuanVideo-1.5" Tag="hunyuan_video15" />
+                                <ComboBoxItem Content="AnimateDiff" Tag="animatediff" />
+                                <ComboBoxItem Content="Stable Video Diffusion" Tag="svd" />
+                            </ComboBox>
+                            <TextBlock Text="{Binding Text, ElementName=PendingAudioText}" TextWrapping="Wrap" />
+                            <TextBlock x:Name="CommandStatus" Text="Ready" TextWrapping="Wrap" AutomationProperties.AutomationId="Workspace.Command.Status" />
+                            <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Stretch">
+                                <AppBarButton Icon="Audio" Label="Choose audio" Click="ChooseAudioButton_Click" />
+                                <AppBarButton x:Name="MakeCommandButton" Icon="Play" Label="Make this" Click="MakeCommand_Click" AutomationProperties.AutomationId="Workspace.Command.Make" />
+                                <AppBarButton Icon="Cancel" Label="Cancel" Click="CancelCommand_Click" />
+                                <AppBarButton Icon="Forward" Label="Apply and open Render" Click="CommandRender_Click" />
+                                <CommandBar.SecondaryCommands>
+                                    <AppBarButton Label="Director" Click="OpenFullDirectorButton_Click" />
+                                </CommandBar.SecondaryCommands>
+                            </CommandBar>
+                        </StackPanel>
+
                         <Expander
                             x:Name="AudioAnalysisExpander"
                             AutomationProperties.AutomationId="Workspace.AudioAnalysis"
                             Header="Audio and analysis"
-                            IsExpanded="True">
+                            IsExpanded="False">
                             <Border Margin="0,8,0,0" Style="{StaticResource WorkspaceCardStyle}">
                                 <StackPanel Spacing="14">
                                     <TextBlock
@@ -203,6 +236,14 @@
                                         MaxHeight="220"
                                         AutomationProperties.AutomationId="Workspace.Analysis.Sections"
                                         SelectionMode="None">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                    <TextBlock Text="{Binding TimeRange}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
                                         <ListView.Header>
                                             <TextBlock Margin="12,8" FontWeight="SemiBold" Text="Detected sections" />
                                         </ListView.Header>

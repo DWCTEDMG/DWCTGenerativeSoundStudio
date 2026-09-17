@@ -58,6 +58,12 @@ public sealed partial class RenderPage : Page
         ? "No active project"
         : $"Project {StudioPageHelpers.ShortId(_projectId)}";
     ApplySelectedVariant();
+    const string workspaceEnginePrefix = "workspace-engine:";
+    if (App.Services.Session.RenderContext is string context && context.StartsWith(workspaceEnginePrefix, StringComparison.Ordinal))
+    {
+      SelectComboValue(VideoModelEngineComboBox, context[workspaceEnginePrefix.Length..]);
+      App.Services.Session.SetRenderContext(null);
+    }
     SetBusyState();
 
     if (_projectId is null)
