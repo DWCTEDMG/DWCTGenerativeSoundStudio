@@ -208,7 +208,7 @@ public static class ModelRenderGuidanceEvaluator
         IReadOnlyList<string> hardwareTargets = MetadataStrings(entry, "hardware_targets");
         bool hardwareCompatible = HardwareCompatible(hardwareTargets, device);
         ModelRuntimeStatus? runtimeStatus = entry.PackageStatus;
-        bool runtimeReady = runtimeStatus?.RuntimeReady ?? true;
+        bool runtimeReady = runtimeStatus is null || runtimeStatus.ExecutionReady || runtimeStatus.RuntimeReady;
         var blockers = new List<string>();
         if (!installed)
         {
@@ -225,7 +225,14 @@ public static class ModelRenderGuidanceEvaluator
             && (string.Equals(engine, "ltx_25", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(engine, "hunyuan_video15", StringComparison.OrdinalIgnoreCase)))
         {
-            blockers.Add("runtime qualification is required before this video model can render.");
+            if ((runtimeStatus?.Blockers?.Count ?? 0) > 0)
+            {
+                blockers.AddRange(runtimeStatus!.Blockers!);
+            }
+            else
+            {
+                blockers.Add("runtime execution prerequisites must be completed before this video model can render.");
+            }
         }
 
         if (!installed

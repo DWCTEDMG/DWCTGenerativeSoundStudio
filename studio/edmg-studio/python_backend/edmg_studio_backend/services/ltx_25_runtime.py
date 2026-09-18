@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -175,6 +175,7 @@ def _device_environment(device: str) -> dict[str, str]:
 def build_command(
     *, package_root: Path, output_path: Path, prompt: str, width: int, height: int,
     num_frames: int, fps: float, seed: int, image_path: Path | None = None,
+    image_conditions: Sequence[tuple[Path, int, float]] | None = None,
     offload: str = "none", fp8: bool = False,
 ) -> list[str]:
     if int(width) % 64 or int(height) % 64:
@@ -197,8 +198,17 @@ def build_command(
         "--seed", str(int(seed)), "--offload", offload_value,
         "--output-path", str(output_path.resolve()),
     ))
+    conditions: list[tuple[Path, int, float]] = []
     if image_path is not None:
-        command.extend(("--image", str(image_path.resolve()), "0", "1.0"))
+        conditions.append((image_path, 0, 1.0))
+    conditions.extend(image_conditions or ())
+    for condition_path, frame_index, strength in conditions:
+        command.extend((
+            "--image",
+            str(condition_path.resolve()),
+            str(int(frame_index)),
+            str(float(strength)),
+        ))
     if fp8:
         command.extend(("--quantization", "fp8-cast"))
     return command
@@ -280,6 +290,7 @@ def decode_mp4(path: Path) -> list[Any]:
 def generate_ltx_frames(
     *, package_root: Path, workspace: Path, prompt: str, width: int, height: int,
     num_frames: int, fps: float, seed: int, device: str, init_image: Any | None = None,
+    conditioning_images: Sequence[tuple[Any, int, float]] | None = None,
     cpu_offload: bool = False, fp8: bool = False, timeout_s: float | None = None,
     cancel_check: Callable[[], Any] | None = None,
 ) -> list[Any]:
@@ -287,13 +298,21 @@ def generate_ltx_frames(
     token = uuid.uuid4().hex
     output_path = workspace / f"ltx25-{token}.mp4"
     image_path = workspace / f"ltx25-{token}-conditioning.png" if init_image is not None else None
+    saved_condition_paths: list[Path] = []
+    image_conditions: list[tuple[Path, int, float]] = []
     try:
         if image_path is not None:
             init_image.convert("RGB").save(image_path)
+        for index, (image, frame_index, strength) in enumerate(conditioning_images or ()):
+            condition_path = workspace / f"ltx25-{token}-condition-{index}.png"
+            image.convert("RGB").save(condition_path)
+            saved_condition_paths.append(condition_path)
+            image_conditions.append((condition_path, int(frame_index), float(strength)))
         command = build_command(
             package_root=package_root, output_path=output_path, prompt=prompt,
             width=width, height=height, num_frames=num_frames, fps=fps, seed=seed,
-            image_path=image_path, offload="cpu" if cpu_offload else "none", fp8=fp8,
+            image_path=image_path, image_conditions=image_conditions,
+            offload="cpu" if cpu_offload else "none", fp8=fp8,
         )
         _run(
             command, env=_device_environment(device),
@@ -305,3 +324,5 @@ def generate_ltx_frames(
         output_path.unlink(missing_ok=True)
         if image_path is not None:
             image_path.unlink(missing_ok=True)
+        for condition_path in saved_condition_paths:
+            condition_path.unlink(missing_ok=True)

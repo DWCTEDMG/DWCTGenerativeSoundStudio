@@ -308,7 +308,7 @@
                         CornerRadius="8">
                         <StackPanel Spacing="10">
                             <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="LTX-2.5 isolated runtime" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="LTX-2.5 uses a separate Python environment with exactly ltx-pipelines 1.3.0. Automatic High/Ultra selection requires CUDA, at least 24 GB VRAM, a valid model package, and a current smoke-test receipt." TextWrapping="Wrap" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="LTX-2.5 uses a separate Python environment with exactly ltx-pipelines 1.3.0. A valid package, runtime, and supported compute backend are required; VRAM guidance and smoke qualification are advisory." TextWrapping="Wrap" />
                             <TextBox x:Name="LtxPythonBox" Header="LTX Python executable" PlaceholderText="C:\path\to\ltx-venv\Scripts\python.exe" />
                             <NumberBox x:Name="LtxTimeoutBox" Header="Render timeout (seconds)" Minimum="1" Maximum="86400" Value="3600" />
                             <NumberBox x:Name="LtxSmokeTimeoutBox" Header="Smoke-test timeout (seconds)" Minimum="1" Maximum="86400" Value="600" />
@@ -360,7 +360,7 @@
                         CornerRadius="8">
                         <StackPanel Spacing="10">
                             <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Qwen Director runtime" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure llama.cpp for Qwen3-VL. Installed, configured, reachable, model-loaded, and Level-5 smoke-qualified are reported separately." TextWrapping="Wrap" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure llama.cpp for Qwen3-VL. Installed, configured, execution-ready, and optional Level-5 smoke-qualified states are reported separately." TextWrapping="Wrap" />
                             <TextBox x:Name="QwenRuntimePathBox" Header="llama.cpp runtime path" PlaceholderText="Path to llama-mtmd-cli" />
                             <TextBox x:Name="QwenGpuLayersBox" Header="GPU layers" PlaceholderText="auto" />
                             <NumberBox x:Name="QwenContextBox" Header="Context length" Minimum="8192" Maximum="32768" Value="8192" />
@@ -382,7 +382,7 @@
                         CornerRadius="8">
                         <StackPanel Spacing="10">
                             <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Whisper transcription runtime" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure the managed Transformers Whisper package. Readiness is granted only after genuine audio transcription writes a matching Level-5 receipt." TextWrapping="Wrap" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure the managed Transformers Whisper package. Valid package, dependencies, backend, and settings admit transcription; genuine audio smoke testing adds optional Level-5 qualification evidence." TextWrapping="Wrap" />
                             <ComboBox x:Name="WhisperDeviceCombo" Header="Device" SelectedIndex="0">
                                 <ComboBoxItem Content="Auto" Tag="auto" />
                                 <ComboBoxItem Content="CUDA" Tag="cuda" />

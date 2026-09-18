@@ -64,7 +64,7 @@ function payloadFor(name: string) {
 describe("CreativeDirectionPanel", () => {
   it("clears stale payload while loading a different variant", async () => {
     installEdmgBridge();
-    let resolveSecond: null | (() => void) = null;
+    let resolveSecond: () => void = () => {};
 
     installFetchMock({
       "/v1/projects/p1/creative_direction*": (path) => {
@@ -106,7 +106,7 @@ describe("CreativeDirectionPanel", () => {
     expect(screen.queryAllByText(/Variant zero scene/).length).toBe(0);
     expect((screen.getByRole("button", { name: "Copy prompt pack" }) as HTMLButtonElement).disabled).toBe(true);
 
-    resolveSecond?.();
+    resolveSecond();
     await waitFor(() => expect(screen.queryAllByText(/Variant one scene/).length).toBeGreaterThan(0));
   });
 

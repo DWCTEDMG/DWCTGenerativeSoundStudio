@@ -27,6 +27,16 @@ public sealed class StudioShellActivityTests
                     Installed = true,
                     PackageStatus = new ModelRuntimeStatus("ready", "ready", true, true, 1, true, true, true, true, null, []),
                 },
+                new ModelCatalogueEntry
+                {
+                    Id = "executable",
+                    Installed = true,
+                    PackageStatus = new ModelRuntimeStatus("executable", "execution_ready", true, false, 3, true, true, true, true, null, [])
+                    {
+                        ExecutionReady = true,
+                        Warnings = ["Level-5 qualification is recommended."],
+                    },
+                },
             ],
         };
 

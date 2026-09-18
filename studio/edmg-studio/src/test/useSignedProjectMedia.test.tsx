@@ -53,7 +53,7 @@ describe("useSignedProjectMedia", () => {
   it("aborts issuance when unmounted", () => {
     let signal: AbortSignal | undefined;
     vi.spyOn(api, "issueProjectMediaUrls").mockImplementation((_project, _requests, options) => {
-      signal = options.signal;
+      signal = options?.signal;
       return new Promise(() => {});
     });
     const view = render(<Harness path="outputs/one.mp4" />);
@@ -86,8 +86,10 @@ describe("useSignedProjectMedia", () => {
     await act(async () => Promise.resolve());
     await act(async () => finish({ expires_at: (Date.now() + 60_000) / 1000, urls: [{ purpose: "file", url: "old" }] }));
     expect(screen.getByTestId("url").textContent).toBe("new");
-    expect(issue.mock.calls[0][2].signal?.aborted).toBe(true);
-    expect(issue.mock.calls[1][2].backendUrl).toBe("https://next.example");
+    const firstOptions = issue.mock.calls[0]?.[2];
+    const secondOptions = issue.mock.calls[1]?.[2];
+    expect(firstOptions?.signal?.aborted).toBe(true);
+    expect(secondOptions?.backendUrl).toBe("https://next.example");
   });
 
   it("restores active playback and position when the source renews", () => {

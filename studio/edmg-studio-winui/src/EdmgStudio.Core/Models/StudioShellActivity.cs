@@ -80,7 +80,9 @@ public sealed record StudioShellActivity(
         || job.Type.Contains("video", StringComparison.OrdinalIgnoreCase);
 
     private static bool NeedsAttention(ModelCatalogueEntry entry) =>
-        entry.PackageStatus is { Installed: true, RuntimeReady: false }
+        (entry.PackageStatus is { Installed: true } status
+            && !status.ExecutionReady
+            && !status.RuntimeReady)
         || (entry.PackageStatus?.Blockers?.Count ?? 0) > 0;
 
     private static DateTimeOffset ParseTimestamp(string? value) =>

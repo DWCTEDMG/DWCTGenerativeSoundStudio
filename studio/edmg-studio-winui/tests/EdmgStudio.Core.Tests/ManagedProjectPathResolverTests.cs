@@ -37,7 +37,7 @@ public sealed class ManagedProjectPathResolverTests
         StringAssert.Contains(result.ErrorMessage, "external backend");
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("")]
     [DataRow(" ")]
     [DataRow(".")]
@@ -57,7 +57,7 @@ public sealed class ManagedProjectPathResolverTests
         StringAssert.Contains(result.ErrorMessage, "project ID");
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("")]
     [DataRow(" ")]
     [DataRow(@"..\outside")]

@@ -20,7 +20,7 @@ public sealed class WorkspaceDirectorRunnerTests
             requests.Add(path);
             if (path.EndsWith("/jobs"))
                 return Json(Jobs(++polls == 1 ? "running" : "succeeded"));
-            Assert.IsTrue(path.EndsWith("/drafts/job-1/review"));
+            Assert.EndsWith("/drafts/job-1/review", path);
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
             Assert.AreEqual(12, body.RootElement.GetProperty("expected_revision").GetInt32());
             return Json("""{"revision":13,"document":{"scenes":[]}}""");
@@ -41,7 +41,7 @@ public sealed class WorkspaceDirectorRunnerTests
     {
         using var http = new HttpClient(new Handler((request, _) =>
         {
-            Assert.IsTrue(request.RequestUri!.AbsolutePath.EndsWith("/jobs"));
+            Assert.EndsWith("/jobs", request.RequestUri!.AbsolutePath);
             return Task.FromResult(Json(Jobs(status)));
         }));
         using var api = new StudioApiClient(new Endpoint(), new Token(), http);
@@ -55,7 +55,7 @@ public sealed class WorkspaceDirectorRunnerTests
         using var cancellation = new CancellationTokenSource();
         using var http = new HttpClient(new Handler((request, _) =>
         {
-            Assert.IsTrue(request.RequestUri!.AbsolutePath.EndsWith("/jobs"));
+            Assert.EndsWith("/jobs", request.RequestUri!.AbsolutePath);
             return Task.FromResult(Json(Jobs("running")));
         }));
         using var api = new StudioApiClient(new Endpoint(), new Token(), http);

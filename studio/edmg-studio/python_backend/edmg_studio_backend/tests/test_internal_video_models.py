@@ -9,9 +9,17 @@ from PIL import Image
 
 from edmg_studio_backend.errors import UserFacingError
 from edmg_studio_backend.services import internal_video_models as ivm
+from edmg_studio_backend.services import hunyuan_video15_worker as hunyuan_worker
 from edmg_studio_backend.tests.safetensors_test_utils import (
     write_minimal_safetensors,
 )
+
+
+def test_hunyuan_worker_enables_distributed_vae_tile_parallelism() -> None:
+    source = Path(hunyuan_worker.__file__).read_text(encoding="utf-8")
+
+    assert '"enable_vae_tile_parallelism": world_size > 1' in source
+    assert "torch.distributed.destroy_process_group()" in source
 
 
 def test_hunyuan_chunking_anchors_stitches_and_reports(monkeypatch, tmp_path):
@@ -204,6 +212,7 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
         "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
         "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
         "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
+        "EDMG_HUNYUAN15_GPUS": "2",
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)

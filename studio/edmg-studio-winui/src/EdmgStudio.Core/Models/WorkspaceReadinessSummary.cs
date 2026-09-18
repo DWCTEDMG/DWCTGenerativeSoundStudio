@@ -25,14 +25,16 @@ public static class WorkspaceReadinessSummary
         string summary =
             $"{label}: {availability} | configured: {YesNo(configured)} | installed: {YesNo(status.Installed)} | " +
             $"runtime adapter: {(status.AdapterReady ? "reachable" : "unavailable")} | validation-ready: {YesNo(status.ValidationLevel >= 3)} | " +
-            $"smoke-tested: {YesNo(status.SmokeTested)} | runtime-ready (Level 5): {YesNo(status.RuntimeReady)}";
+            $"execution-ready: {YesNo(status.ExecutionReady || status.RuntimeReady)} | Level-5 qualified: {YesNo(status.RuntimeReady)}";
         string blockers = string.Join(" | ", status.Blockers ?? []);
         if (!string.IsNullOrWhiteSpace(status.Error))
         {
             blockers = string.IsNullOrWhiteSpace(blockers) ? status.Error : $"{blockers} | {status.Error}";
         }
 
-        return string.IsNullOrWhiteSpace(blockers) ? summary : $"{summary}\nBlockers: {blockers}";
+        string warnings = string.Join(" | ", status.Warnings ?? []);
+        string result = string.IsNullOrWhiteSpace(blockers) ? summary : $"{summary}\nBlockers: {blockers}";
+        return string.IsNullOrWhiteSpace(warnings) ? result : $"{result}\nAdvisories: {warnings}";
     }
 
     public static string Provider(string provider, string? model)

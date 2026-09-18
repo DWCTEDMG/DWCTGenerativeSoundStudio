@@ -32,17 +32,18 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions, consolidated blueprint, phase history, regression references, and the latest Reviewer update are loaded. The user directly assigned repair of Timeline WASAPI shared playback after `FormatNotSupported`; Visual Studio Copilot owns the narrow audio-engine fix and focused regression coverage.
+**Acknowledgement:** Repository instructions, the WinUI blueprint, and the latest Reviewer update are loaded. The authorized diagnostics cleanup is complete while preserving the model-admission work and native WinUI priority.
 
-- Updated UTC: 2026-09-17T11:52:13Z.
-- Task / blueprint gate: Gate C — make shared-mode Timeline playback negotiate the selected Windows render endpoint format instead of forcing an incompatible project PCM format.
-- Branch / base commit / dirty state: `codex/Unified` at `f29f907565c1de95ac7b10859e37d8ba99bbf66f`, matching `origin/codex/Unified` at task start; candidate is dirty with the two owned implementation/test files, this handoff, and the unrelated pre-existing deletion of `studio/edmg-studio-winui/docs/workspace-command-center.md`, which remains untouched.
-- Owned files or work areas: `studio/edmg-studio-winui/Services/WindowsAudioEngine.cs`, `studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/WindowsAudioEngineTests.cs`, and this Implementer section.
-- Completed since last update: Removed the forced project-rate stereo PCM graph format so AudioGraph negotiates the selected shared-mode endpoint’s configured sample rate and channel count. Project-rate transport and source-position arithmetic remain unchanged. Added focused regression coverage proving graph settings no longer force encoding properties.
-- Remaining / blockers: No implementation blocker. Real device playback must be retried in the running app because automated tests do not qualify the workstation endpoint.
-- Validation: From repository root, `dotnet test studio\edmg-studio-winui\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj --no-restore --configuration Release -p:PlatformTarget=x64 --nologo --filter FullyQualifiedName~WindowsAudioEngineTests` exited 0 with 4 passed, 0 failed, 0 skipped; log `%TEMP%\wasapi-device-format-tests.log`. `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 0 warnings and 0 errors; log `%TEMP%\wasapi-device-format-build.log`. An earlier parallel build attempt exited 1 because the simultaneous test process locked `EdmgStudio.Core.dll`; the serial rerun passed. `git diff --check` exited 0. No dependency synchronization, application launch, model inference, real-device playback qualification, rendering, signing, Store, or clean-machine qualification occurred.
-- Next step: Reload the Timeline on the affected workstation endpoint and confirm playback initializes without `FormatNotSupported`.
-- Reviewer findings addressed: The fix preserves the Reviewer’s explicit boundary that AudioGraph mixer integration and real device qualification remain open; this task addresses graph format negotiation only.
+- Updated UTC: 2026-09-18T07:27:18Z.
+- Task / blueprint gate: Tooling reliability — align the compatibility client's checked-in TypeScript configuration with Visual Studio strict analysis and clear the native test analyzer backlog.
+- Branch / base commit / dirty state: `codex/Unified` at `8ad7f2a3461ea3f1ea69707932f6724ab4284074`; 45 worktree entries remain, including completed model-admission work and pre-existing unrelated edits.
+- Owned files or work areas: strict TypeScript configuration/contracts and affected compatibility-client production/tests; 13 native Core test files with MSTest analyzer findings; this Implementer section. Unrelated `WindowsAudioEngine.cs`, backend worker/test edits, and deleted documentation remain preserved.
+- Completed: enabled checked-in strict TypeScript; removed all 63 diagnostics through typed fetch routes, domain collections/navigation, closure-safe model actions, test deferred/mock handling, a valid Babel callback, and a Director runtime declaration. Replaced seven obsolete `DataTestMethod` attributes and 13 generic assertions, clearing all 20 forced-rebuild MSTest warnings.
+- Remaining: none for this task.
+- Blockers: none. The default parallel Vitest run could not start 37 fork workers on this workstation; the same complete suite passes with `--maxWorkers=1`. No dependency synchronization or accelerator changes occurred.
+- Validation: from `studio\edmg-studio`, `pnpm run typecheck` exit 0 (`%TEMP%\studio-typescript-typecheck.log`), `pnpm run lint` exit 0 (`%TEMP%\studio-eslint.log`), focused Vitest 6 files/34 tests exit 0 (`%TEMP%\studio-strict-focused-tests.log`), and full single-worker Vitest 42 files/180 tests exit 0 (`%TEMP%\studio-ui-tests-single-worker.log`). From repository root, native Release/x64 solution build exit 0 with 0 warnings/0 errors (`%TEMP%\studio-winui-release-build.log`), forced Core test rebuild exit 0 with 0 warnings/0 errors (`%TEMP%\studio-core-tests-rebuild-clean.log`), and Visual Studio Test Explorer ran 523 tests: 523 passed. `git diff --check` exit 0; line-ending normalization notices only.
+- Next step: reviewer can inspect the saved strict-mode and analyzer-clean changes; no release or real-device qualification is implied.
+- Reviewer findings addressed: active CUDA environment remained untouched; no real-model/device claims changed; native incremental and forced analyzer-visible builds are both clean.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 

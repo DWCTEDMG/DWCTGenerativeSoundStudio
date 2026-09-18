@@ -70,15 +70,17 @@ def test_start_isolates_requested_cuda_device_and_loads_projector(tmp_path, monk
     command, kwargs = commands[0]
     assert command[command.index("-m") + 1] == str(model)
     assert command[command.index("--mmproj") + 1] == str(projector)
-    assert command[command.index("--device") + 1] == "CUDA0"
+    assert command[command.index("--device") + 1] == "CUDA0,CUDA1,CUDA2"
     assert command[command.index("--parallel") + 1] == "1"
     assert command[command.index("--batch-size") + 1] == "64"
     assert command[command.index("--ubatch-size") + 1] == "16"
     assert command[command.index("--flash-attn") + 1] == "off"
     assert command[command.index("--cache-ram") + 1] == "0"
     assert "--no-mmproj-offload" in command
-    assert command[command.index("--split-mode") + 1] == "none"
-    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "1"
+    assert command[command.index("--split-mode") + 1] == "layer"
+    assert command[command.index("--device") + 1] == "CUDA0,CUDA1,CUDA2"
+    assert command[command.index("--tensor-split") + 1] == "1,1,1"
+    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "0,1,2"
     assert kwargs["env"]["GGML_CUDA_DISABLE_GRAPHS"] == "1"
     backend.close()
 

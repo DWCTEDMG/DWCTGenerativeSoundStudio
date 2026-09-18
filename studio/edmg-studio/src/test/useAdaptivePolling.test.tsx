@@ -110,9 +110,9 @@ describe("useAdaptivePolling", () => {
   });
 
   it("aborts an in-flight request when the consumer unmounts", async () => {
-    let observedSignal: AbortSignal | null = null;
+    const observedSignals: AbortSignal[] = [];
     const poll = vi.fn((signal: AbortSignal) => {
-      observedSignal = signal;
+      observedSignals.push(signal);
       return new Promise<AdaptivePollingResult>(() => {});
     });
 
@@ -120,9 +120,9 @@ describe("useAdaptivePolling", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(observedSignal?.aborted).toBe(false);
+    expect(observedSignals[0]?.aborted).toBe(false);
 
     view.unmount();
-    expect(observedSignal?.aborted).toBe(true);
+    expect(observedSignals[0]?.aborted).toBe(true);
   });
 });

@@ -12,9 +12,9 @@ public sealed class TimelineViewportTests
     public void RulerWorkIsBoundedByViewportRatherThanProjectDuration(double duration)
     {
         double[] ticks = TimelineViewport.RulerTicks(duration, 360, 0, 1920, 0.25).ToArray();
-        Assert.IsTrue(ticks.Length <= 25);
+        Assert.IsLessThanOrEqualTo(25, ticks.Length);
         Assert.AreEqual(0d, ticks[0]);
-        Assert.IsTrue(ticks[^1] * 360 >= 1920);
+        Assert.IsGreaterThanOrEqualTo(1920d, ticks[^1] * 360);
     }
 
     [TestMethod]

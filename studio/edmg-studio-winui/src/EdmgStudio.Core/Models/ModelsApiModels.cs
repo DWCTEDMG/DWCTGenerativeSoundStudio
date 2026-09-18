@@ -103,6 +103,7 @@ public sealed class ModelRuntimeStatus
         PackageId = packageId;
         RuntimeState = runtimeState;
         Installed = installed;
+        ExecutionReady = runtimeReady;
         RuntimeReady = runtimeReady;
         ValidationLevel = validationLevel;
         AdapterReady = adapterReady;
@@ -121,6 +122,9 @@ public sealed class ModelRuntimeStatus
 
     [JsonPropertyName("installed")]
     public bool Installed { get; set; }
+
+    [JsonPropertyName("execution_ready")]
+    public bool ExecutionReady { get; set; }
 
     [JsonPropertyName("runtime_ready")]
     public bool RuntimeReady { get; set; }
@@ -145,6 +149,9 @@ public sealed class ModelRuntimeStatus
 
     [JsonPropertyName("blockers")]
     public IReadOnlyList<string>? Blockers { get; set; }
+
+    [JsonPropertyName("warnings")]
+    public IReadOnlyList<string>? Warnings { get; set; }
 
     [JsonPropertyName("smoke_test_required")]
     public bool SmokeTestRequired { get; set; } = true;

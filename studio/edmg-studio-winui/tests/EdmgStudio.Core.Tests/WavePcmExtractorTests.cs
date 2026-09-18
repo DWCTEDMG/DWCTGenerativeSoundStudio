@@ -7,7 +7,7 @@ namespace EdmgStudio.Core.Tests;
 [TestClass]
 public sealed class WavePcmExtractorTests
 {
-    [DataTestMethod]
+    [TestMethod]
     [DataRow((ushort)1, (ushort)16)]
     [DataRow((ushort)1, (ushort)24)]
     [DataRow((ushort)1, (ushort)32)]

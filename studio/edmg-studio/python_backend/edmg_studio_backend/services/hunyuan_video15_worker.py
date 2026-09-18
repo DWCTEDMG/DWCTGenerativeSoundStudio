@@ -54,8 +54,17 @@ def main() -> None:
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
 
     import torch
+    import torch.distributed as dist
     from hyvideo.commons.infer_state import InferState
+    from hyvideo.commons.parallel_states import initialize_parallel_state
     from hyvideo.pipelines.hunyuan_video_pipeline import HunyuanVideo_1_5_Pipeline
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if world_size > 1 and not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+    initialize_parallel_state(sp=world_size)
+    torch.cuda.set_device(local_rank)
 
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[request["dtype"]]
     task = request["mode"]
@@ -66,8 +75,8 @@ def main() -> None:
         overlay = Path(temporary)
         _overlay(args, overlay)
         offload = bool(request["cpu_offload"])
-        device = torch.device("cpu" if offload else "cuda:0")
-        init_device = torch.device("cpu" if offload else "cuda:0")
+        device = torch.device("cpu" if offload else f"cuda:{local_rank}")
+        init_device = torch.device("cpu" if offload else f"cuda:{local_rank}")
         pipe = HunyuanVideo_1_5_Pipeline.create_pipeline(
             pretrained_model_name_or_path=str(overlay),
             transformer_version=transformer_version,
@@ -92,15 +101,23 @@ def main() -> None:
             "seed": int(request["seed"]),
             "prompt_rewrite": False,
             "enable_sr": False,
+            "enable_vae_tile_parallelism": world_size > 1,
             "output_type": "pt",
         }
         if request.get("image"):
             kwargs["reference_image"] = request["image"]
-        result = pipe(**kwargs)
-        video = getattr(result, "videos", None)
-        if video is None:
-            raise RuntimeError("Official Hunyuan pipeline returned no video tensor")
-        _save_video(video, Path(args.output), int(request["fps"]))
+        try:
+            result = pipe(**kwargs)
+            video = getattr(result, "videos", None)
+            if video is None:
+                raise RuntimeError("Official Hunyuan pipeline returned no video tensor")
+            if world_size == 1 or dist.get_rank() == 0:
+                _save_video(video, Path(args.output), int(request["fps"]))
+            if world_size > 1:
+                dist.barrier()
+        finally:
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":

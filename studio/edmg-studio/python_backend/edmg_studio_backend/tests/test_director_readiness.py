@@ -21,7 +21,14 @@ from edmg_studio_backend.store.projects import ProjectStore
 def test_workspace_exact_model_override_retains_runtime_admission(model_id):
     models = {
         STANDARD_DIRECTOR_MODEL_ID: True,
-        model_id: {"installed": True, "runtime_ready": True, "device": "cuda:0", "blockers": []},
+        model_id: {
+            "installed": True,
+            "execution_ready": True,
+            "runtime_ready": False,
+            "device": "cuda:0",
+            "blockers": [],
+            "warnings": ["Level-5 runtime smoke qualification is recommended."],
+        },
     }
     result = resolve_director_readiness(
         {"backend": "cuda", "vram_gb": 48, "ram_gb": 64},
@@ -29,15 +36,16 @@ def test_workspace_exact_model_override_retains_runtime_admission(model_id):
     )
     assert result.director.model_id == model_id
     assert result.director.ready
-    models[model_id]["runtime_ready"] = False
-    models[model_id]["blockers"] = ["Smoke test required"]
+    assert any("smoke qualification" in warning for warning in result.warnings)
+    models[model_id]["execution_ready"] = False
+    models[model_id]["blockers"] = ["Missing llama-server runtime"]
     blocked = resolve_director_readiness(
         {"backend": "cuda", "vram_gb": 48, "ram_gb": 64},
         installed_models=models, director_model_id=model_id,
     )
     assert not blocked.director.ready
     assert blocked.director.model_id == model_id
-    assert "Smoke test required" in blocked.director.reason
+    assert "Missing llama-server runtime" in blocked.director.reason
 
 
 def test_workspace_exact_missing_model_does_not_silently_use_installed_model():
@@ -117,7 +125,7 @@ def test_explicit_external_policy_can_be_ready_after_director_installation():
     assert result.blockers == []
 
 
-def test_gguf_director_requires_backend_runtime_qualification():
+def test_gguf_director_requires_execution_prerequisites_not_smoke_qualification():
     hardware = {"backend": "cpu", "ram_gb": 64.0}
     unavailable = resolve_director_readiness(
         hardware,
@@ -126,32 +134,36 @@ def test_gguf_director_requires_backend_runtime_qualification():
         installed_models={
             "hf_qwen3_vl_8b_gguf_director": {
                 "installed": True,
+                "execution_ready": False,
                 "runtime_ready": False,
-                "blockers": ["Run the model runtime smoke test."],
+                "blockers": ["Missing llama-server runtime."],
             },
         },
         allow_external=True,
     )
     assert unavailable.director.installed is True
     assert unavailable.director.ready is False
-    assert "smoke test" in unavailable.director.reason
+    assert "llama-server" in unavailable.director.reason
 
-    qualified = resolve_director_readiness(
+    executable = resolve_director_readiness(
         hardware,
         mode="fast",
         engine="external",
         installed_models={
             "hf_qwen3_vl_8b_gguf_director": {
                 "installed": True,
-                "runtime_ready": True,
+                "execution_ready": True,
+                "runtime_ready": False,
                 "device": "cpu",
                 "blockers": [],
+                "warnings": ["Level-5 runtime smoke qualification is recommended."],
             },
         },
         allow_external=True,
     )
-    assert qualified.director.ready is True
-    assert qualified.ready is True
+    assert executable.director.ready is True
+    assert executable.ready is True
+    assert any("smoke qualification" in warning for warning in executable.warnings)
 
 
 def test_workspace_readiness_route_returns_project_revision_and_actionable_blockers(tmp_path):

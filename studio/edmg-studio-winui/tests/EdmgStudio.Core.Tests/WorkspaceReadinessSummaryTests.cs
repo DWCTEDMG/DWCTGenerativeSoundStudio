@@ -7,9 +7,13 @@ namespace EdmgStudio.Core.Tests;
 public sealed class WorkspaceReadinessSummaryTests
 {
     [TestMethod]
-    public void ModelSummaryDoesNotPromoteInstalledModelToRuntimeReady()
+    public void ModelSummarySeparatesExecutionFromLevelFiveQualification()
     {
-        var status = new ModelRuntimeStatus("qwen", "installed", true, false, 3, true, true, true, true, null, ["Smoke test required"]);
+        var status = new ModelRuntimeStatus("qwen", "execution_ready", true, false, 3, true, true, true, true, null, [])
+        {
+            ExecutionReady = true,
+            Warnings = ["Level-5 runtime smoke qualification is recommended."],
+        };
 
         string summary = WorkspaceReadinessSummary.Model("Qwen", status);
 
@@ -17,8 +21,9 @@ public sealed class WorkspaceReadinessSummaryTests
         StringAssert.Contains(summary, "installed: yes");
         StringAssert.Contains(summary, "runtime adapter: reachable");
         StringAssert.Contains(summary, "validation-ready: yes");
-        StringAssert.Contains(summary, "smoke-tested: no");
-        StringAssert.Contains(summary, "runtime-ready (Level 5): no");
+        StringAssert.Contains(summary, "execution-ready: yes");
+        StringAssert.Contains(summary, "Level-5 qualified: no");
+        StringAssert.Contains(summary, "Advisories:");
     }
 
     [TestMethod]

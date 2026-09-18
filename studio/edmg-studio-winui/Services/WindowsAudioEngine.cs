@@ -175,16 +175,49 @@ public sealed class WindowsAudioEngine : IAudioEngine
 
     AudioGraphSettings settings = CreateGraphSettings(configuration, selectedDevice);
 
-    CreateAudioGraphResult graphResult;
+    CreateAudioGraphResult graphResult = default!;
     try
     {
       graphResult = await AudioGraph.CreateAsync(settings).AsTask(cancellationToken).ConfigureAwait(false);
     }
     catch (Exception exception) when (exception is not OperationCanceledException)
     {
-      throw new InvalidOperationException(
-          "Windows could not open the selected WASAPI shared device using its configured format.",
-          exception);
+      // Diagnostic + fallback: if a specific device was requested, try the system default device,
+      // then finally try creating the graph without a PrimaryRenderDevice so AudioGraph picks the best match.
+      System.Diagnostics.Trace.TraceWarning($"AudioGraph.CreateAsync failed for device '{selectedDevice?.Id ?? "<none>"}': {exception.Message}. Attempting fallback to default device and then to automatic selection.");
+      if (selectedDevice is not null)
+      {
+        try
+        {
+          string defaultId = MediaDevice.GetDefaultAudioRenderId(AudioDeviceRole.Default) ?? string.Empty;
+          DeviceInformation? defaultDevice = null;
+          if (!string.IsNullOrWhiteSpace(defaultId))
+          {
+            try { defaultDevice = await DeviceInformation.CreateFromIdAsync(defaultId).AsTask(cancellationToken).ConfigureAwait(false); } catch { defaultDevice = null; }
+          }
+
+          graphResult = await AudioGraph.CreateAsync(CreateGraphSettings(configuration, defaultDevice)).AsTask(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (exception is not OperationCanceledException)
+        {
+          try
+          {
+            graphResult = await AudioGraph.CreateAsync(CreateGraphSettings(configuration, null)).AsTask(cancellationToken).ConfigureAwait(false);
+          }
+          catch (Exception ex3) when (ex3 is not OperationCanceledException)
+          {
+            throw new InvalidOperationException(
+              "Windows could not open the selected WASAPI shared device using its configured format (primary and fallback attempts failed).",
+              ex3);
+          }
+        }
+      }
+      else
+      {
+        throw new InvalidOperationException(
+            "Windows could not open the selected WASAPI shared device using its configured format.",
+            exception);
+      }
     }
 
     if (graphResult.Status != AudioGraphCreationStatus.Success || graphResult.Graph is null)
@@ -201,8 +234,23 @@ public sealed class WindowsAudioEngine : IAudioEngine
           .AsTask(cancellationToken).ConfigureAwait(false);
       if (outputResult.Status != AudioDeviceNodeCreationStatus.Success || outputResult.DeviceOutputNode is null)
       {
-        throw new InvalidOperationException(
-            $"Windows could not open the WASAPI shared render endpoint (status: {outputResult.Status}).");
+        System.Diagnostics.Trace.TraceWarning($"CreateDeviceOutputNodeAsync failed with status {outputResult.Status}. Attempting a graph recreate with no PrimaryRenderDevice as a fallback.");
+        // Try a single recreate with no PrimaryRenderDevice to let AudioGraph pick a compatible device/format.
+        graph.Dispose();
+        CreateAudioGraphResult fallbackGraphResult = await AudioGraph.CreateAsync(CreateGraphSettings(configuration, null)).AsTask(cancellationToken).ConfigureAwait(false);
+        if (fallbackGraphResult.Status != AudioGraphCreationStatus.Success || fallbackGraphResult.Graph is null)
+        {
+          throw new InvalidOperationException(
+            $"Windows could not create the WASAPI shared audio output node (initial status: {outputResult.Status}, fallback graph status: {fallbackGraphResult.Status}).");
+        }
+        graph = fallbackGraphResult.Graph;
+        outputResult = await graph.CreateDeviceOutputNodeAsync().AsTask(cancellationToken).ConfigureAwait(false);
+        if (outputResult.Status != AudioDeviceNodeCreationStatus.Success || outputResult.DeviceOutputNode is null)
+        {
+          graph.Dispose();
+          throw new InvalidOperationException(
+            $"Windows could not open the WASAPI shared render endpoint after fallback (status: {outputResult.Status}).");
+        }
       }
 
       foreach (AudioTrackRoute route in configuration.Tracks)

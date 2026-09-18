@@ -1233,7 +1233,7 @@ function buildPlannerPlanFromStudioProject(args: {
     firstSeedScene?.styleLock ||
     `${settings.promptStyle} visual language; preserve the same medium, texture, lens family, color treatment, and ${settings.aspectRatio} frame`;
   let previousEndState = '';
-  const studioScenes = canonicalScenes.map((scene: any, index: number) => {
+  const studioScenes: PromptScene[] = canonicalScenes.map((scene: any, index: number) => {
     const baseScene = seedPlan.scenes[index] || seedPlan.scenes[seedPlan.scenes.length - 1];
     const matchingSegment =
       analysis.sentimentProgression[index] ||

@@ -44,7 +44,7 @@ public sealed class DirectorReviewContractsTests
         DirectorReviewApplyResponse applied = await client.ApplyDirectorReviewCorrectionAsync("project /1", ReportId, new ApplyCorrectionRequest(4));
 
         Assert.AreEqual(ReportId, created.Report.ReportId);
-        Assert.AreEqual(1, listed.Reports.Count);
+        Assert.HasCount(1, listed.Reports);
         Assert.AreEqual("not_assessed", loaded.Report.Dimensions[0].State);
         Assert.AreEqual(5L, applied.Revision);
         Assert.AreEqual("/v1/projects/project%20%2F1/director/reviews", requests[0].Uri.AbsolutePath);

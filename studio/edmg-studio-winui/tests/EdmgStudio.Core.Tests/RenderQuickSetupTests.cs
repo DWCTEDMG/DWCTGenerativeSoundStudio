@@ -44,7 +44,7 @@ public sealed class RenderQuickSetupTests
         Assert.AreEqual("timeline", setup.Route);
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("auto", "pipeline")]
     [DataRow("stills", "stills")]
     [DataRow("motion_ad", "motion")]
@@ -58,7 +58,7 @@ public sealed class RenderQuickSetupTests
         Assert.AreEqual(route, setup.Route);
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("fast", 12, 5.5, 2, 8, 120)]
     [DataRow("balanced", 24, 7.0, 3, 12, 240)]
     [DataRow("quality", 36, 7.5, 4, 18, 480)]
@@ -81,7 +81,7 @@ public sealed class RenderQuickSetupTests
         Assert.AreEqual(maximumFrames, setup.MaximumFrames);
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("768x432", 768, 432)]
     [DataRow("1024x576", 1024, 576)]
     [DataRow("1280x720", 1280, 720)]

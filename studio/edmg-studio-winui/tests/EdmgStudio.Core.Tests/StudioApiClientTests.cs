@@ -1133,7 +1133,7 @@ public sealed class StudioApiClientTests
             });
 
         CollectionAssert.AreEqual(expected, actual);
-        Assert.AreEqual(2, captured.Count);
+        Assert.HasCount(2, captured);
         Assert.AreEqual("/v1/projects/p1/media-urls", captured[0].Uri.AbsolutePath);
         Assert.AreEqual("Bearer " + "preview" + "-token", captured[0].Authorization);
         Assert.AreEqual("/signed/media", captured[1].Uri.AbsolutePath);
@@ -1182,7 +1182,7 @@ public sealed class StudioApiClientTests
             });
 
         CollectionAssert.AreEqual(expected, actual);
-        Assert.AreEqual(2, captured.Count);
+        Assert.HasCount(2, captured);
         Assert.AreEqual("/v1/projects/p1/media-urls", captured[0].Uri.AbsolutePath);
         Assert.AreEqual("/v1/projects/p1/file", captured[1].Uri.AbsolutePath);
         Assert.AreEqual("?path=renders%2Fpreview.png", captured[1].Uri.Query);

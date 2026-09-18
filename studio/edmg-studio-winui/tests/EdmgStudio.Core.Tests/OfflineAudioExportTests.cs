@@ -22,7 +22,7 @@ public sealed class OfflineAudioExportTests
         byte[] first = OfflineWaveExporter.ExportPcm24(48_000, layout, [-1, -.5f, 0, .5f, 1, .25f]);
         byte[] second = OfflineWaveExporter.ExportPcm24(48_000, layout, [-1, -.5f, 0, .5f, 1, .25f]);
         CollectionAssert.AreEqual(first, second);
-        Assert.AreEqual(62, first.Length);
+        Assert.HasCount(62, first);
         Assert.AreEqual(6, BitConverter.ToUInt16(first, 22));
         Assert.AreEqual("dda7306a1e4e02d7b7243014626fe88ba1610471a3a39079cea6fab2691d610f", Convert.ToHexString(SHA256.HashData(first)).ToLowerInvariant());
     }

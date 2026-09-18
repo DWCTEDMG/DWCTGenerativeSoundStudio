@@ -47,6 +47,7 @@ class HunyuanRunnerConfig:
     repo: str
     distro: str | None
     timeout_s: float
+    gpus: str
     companions: Mapping[str, str]
 
 
@@ -64,6 +65,7 @@ def hunyuan_runner_config(environ: Mapping[str, str] | None = None) -> HunyuanRu
         repo=str(env.get(f"{HUNYUAN_ENV_PREFIX}REPO") or "").strip(),
         distro=str(env.get(f"{HUNYUAN_ENV_PREFIX}WSL_DISTRO") or "").strip() or None,
         timeout_s=timeout_s,
+        gpus=str(env.get(f"{HUNYUAN_ENV_PREFIX}GPUS") or "0,1,2").strip(),
         companions={key: str(env.get(f"{HUNYUAN_ENV_PREFIX}{name}") or "").strip()
                     for key, (name, _required) in HUNYUAN_COMPANIONS.items()},
     )
@@ -84,6 +86,7 @@ HUNYUAN_CONFIG_FIELDS = {
     "repo": "REPO",
     "distro": "WSL_DISTRO",
     "timeout_s": "TIMEOUT_SECONDS",
+    "gpus": "GPUS",
     **{key: env_name for key, (env_name, _required) in HUNYUAN_COMPANIONS.items()},
 }
 
@@ -98,6 +101,7 @@ def hunyuan_runner_status(*, probe: bool = False) -> dict[str, Any]:
             "repo": config.repo,
             "distro": config.distro or "",
             "timeout_s": config.timeout_s,
+            "gpus": config.gpus,
             **config.companions,
         },
         "issues": issues,
@@ -654,11 +658,14 @@ def _run_hunyuan(
         command = [*_runner_prefix(config)]
         if config.mode == "wsl":
             python_path = ":".join((_wsl_path(config.repo, config), _wsl_path(backend_root, config)))
-            command.extend(["env", f"CUDA_VISIBLE_DEVICES={gpu_index}",
+            gpus = ",".join(part.strip() for part in config.gpus.split(",") if part.strip()) or str(gpu_index)
+            command.extend(["env", f"CUDA_VISIBLE_DEVICES={gpus}",
                             "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
                             f"PYTHONPATH={python_path}"])
         command.extend([
-            config.python, "-m", "edmg_studio_backend.services.hunyuan_video15_worker",
+            config.python, "-m", "torch.distributed.run", "--standalone",
+            "--nproc_per_node", str(len([part for part in config.gpus.split(",") if part.strip()])),
+            "-m", "edmg_studio_backend.services.hunyuan_video15_worker",
             "--request", _wsl_path(request_path, config),
             "--model", _wsl_path(model_dir, config), "--llm", _wsl_path(config.companions["llm"], config),
             "--byt5", _wsl_path(config.companions["byt5"], config), "--glyph", _wsl_path(config.companions["glyph"], config),
@@ -666,7 +673,9 @@ def _run_hunyuan(
             "--pid-file", _wsl_path(pid_path, config),
         ])
         child_env = os.environ.copy()
-        child_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
+        child_env["CUDA_VISIBLE_DEVICES"] = ",".join(
+            part.strip() for part in config.gpus.split(",") if part.strip()
+        ) or str(gpu_index)
         child_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
         child_env["PYTHONPATH"] = python_path
         with stdout_path.open("w", encoding="utf-8") as stdout_log, \

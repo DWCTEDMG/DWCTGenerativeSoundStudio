@@ -84,7 +84,7 @@ function analysisTranscriptText(analysis: any) {
   if (raw && typeof raw === "object") {
     const direct = String(raw.text || "").trim();
     if (direct && !looksLikeFallbackTranscript(direct)) return direct;
-    const segments = Array.isArray(raw.segments) ? raw.segments : [];
+    const segments: Array<{ text?: unknown }> = Array.isArray(raw.segments) ? raw.segments : [];
     return segments
       .map((segment) => String(segment?.text || "").trim())
       .filter(Boolean)
@@ -474,7 +474,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const transcriptReady = Boolean(transcriptText);
   const analysisSummary = analysisSummaryText(analysis);
   const analysisSections = Array.isArray(analysis?.sections) ? analysis.sections : [];
-  const analysisTags = Array.isArray(analysis?.tags) ? analysis.tags.map((tag: any) => String(tag || "").trim()).filter(Boolean) : [];
+  const analysisTags: string[] = Array.isArray(analysis?.tags) ? analysis.tags.map((tag: any) => String(tag || "").trim()).filter(Boolean) : [];
   const musicGraphSections = Array.isArray(musicGraph?.sections) ? musicGraph.sections : [];
   const analysisBpm = Number(analysisFeatures?.bpm || analysisFeatures?.tempo_bpm || analysisFeatures?.tempo || 0);
   const durationS = analysis?.features?.duration_s || analysis?.features?.duration || plan?.duration_s || 0;

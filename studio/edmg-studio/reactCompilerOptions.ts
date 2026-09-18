@@ -16,7 +16,7 @@ function isProjectSource(id: string): boolean {
 }
 
 export function reactCompilerBabel(id: string) {
-  if (!isProjectSource(id)) return undefined;
+  if (!isProjectSource(id)) return {};
   return {
     babelrc: false,
     configFile: false,

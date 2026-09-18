@@ -5,8 +5,17 @@ import { StudioAppearanceProvider } from "../components/studioAppearance";
 import { UiModeProvider } from "../components/uiMode";
 import { StudioSessionProvider } from "../components/studioSession";
 
+type MockRoutePayload =
+  | Record<string, unknown>
+  | unknown[]
+  | string
+  | number
+  | boolean
+  | null
+  | undefined;
+
 type MockRouteHandler =
-  | unknown
+  | MockRoutePayload
   | ((path: string, init?: RequestInit) => unknown | Promise<unknown>);
 
 type MockRouteMap = Record<string, MockRouteHandler>;

@@ -101,7 +101,7 @@ public sealed class InternalVideoRenderRequestBuilderTests
         Assert.AreEqual("both", request.GetProperty("video_model_anchor_mode").GetString());
     }
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow("svd")]
     [DataRow("animatediff")]
     [DataRow("hunyuan_video15")]

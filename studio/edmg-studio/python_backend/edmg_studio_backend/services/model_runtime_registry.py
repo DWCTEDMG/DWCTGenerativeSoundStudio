@@ -1,8 +1,8 @@
-"""Runtime qualification for manifest-managed model packages.
+"""Runtime admission and qualification for manifest-managed model packages.
 
-Package installation and runtime qualification are intentionally independent.
-A runtime is ready only after a real smoke test writes a receipt tied to the
-package, adapter, dependencies, and selected hardware.
+Package installation, execution admission, and smoke qualification are
+independent. Valid Level-3 prerequisites admit execution; a matching real
+smoke-test receipt records stronger Level-5 qualification evidence.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ ValidationState = Literal[
     "not_installed",
     "installed_runtime_unavailable",
     "runtime_degraded",
+    "execution_ready",
     "runtime_ready",
 ]
 
@@ -227,16 +228,44 @@ def _smoke_test_ltx_25(
     from .video_motion_quality import analyze_motion_images
 
     device = ModelRuntimeRegistry._device(hardware)
+    width = 128
+    height = 128
+    num_frames = 17
+    from PIL import Image, ImageDraw
+
+    def anchor(position: float) -> Image.Image:
+        frame = Image.new("RGB", (width, height), "black")
+        radius = 14
+        center_x = int(radius + max(0.0, min(1.0, position)) * (width - radius * 2))
+        center_y = height // 2
+        ImageDraw.Draw(frame).ellipse(
+            (center_x - radius, center_y - radius, center_x + radius, center_y + radius),
+            fill="white",
+        )
+        return frame
+
     frames = generate_ltx_frames(
         package_root=package_root,
         workspace=package_root,
-        prompt="A single white circle on a black background, static camera",
-        width=64,
-        height=64,
-        num_frames=9,
+        prompt=(
+            "Minimal runtime validation animation: a large white circle moves "
+            "smoothly from the far left edge to the far right edge on a pure "
+            "black background, continuous motion across the entire clip, no "
+            "cuts, no frozen frames."
+        ),
+        width=width,
+        height=height,
+        num_frames=num_frames,
         fps=8,
         seed=1,
         device=device,
+        conditioning_images=[
+            (anchor(0.0), 0, 1.0),
+            (anchor(0.25), 4, 1.0),
+            (anchor(0.5), 8, 1.0),
+            (anchor(0.75), 12, 1.0),
+            (anchor(1.0), num_frames - 1, 1.0),
+        ],
         cpu_offload=True,
         cancel_check=cancel_check,
         timeout_s=ltx_runtime_config().smoke_timeout_s,
@@ -489,6 +518,7 @@ class ModelRuntimeRegistry:
             if dependency.identity:
                 dependency_versions[dependency.name] = dependency.identity
         blockers: list[str] = []
+        warnings: list[str] = []
         validation_level = 1 if installed else 0
 
         if not installed:
@@ -502,27 +532,29 @@ class ModelRuntimeRegistry:
 
         backend = str(hw.get("backend") or "").lower()
         hardware_known = bool(hw)
-        hardware_issues: list[str] = []
+        backend_issues: list[str] = []
         if hardware_known and backend not in descriptor.supported_devices:
-            hardware_issues.append(
+            backend_issues.append(
                 f"Requires one of these compute backends: {', '.join(descriptor.supported_devices)}."
             )
-        if descriptor.minimum_vram_gb and (
+        blockers.extend(backend_issues)
+        if hardware_known and descriptor.minimum_vram_gb and (
             backend != "cuda" or self._number(hw, "vram_gb") < descriptor.minimum_vram_gb
         ):
-            hardware_issues.append(
-                f"Requires CUDA and at least {descriptor.minimum_vram_gb:g} GB VRAM on one GPU."
+            warnings.append(
+                f"Recommended: CUDA with at least {descriptor.minimum_vram_gb:g} GB VRAM on one GPU; "
+                "execution may be slow or exhaust memory."
             )
         from .hardware_memory import meets_physical_ram_requirement
         if hardware_known and not meets_physical_ram_requirement(hw, descriptor.minimum_ram_gb):
-            hardware_issues.append(
-                f"Requires at least {descriptor.minimum_ram_gb:g} GB installed system RAM "
-                f"(detected {self._number(hw, 'installed_ram_gb') or self._number(hw, 'ram_gb'):g} GB)."
+            warnings.append(
+                f"Recommended: at least {descriptor.minimum_ram_gb:g} GB installed system RAM "
+                f"(detected {self._number(hw, 'installed_ram_gb') or self._number(hw, 'ram_gb'):g} GB); "
+                "execution may be slow or exhaust memory."
             )
-        blockers.extend(hardware_issues)
 
         dependencies_ready = not missing_dependencies
-        hardware_compatible = not hardware_issues
+        hardware_compatible = not backend_issues
         if installed and dependencies_ready and hardware_compatible:
             validation_level = 2
 
@@ -564,19 +596,23 @@ class ModelRuntimeRegistry:
             and bool(receipt.get("receipt_timestamp"))
             and motion_evidence_valid
         )
-        smoke_required = True
-        if smoke_valid and descriptor.adapter_ready and not blockers:
-            validation_level = 5
-        elif installed and descriptor.adapter_ready and validation_level == 3:
-            blockers.append("Run the model runtime smoke test to initialize and qualify this installation.")
-
-        runtime_ready = bool(
+        execution_ready = bool(
             descriptor.adapter_ready
             and not blockers
-            and validation_level == 5
+            and validation_level >= 3
         )
+        smoke_required = False
+        if smoke_valid and execution_ready:
+            validation_level = 5
+        elif execution_ready:
+            warnings.append(
+                "Level-5 runtime smoke qualification is recommended but is not required for execution."
+            )
+
+        runtime_ready = bool(execution_ready and validation_level == 5)
         state: ValidationState = (
             "runtime_ready" if runtime_ready else
+            "execution_ready" if execution_ready else
             "installed_runtime_unavailable" if installed else
             "not_installed"
         )
@@ -592,6 +628,7 @@ class ModelRuntimeRegistry:
             "supported_devices": list(descriptor.supported_devices),
             "recommended_dtype": descriptor.recommended_dtype,
             "installed": installed,
+            "execution_ready": execution_ready,
             "runtime_ready": runtime_ready,
             "runtime_state": state,
             "validation_level": validation_level,
@@ -615,6 +652,7 @@ class ModelRuntimeRegistry:
             "fingerprint": fingerprint,
             "error": blockers[0] if blockers else None,
             "blockers": list(dict.fromkeys(blockers)),
+            "warnings": list(dict.fromkeys(warnings)),
             "config_issues": config_issues,
         }
 

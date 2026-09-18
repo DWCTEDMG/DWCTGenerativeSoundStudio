@@ -271,7 +271,7 @@ public sealed class MediaPipelineTests
                 knownContentLength: contentLength,
                 cancellationToken: CancellationToken.None));
 
-        Assert.IsTrue(source.RequestedBufferSizes.Count >= 2);
+        Assert.IsGreaterThanOrEqualTo(2, source.RequestedBufferSizes.Count);
         Assert.IsTrue(source.RequestedBufferSizes.Skip(1).All(size => size <= 4));
         Assert.IsEmpty(Directory.GetFiles(temporaryDirectory.Path));
     }

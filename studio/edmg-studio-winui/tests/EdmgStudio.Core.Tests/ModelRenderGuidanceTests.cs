@@ -150,27 +150,28 @@ public sealed class ModelRenderGuidanceTests
     }
 
     [TestMethod]
-    public void Evaluate_LtxRuntimeQualificationBlocksRenderUntilReady()
+    public void Evaluate_LtxExecutionReadinessDoesNotRequireSmokeQualification()
     {
         ModelCatalogueEntry ltx = Entry("ltx", "LTX", "video_diffusers", true, "ltx", ["nvidia"],
             Render("internal_video_model", ["internal_video_model"], "ltx_25"));
-        ltx.PackageStatus = RuntimeStatus(ready: false, blockers: ["Run the LTX runtime smoke test."]);
+        ltx.PackageStatus = RuntimeStatus(executionReady: true, runtimeReady: false,
+            warnings: ["Level-5 runtime smoke qualification is recommended."]);
         ModelCatalogueResponse catalogue = Catalogue(
             Entry("sd15", "SD 1.5", "diffusers", true, "sd15", ["nvidia"],
                 Render("internal", ["internal_video"])),
             ltx);
 
-        ModelRenderGuidance unqualified = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
+        ModelRenderGuidance executable = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
             Config(modelId: "sd15", videoModelId: "ltx", device: "cuda", temporalMode: "video_model", videoEngine: "ltx_25"));
-        Assert.IsFalse(unqualified.IsReady);
-        Assert.IsFalse(unqualified.Video?.IsRuntimeReady);
-        Assert.IsTrue(string.Join(" ", unqualified.Blockers).Contains("runtime qualification", StringComparison.OrdinalIgnoreCase));
+        Assert.IsTrue(executable.IsReady);
+        Assert.IsTrue(executable.Video?.IsRuntimeReady);
 
-        ltx.PackageStatus = RuntimeStatus(ready: true);
-        ModelRenderGuidance qualified = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
+        ltx.PackageStatus = RuntimeStatus(executionReady: false, runtimeReady: false,
+            blockers: ["Missing ltx-pipelines runtime."]);
+        ModelRenderGuidance blocked = ModelRenderGuidanceEvaluator.Evaluate(catalogue,
             Config(modelId: "sd15", videoModelId: "ltx", device: "cuda", temporalMode: "video_model", videoEngine: "ltx_25"));
-        Assert.IsTrue(qualified.IsReady);
-        Assert.IsTrue(qualified.Video?.IsRuntimeReady);
+        Assert.IsFalse(blocked.IsReady);
+        StringAssert.Contains(string.Join(" ", blocked.Blockers), "ltx-pipelines");
     }
 
     private static ModelRenderConfiguration Config(
@@ -245,6 +246,14 @@ public sealed class ModelRenderGuidanceTests
     private static JsonElement Json(string value) =>
         JsonDocument.Parse(value).RootElement.Clone();
 
-    private static ModelRuntimeStatus RuntimeStatus(bool ready, IReadOnlyList<string>? blockers = null) =>
-        new("ltx", ready ? "ready" : "blocked", true, ready, 3, true, true, true, true, null, blockers);
+    private static ModelRuntimeStatus RuntimeStatus(
+        bool executionReady,
+        bool runtimeReady,
+        IReadOnlyList<string>? blockers = null,
+        IReadOnlyList<string>? warnings = null) =>
+        new("ltx", executionReady ? "execution_ready" : "blocked", true, runtimeReady, 3, true, true, true, true, null, blockers)
+        {
+            ExecutionReady = executionReady,
+            Warnings = warnings,
+        };
 }

@@ -24,12 +24,12 @@ type CatalogEntry = {
   required_files?: string[];
   download_size_bytes?: number;
   package_status?: {
-    installed: boolean; runtime_ready: boolean; files_present: boolean;
-    runtime_state: "not_installed" | "installed_runtime_unavailable" | "runtime_degraded" | "runtime_ready";
+    installed: boolean; execution_ready?: boolean; runtime_ready: boolean; files_present: boolean;
+    runtime_state: "not_installed" | "installed_runtime_unavailable" | "runtime_degraded" | "execution_ready" | "runtime_ready";
     validation_level: number; adapter_ready: boolean; smoke_test_supported: boolean;
     smoke_test_required?: boolean;
     hardware_compatible: boolean; hardware_known: boolean;
-    blockers: string[]; validation_issues: string[]; error?: string | null;
+    blockers: string[]; warnings?: string[]; validation_issues: string[]; error?: string | null;
   };
   hf_repo_id?: string;
   hf_url?: string;
@@ -1100,6 +1100,25 @@ export default function Models(props: PageProps) {
     });
   }, [merged.built, installedMap, cloudMap, cacheLabel, tasks]);
 
+  const internalModelActions = (
+    model: CatalogEntry | undefined,
+    available: boolean,
+    cloud: boolean,
+    installed: boolean,
+    installLabel: string,
+    restoreLabel: string,
+  ) => {
+    if (!model) return null;
+    return (
+      <>
+        {!available ? <button onClick={() => install(model)}>{installLabel}</button> : null}
+        {cloud && !installed ? (
+          <button className="secondary" onClick={() => restoreLocal(model)}>{restoreLabel}</button>
+        ) : null}
+      </>
+    );
+  };
+
   const defaultModels = (merged.built ?? []).filter((m) => (m.recommended === "default" || m.package_managed) && m.installable !== false);
   const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && !m.package_managed && m.installable !== false);
   const browserOnlyModels = (merged.built ?? []).filter((m) => m.installable === false);
@@ -1204,42 +1223,12 @@ export default function Models(props: PageProps) {
           {" "}• AnimateDiff <b>{internalSummary.status("animatediff")}</b>
         </div>
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {!internalSummary.availableInternal.sd15 && internalSummary.sd15 ? (
-            <button onClick={() => install(internalSummary.sd15)}>Install SD 1.5 internal</button>
-          ) : null}
-          {internalSummary.cloudInternal.sd15 && !internalSummary.installedInternal.sd15 && internalSummary.sd15 ? (
-            <button className="secondary" onClick={() => restoreLocal(internalSummary.sd15)}>Restore SD 1.5 internal</button>
-          ) : null}
-          {!internalSummary.availableInternal.sdxl && internalSummary.sdxl ? (
-            <button onClick={() => install(internalSummary.sdxl)}>Install SDXL internal</button>
-          ) : null}
-          {internalSummary.cloudInternal.sdxl && !internalSummary.installedInternal.sdxl && internalSummary.sdxl ? (
-            <button className="secondary" onClick={() => restoreLocal(internalSummary.sdxl)}>Restore SDXL internal</button>
-          ) : null}
-          {!internalSummary.availableInternal.sd35 && internalSummary.sd35 ? (
-            <button onClick={() => install(internalSummary.sd35)}>Install SD3.5 internal</button>
-          ) : null}
-          {internalSummary.cloudInternal.sd35 && !internalSummary.installedInternal.sd35 && internalSummary.sd35 ? (
-            <button className="secondary" onClick={() => restoreLocal(internalSummary.sd35)}>Restore SD3.5 internal</button>
-          ) : null}
-          {!internalSummary.availableInternal.flux && internalSummary.flux ? (
-            <button onClick={() => install(internalSummary.flux)}>Install FLUX.1 Schnell internal</button>
-          ) : null}
-          {internalSummary.cloudInternal.flux && !internalSummary.installedInternal.flux && internalSummary.flux ? (
-            <button className="secondary" onClick={() => restoreLocal(internalSummary.flux)}>Restore FLUX.1 Schnell internal</button>
-          ) : null}
-          {!internalSummary.availableInternal.svd && internalSummary.svd ? (
-            <button onClick={() => install(internalSummary.svd)}>Install internal SVD motion</button>
-          ) : null}
-          {internalSummary.cloudInternal.svd && !internalSummary.installedInternal.svd && internalSummary.svd ? (
-            <button className="secondary" onClick={() => restoreLocal(internalSummary.svd)}>Restore internal SVD motion</button>
-          ) : null}
-          {!internalSummary.availableInternal.animatediff && internalSummary.animatediff ? (
-            <button onClick={() => install(internalSummary.animatediff)}>Install internal AnimateDiff</button>
-          ) : null}
-          {internalSummary.cloudInternal.animatediff && !internalSummary.installedInternal.animatediff && internalSummary.animatediff ? (
-            <button className="secondary" onClick={() => restoreLocal(internalSummary.animatediff)}>Restore internal AnimateDiff</button>
-          ) : null}
+          {internalModelActions(internalSummary.sd15, internalSummary.availableInternal.sd15, internalSummary.cloudInternal.sd15, internalSummary.installedInternal.sd15, "Install SD 1.5 internal", "Restore SD 1.5 internal")}
+          {internalModelActions(internalSummary.sdxl, internalSummary.availableInternal.sdxl, internalSummary.cloudInternal.sdxl, internalSummary.installedInternal.sdxl, "Install SDXL internal", "Restore SDXL internal")}
+          {internalModelActions(internalSummary.sd35, internalSummary.availableInternal.sd35, internalSummary.cloudInternal.sd35, internalSummary.installedInternal.sd35, "Install SD3.5 internal", "Restore SD3.5 internal")}
+          {internalModelActions(internalSummary.flux, internalSummary.availableInternal.flux, internalSummary.cloudInternal.flux, internalSummary.installedInternal.flux, "Install FLUX.1 Schnell internal", "Restore FLUX.1 Schnell internal")}
+          {internalModelActions(internalSummary.svd, internalSummary.availableInternal.svd, internalSummary.cloudInternal.svd, internalSummary.installedInternal.svd, "Install internal SVD motion", "Restore internal SVD motion")}
+          {internalModelActions(internalSummary.animatediff, internalSummary.availableInternal.animatediff, internalSummary.cloudInternal.animatediff, internalSummary.installedInternal.animatediff, "Install internal AnimateDiff", "Restore internal AnimateDiff")}
           <button className="secondary" onClick={() => props.onNavigate?.("render")}>Open Render</button>
         </div>
       </div>

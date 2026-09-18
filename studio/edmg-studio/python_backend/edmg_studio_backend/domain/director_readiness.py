@@ -278,14 +278,17 @@ def resolve_director_readiness(
     director_runtime_ready = director_model == STANDARD_DIRECTOR_MODEL_ID
     if director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID}:
         director_status = director_status or runtime_status(director_model, hw)
-        director_runtime_ready = bool(director_status.get("runtime_ready"))
+        director_runtime_ready = bool(
+            director_status.get("execution_ready", director_status.get("runtime_ready", False))
+        )
+        warnings.extend(str(value) for value in director_status.get("warnings") or [])
     if not director_installed:
         director_reason = f"Install {director_model} in Models before loading the Director."
     elif director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID}:
         director_reason = (
-            f"Runtime ready on {director_status.get('device') or 'the qualified device'}."
+            f"Execution ready on {director_status.get('device') or 'the selected device'}."
             if director_runtime_ready
-            else " ".join(director_status.get("blockers") or ["Run the model runtime smoke test."])
+            else " ".join(director_status.get("blockers") or ["Complete the runtime execution prerequisites."])
         )
     elif director_runtime_ready:
         director_reason = "Installed and the Director adapter is available."
@@ -296,17 +299,15 @@ def resolve_director_readiness(
         )
     if tier == "low" and director_model == STANDARD_DIRECTOR_MODEL_ID:
         if not meets_physical_ram_requirement(hw, 16):
-            director_runtime_ready = False
-            blockers.append(
-                "Qwen3-VL-8B requires at least 16 GB system RAM for the low-memory Director profile."
+            warnings.append(
+                "Qwen3-VL-8B recommends at least 16 GB system RAM for the low-memory Director profile."
             )
         elif _number(hw, "vram_gb") < 6 and str(hw.get("backend") or "cpu").lower() not in {
             "cpu",
             "directml",
         }:
-            director_runtime_ready = False
-            blockers.append(
-                "The detected GPU does not meet the minimum VRAM target for the standard Director profile."
+            warnings.append(
+                "The detected GPU is below the recommended VRAM target for the standard Director profile."
             )
 
     if not director_installed:
@@ -331,7 +332,10 @@ def resolve_director_readiness(
     renderer_status = _runtime_record(installed, renderer_model)
     renderer_adapter_ready = (
         renderer_engine == "external" and allow_external
-        or bool(renderer_status and renderer_status.get("runtime_ready"))
+        or bool(
+            renderer_status
+            and renderer_status.get("execution_ready", renderer_status.get("runtime_ready", False))
+        )
     )
     if renderer_engine == "external":
         renderer_reason = (
@@ -341,10 +345,14 @@ def resolve_director_readiness(
         )
     else:
         status = renderer_status or runtime_status(renderer_model, hw)
+        renderer_adapter_ready = bool(
+            status.get("execution_ready", status.get("runtime_ready", False))
+        )
+        warnings.extend(str(value) for value in status.get("warnings") or [])
         renderer_reason = (
-            f"Runtime ready on {status.get('device') or 'the qualified device'}."
+            f"Execution ready on {status.get('device') or 'the selected device'}."
             if renderer_adapter_ready
-            else " ".join(status.get("blockers") or [f"Qualify {renderer_label} before rendering."])
+            else " ".join(status.get("blockers") or [f"Complete {renderer_label} execution prerequisites."])
         )
         if not renderer_installed:
             blockers.append(f"{renderer_label} is not installed in the local model catalog.")
@@ -384,9 +392,9 @@ def resolve_director_readiness(
         actions.append(
             "Use the standard Qwen3-VL-8B Director lane until the high-tier adapter is qualified."
         )
-    if renderer_engine != "external":
+    if renderer_engine != "external" and not renderer_adapter_ready:
         actions.append(
-            "Keep generation in draft/prepare mode until the selected local renderer adapter is qualified."
+            "Complete the selected local renderer's execution prerequisites before generation."
         )
     elif not allow_external:
         actions.append(

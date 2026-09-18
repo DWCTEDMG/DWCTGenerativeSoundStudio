@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import type { NavigateFn } from "../types/pageProps";
 import { apiGet, apiPost } from "./api";
 import { expectedRevisionBody, responseRevision } from "./ProjectRevisionConflict";
 
@@ -10,7 +11,7 @@ type DirectorWorkspacePanelProps = {
   plan: any;
   selectedVariant: number;
   onRefreshProject: (projectId: string) => Promise<unknown>;
-  onNavigate?: (destination: string) => void;
+  onNavigate?: NavigateFn;
   onMutationError?: (error: unknown) => void;
 };
 

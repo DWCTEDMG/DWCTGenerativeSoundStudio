@@ -286,7 +286,7 @@ public sealed class ProjectTimelineContractsTests
 
         CanonicalProject project = dto.CanonicalProject;
 
-        Assert.AreEqual(2, project.MediaAssets.Count);
+        Assert.HasCount(2, project.MediaAssets);
         Assert.AreEqual("updated.mp4", project.MediaAssets.Single(asset => asset.Id == "existing").Path);
         Assert.AreEqual("inserted.mp4", project.MediaAssets.Single(asset => asset.Id == "inserted").Path);
     }

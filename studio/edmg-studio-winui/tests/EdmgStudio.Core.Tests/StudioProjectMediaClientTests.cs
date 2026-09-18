@@ -274,7 +274,7 @@ public sealed class StudioProjectMediaClientTests
 
             Assert.AreEqual(Path.GetFullPath(destination), actual);
             CollectionAssert.AreEqual(new byte[] { 0x10, 0x20, 0x30 }, await File.ReadAllBytesAsync(destination));
-            Assert.AreEqual(0, Directory.GetFiles(directory, "*.tmp").Length);
+            Assert.IsEmpty(Directory.GetFiles(directory, "*.tmp"));
         }
         finally
         {

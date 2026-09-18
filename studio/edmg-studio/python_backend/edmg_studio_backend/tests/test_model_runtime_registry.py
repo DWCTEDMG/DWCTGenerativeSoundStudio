@@ -72,9 +72,12 @@ def test_not_installed_is_distinct_from_runtime_unavailable(tmp_path):
         hardware={"backend": "cpu", "ram_gb": 8},
     )
     assert installed["installed"]
-    assert installed["runtime_state"] == "installed_runtime_unavailable"
+    assert installed["execution_ready"]
+    assert not installed["runtime_ready"]
+    assert installed["runtime_state"] == "execution_ready"
     assert installed["validation_level"] == 3
-    assert "smoke test" in installed["error"].lower()
+    assert installed["error"] is None
+    assert any("smoke qualification" in warning.lower() for warning in installed["warnings"])
 
 
 def test_nominal_installed_ram_tolerates_os_reservation_but_not_undersized_systems():
@@ -202,7 +205,7 @@ def test_hunyuan_wsl_uses_driver_visible_cuda_without_promoting_native_runtimes(
     assert native["device"] == "cpu"
 
 
-def test_hunyuan_requires_matching_level_five_smoke_receipt(tmp_path, monkeypatch):
+def test_hunyuan_executes_before_optional_level_five_smoke_receipt(tmp_path, monkeypatch):
     monkeypatch.setenv("EDMG_HUNYUAN15_RUNNER", "wsl")
     adapter = DEFAULT_RUNTIME_REGISTRY.adapter("hf_hunyuan_video15_internal")
     subject = ModelRuntimeRegistry()
@@ -218,12 +221,14 @@ def test_hunyuan_requires_matching_level_five_smoke_receipt(tmp_path, monkeypatc
         hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
     )
 
+    assert status["execution_ready"]
     assert not status["runtime_ready"]
-    assert status["runtime_state"] == "installed_runtime_unavailable"
+    assert status["runtime_state"] == "execution_ready"
     assert status["validation_level"] == 3
-    assert status["smoke_test_required"] is True
+    assert status["smoke_test_required"] is False
     assert not status["smoke_tested"]
-    assert any("smoke test" in blocker.lower() for blocker in status["blockers"])
+    assert status["blockers"] == []
+    assert any("smoke qualification" in warning.lower() for warning in status["warnings"])
 
     receipt_path = tmp_path / "runtime-validation.json"
     legacy_receipt = {
@@ -255,9 +260,23 @@ def test_hunyuan_requires_matching_level_five_smoke_receipt(tmp_path, monkeypatc
         package_validation=package_validation(),
         hardware={"backend": "cuda", "device": "cuda:0", "vram_gb": 48, "ram_gb": 128},
     )
+    assert qualified["execution_ready"]
     assert qualified["runtime_ready"]
     assert qualified["validation_level"] == 5
     assert qualified["smoke_tested"]
+
+
+def test_recommended_memory_shortfall_is_advisory(tmp_path):
+    status = registry(tmp_path).status(
+        "fixture",
+        package_root=tmp_path,
+        package_validation=package_validation(),
+        hardware={"backend": "cpu", "ram_gb": 0.25},
+    )
+
+    assert status["execution_ready"]
+    assert status["blockers"] == []
+    assert any("system ram" in warning.lower() for warning in status["warnings"])
 
 
 

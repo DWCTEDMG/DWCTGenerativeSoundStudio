@@ -26,12 +26,6 @@ PROFILES = {
     "hf_whisper_large_v3_turbo_internal": ("whisper_transformers", "asr", 0, 8, ("torch", "transformers")),
     "hf_ltx_25_distilled_internal": ("ltx_25", "video", 5, 36, ("torch", "ltx_core", "ltx_pipelines")),
 }
-RUNTIME_BLOCKERS = {
-    "qwen3_vl_gguf": ["Install a supported llama-server build and run the model runtime smoke test before using this Director package."],
-    "hunyuan_video15": ["Configure the explicit WSL2 or external Linux Python runner and qualify it with the runtime smoke test.", "Separate Qwen2.5-VL, ByT5, Glyph-SDXL-v2, and gated FLUX.1-Redux-dev assets are required and are not included in the Tencent package."],
-    "whisper_transformers": ["Run the model runtime smoke test before selecting the managed Transformers Whisper provider."],
-    "ltx_25": ["Configure ltx-pipelines 1.3.0 in the isolated runtime and run the model runtime smoke test."],
-}
 
 
 def package_manifest(model_id: str) -> dict[str, Any] | None:

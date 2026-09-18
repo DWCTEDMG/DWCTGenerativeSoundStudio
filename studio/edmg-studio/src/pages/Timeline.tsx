@@ -1423,7 +1423,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
     if (st.kind === "track") {
       const currentTimeline = timelineRef.current;
-      const currentTracks = Array.isArray(currentTimeline.tracks) ? currentTimeline.tracks : [];
+      const currentTracks: Track[] = Array.isArray(currentTimeline.tracks) ? currentTimeline.tracks : [];
       const tr = currentTracks[st.trackIdx];
       const cl = tr?.clips?.[st.clipIdx];
       if (!tr || !cl) return;
@@ -1482,7 +1482,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
     if (st.kind === "overlay") {
       const currentTimeline = timelineRef.current;
-      const currentLayers = Array.isArray(currentTimeline.layers) ? currentTimeline.layers : [];
+      const currentLayers: AnyDict[] = Array.isArray(currentTimeline.layers) ? currentTimeline.layers : [];
       const l = currentLayers[st.layerIdx];
       if (!l) return;
       if (isLaneLocked("overlays")) return;
@@ -1515,7 +1515,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
     if (st.kind === "camera") {
       const currentTimeline = timelineRef.current;
-      const currentKeyframes = Array.isArray(currentTimeline.camera?.keyframes)
+      const currentKeyframes: AnyDict[] = Array.isArray(currentTimeline.camera?.keyframes)
         ? currentTimeline.camera.keyframes
         : [];
       const k = currentKeyframes[st.kfIdx];

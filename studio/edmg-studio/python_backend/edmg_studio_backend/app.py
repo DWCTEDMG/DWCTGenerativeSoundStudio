@@ -177,7 +177,7 @@ from .integrations import azure as azure_integration
 from .integrations import hf_bucket as hf_bucket_integration
 from .integrations import lightning as lightning_integration
 from .utils.path import safe_join
-from .correlation import CorrelationMiddleware, correlation_enabled
+from .correlation import CorrelationMiddleware, correlation_enabled, current_correlation
 from .errors import UserFacingError, hint_from_exception
 from .security import BackendSecurityMiddleware, BackendSecuritySettings
 from .services.model_manager import ModelManager
@@ -868,7 +868,7 @@ def _render_capability_evidence(preflight: dict[str, Any]) -> dict[str, Any]:
                 package_validation=validate_package(Path(package_root), MANIFESTS[model_id]),
             )
             level = int(status.get("validation_level") or 0)
-            warnings.extend(str(value) for value in list(status.get("blockers") or []))
+            warnings.extend(str(value) for value in list(status.get("warnings") or []))
             if level == 5 and status.get("runtime_ready"):
                 receipt = "runtime-validation.json"
     blockers = list(dict.fromkeys(blockers))
@@ -897,7 +897,7 @@ def _public_render_preflight(preflight: dict[str, Any]) -> dict[str, Any]:
 
 
 def _internal_video_runtime_ready(model_id: str, package_root: Path) -> tuple[bool, str]:
-    """Require a matching real-inference receipt for managed video engines."""
+    """Require execution prerequisites while keeping smoke qualification advisory."""
 
     if model_id not in {HUNYUAN_MODEL_ID, LTX_MODEL_ID}:
         return True, ""
@@ -909,10 +909,10 @@ def _internal_video_runtime_ready(model_id: str, package_root: Path) -> tuple[bo
         package_root=package_root,
         package_validation=validate_package(package_root, MANIFESTS[model_id]),
     )
-    if status.get("runtime_ready"):
+    if status.get("execution_ready", status.get("runtime_ready", False)):
         return True, ""
     reasons = [str(value) for value in list(status.get("blockers") or [])]
-    return False, "; ".join(reasons) or "A matching real-inference runtime receipt is required."
+    return False, "; ".join(reasons) or "The runtime execution prerequisites are incomplete."
 
 
 def _project_variant_for_render(proj: Any, variant_index: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -10104,7 +10104,7 @@ def _resolve_internal_video_model_selection(
     runtime_ready, runtime_reason = _internal_video_runtime_ready(requested_model_id, resolved_path)
     if not runtime_ready:
         raise UserFacingError(
-            "The selected internal video runtime is not qualified",
+            "The selected internal video runtime cannot execute",
             hint=runtime_reason,
             code="INTERNAL_VIDEO_MODEL_RUNTIME_UNAVAILABLE",
             status_code=422,

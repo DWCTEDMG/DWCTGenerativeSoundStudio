@@ -194,7 +194,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         }
 
         int installed = allModels.Count(model => model.IsInstalled);
-        int ready = allModels.Count(model => model.RuntimeStatus?.RuntimeReady == true);
+        int ready = allModels.Count(model => model.RuntimeStatus is { } status && (status.ExecutionReady || status.RuntimeReady));
         int video = allModels.Count(model => model.IsVideoModel);
         CatalogueSummaryText.Text =
             $"{_visibleModels.Count} shown | {installed} installed | {ready} runtime ready | {video} video/motion";
@@ -322,7 +322,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                 JsonElement response = await _apiClient.ProbeHunyuanRuntimeAsync(token);
                 bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
                 HunyuanStatusText.Text = ready
-                    ? "Hunyuan Linux environment is reachable and configured. A matching Level-5 inference smoke receipt is still required before rendering."
+                    ? "Hunyuan Linux environment is reachable and configured. Rendering is admitted after package validation; a Level-5 inference smoke receipt remains optional qualification evidence."
                     : FormatHunyuanIssues(response);
             },
             "Hunyuan Linux runtime probe completed.");
@@ -433,7 +433,8 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     private async Task UpdateRuntimeStatusAsync(string modelId, TextBlock target, CancellationToken cancellationToken)
     {
         ModelRuntimeStatus status = await _apiClient.GetModelRuntimeReadinessAsync(modelId, cancellationToken);
-        target.Text = $"Installed: {status.Installed} | Configured: {status.ValidationLevel >= 3} | Reachable: {status.AdapterReady} | Model loaded: {status.SmokeTested} | Smoke-qualified: {status.RuntimeReady}\nDevice: {status.Device ?? "unknown"} | Capability level: {status.ValidationLevel}\n{string.Join("\n", status.Blockers ?? [])}";
+        string details = string.Join("\n", (status.Blockers ?? []).Concat(status.Warnings ?? []));
+        target.Text = $"Installed: {status.Installed} | Configured: {status.ValidationLevel >= 3} | Reachable: {status.AdapterReady} | Execution ready: {status.ExecutionReady || status.RuntimeReady} | Level-5 qualified: {status.RuntimeReady}\nDevice: {status.Device ?? "unknown"} | Capability level: {status.ValidationLevel}\n{details}";
     }
 
     private async void QwenSave_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
@@ -1090,7 +1091,8 @@ public sealed class ModelPresentation
     public bool CanSmokeTest => IsInstalled && RuntimeStatus?.SmokeTestSupported == true;
     public string StateLabel => RuntimeStatus?.RuntimeState switch
     {
-        "runtime_ready" => "Runtime ready",
+        "runtime_ready" => "Level-5 qualified",
+        "execution_ready" => "Execution ready",
         "runtime_degraded" => "Runtime degraded",
         "installed_runtime_unavailable" when IsInstalled => "Installed / Runtime unavailable",
         _ when IsInstalled => "Installed",
@@ -1100,7 +1102,8 @@ public sealed class ModelPresentation
     public string RuntimeDetail => RuntimeStatus is null
         ? string.Empty
         : $"\nValidation level: {RuntimeStatus.ValidationLevel}"
-          + (string.IsNullOrWhiteSpace(RuntimeStatus.Error) ? string.Empty : $"\nReason: {RuntimeStatus.Error}");
+          + (string.IsNullOrWhiteSpace(RuntimeStatus.Error) ? string.Empty : $"\nReason: {RuntimeStatus.Error}")
+          + ((RuntimeStatus.Warnings?.Count ?? 0) == 0 ? string.Empty : $"\nAdvisory: {string.Join(" | ", RuntimeStatus.Warnings!)}");
     public string Subtitle => $"{Kind} - {Source} - {Lane}";
 
     public bool Matches(string query) =>
@@ -1114,7 +1117,7 @@ public sealed class ModelPresentation
     public bool MatchesFilter(string filter) => filter switch
     {
         "installed" => IsInstalled,
-        "ready" => RuntimeStatus?.RuntimeReady == true,
+        "ready" => RuntimeStatus is { } status && (status.ExecutionReady || status.RuntimeReady),
         "video" => IsVideoModel,
         _ => true
     };
