@@ -89,6 +89,67 @@ public sealed class BackendSettingsStoreTests
     }
 
     [TestMethod]
+    public void SaveExternalBackend_NormalizesUrlAndPreservesUnrelatedBootstrapSettings()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            var bootstrapPath = Path.Combine(root, "bootstrap.json");
+            File.WriteAllText(
+                bootstrapPath,
+                """
+                {
+                  "storageSettings": {
+                    "models": "D:\\EDMG\\Models"
+                  },
+                  "customSetting": {
+                    "preserve": true
+                  }
+                }
+                """);
+
+            BackendSettingsStore.SaveExternalBackend(new Uri("https://studio.example:9443/v1/?token=secret#fragment"), bootstrapPath);
+
+            using var document = JsonDocument.Parse(File.ReadAllText(bootstrapPath));
+            var json = document.RootElement;
+            var backend = json.GetProperty("backendSettings");
+            Assert.AreEqual("external", backend.GetProperty("mode").GetString());
+            Assert.AreEqual("https://studio.example:9443", backend.GetProperty("url").GetString());
+            Assert.AreEqual("D:\\EDMG\\Models", json.GetProperty("storageSettings").GetProperty("models").GetString());
+            Assert.IsTrue(json.GetProperty("customSetting").GetProperty("preserve").GetBoolean());
+
+            var loaded = BackendConfiguration.LoadFromBootstrap(bootstrapPath);
+            Assert.AreEqual(RequestedBackendMode.External, loaded.Mode);
+            Assert.AreEqual(new Uri("https://studio.example:9443/"), loaded.BackendUri);
+            Assert.IsEmpty(loaded.ValidationErrors);
+        }
+        finally
+        {
+            BackendConfigurationTests.DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void SaveExternalBackend_RejectsEmbeddedCredentialsWithoutChangingBootstrap()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            var bootstrapPath = Path.Combine(root, "bootstrap.json");
+            const string original = """{"customSetting":{"preserve":true}}""";
+            File.WriteAllText(bootstrapPath, original);
+
+            Assert.ThrowsExactly<ArgumentException>(
+                () => BackendSettingsStore.SaveExternalBackend(new Uri("https://user:secret@studio.example"), bootstrapPath));
+            Assert.AreEqual(original, File.ReadAllText(bootstrapPath));
+        }
+        finally
+        {
+            BackendConfigurationTests.DeleteTemporaryRoot(root);
+        }
+    }
+
+    [TestMethod]
     public void ResetToManaged_DoesNotOverwriteMalformedBootstrap()
     {
         var root = BackendConfigurationTests.CreateTemporaryRoot();

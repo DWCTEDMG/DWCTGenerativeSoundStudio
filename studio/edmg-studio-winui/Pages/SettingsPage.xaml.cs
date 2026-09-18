@@ -25,6 +25,7 @@ public sealed partial class SettingsPage : Page
     {
         InitializeComponent();
         InitializeAppearance();
+        LoadBackendSettings();
         Loaded += SettingsPage_Loaded;
         Unloaded += SettingsPage_Unloaded;
         LoadRemoteControlSettings();
@@ -85,6 +86,7 @@ public sealed partial class SettingsPage : Page
                 $"{readinessTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
                 $"{hardwareTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
                 metricsTask.Result.Text;
+            LoadBackendSettings();
             LoadFoundrySettings();
             LoadVst3Status();
 
@@ -245,6 +247,26 @@ public sealed partial class SettingsPage : Page
         _initializingAppearance = false;
     }
 
+    private void LoadBackendSettings()
+    {
+        try
+        {
+            var persisted = BackendSettingsStore.LoadDesktopBackendSettings();
+            BackendModeComboBox.SelectedIndex = persisted.Mode == RequestedBackendMode.External ? 1 : 0;
+            RemoteBackendUrlTextBox.Text = persisted.ExternalBackendUri?.AbsoluteUri.TrimEnd('/') ?? string.Empty;
+            RemoteBackendUrlTextBox.IsEnabled = persisted.Mode == RequestedBackendMode.External;
+
+            var active = App.Services.BackendSupervisor.Status;
+            ActiveBackendText.Text =
+                $"Active: {active.CurrentBackendUri.AbsoluteUri.TrimEnd('/')} · {active.State.ToString().ToLowerInvariant()}";
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ActiveBackendText.Text = exception.Message;
+        }
+    }
+
     private void AppearanceThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_initializingAppearance ||
@@ -255,6 +277,62 @@ public sealed partial class SettingsPage : Page
 
         StudioAppearanceService.ApplyTheme(themeId, App.MainWindowInstance?.Content as FrameworkElement ?? this);
         ShowStatus($"Appearance changed to {themeId}.", InfoBarSeverity.Success);
+    }
+
+    private void BackendModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RemoteBackendUrlTextBox.IsEnabled =
+            BackendModeComboBox.SelectedItem is ComboBoxItem { Tag: string tag }
+            && string.Equals(tag, "external", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async void ApplyBackendButton_Click(object sender, RoutedEventArgs e)
+    {
+        var external = BackendModeComboBox.SelectedItem is ComboBoxItem { Tag: string tag }
+                       && string.Equals(tag, "external", StringComparison.OrdinalIgnoreCase);
+        if (!external)
+        {
+            await SwitchBackendAsync(RequestedBackendMode.Managed, null);
+            return;
+        }
+
+        if (!Uri.TryCreate(RemoteBackendUrlTextBox.Text.Trim(), UriKind.Absolute, out var backendUri))
+        {
+            ShowStatus("Enter an absolute http:// or https:// remote backend URL.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        await SwitchBackendAsync(RequestedBackendMode.External, backendUri);
+    }
+
+    private async void UseManagedBackendButton_Click(object sender, RoutedEventArgs e) =>
+        await SwitchBackendAsync(RequestedBackendMode.Managed, null);
+
+    private async Task SwitchBackendAsync(RequestedBackendMode mode, Uri? externalBackendUri)
+    {
+        SetBusy(true);
+        try
+        {
+            var status = await App.Services.SwitchBackendAsync(mode, externalBackendUri);
+            LoadBackendSettings();
+            status = await App.Services.BackendSupervisor.StartAsync();
+            LoadBackendSettings();
+            ShowStatus(
+                status.IsReady
+                    ? $"Backend connected: {status.CurrentBackendUri.AbsoluteUri.TrimEnd('/')}"
+                    : status.Detail ?? status.Message,
+                status.IsReady ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+            await RefreshAsync();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or IOException or UnauthorizedAccessException or HttpRequestException)
+        {
+            ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private void SaveFoundryButton_Click(object sender, RoutedEventArgs e)

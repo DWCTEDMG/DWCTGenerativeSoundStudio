@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Channels;
+using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Media;
 using EdmgStudio.Core.Audio;
@@ -47,7 +48,7 @@ public sealed class AppServices : IAsyncDisposable
         Transport.StateChanged += OnTransportStateChanged;
     }
 
-    public BackendConfiguration Configuration { get; }
+    public BackendConfiguration Configuration { get; private set; }
     public BackendSupervisor BackendSupervisor { get; }
     public StudioApiClient ApiClient { get; }
     public StudioProjectMediaClient ProjectMediaClient { get; }
@@ -58,6 +59,41 @@ public sealed class AppServices : IAsyncDisposable
     public StudioCommandDispatcher Commands { get; }
     public StudioRemoteControlService RemoteControl { get; }
     public WindowsMidiInputService MidiInput { get; }
+
+    public async Task<BackendStatus> SwitchBackendAsync(
+        RequestedBackendMode mode,
+        Uri? externalBackendUri = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (mode == RequestedBackendMode.External)
+        {
+            if (externalBackendUri is null)
+            {
+                throw new ArgumentException("Remote backend URL is required.", nameof(externalBackendUri));
+            }
+
+            BackendSettingsStore.SaveExternalBackend(externalBackendUri);
+        }
+        else
+        {
+            BackendSettingsStore.ResetToManaged();
+        }
+
+        var configuration = BackendConfiguration.Load();
+        var tokenProvider = new WindowsBackendTokenProvider(new EnvironmentBackendTokenProvider());
+        var launchToken = await tokenProvider.GetTokenAsync(cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(launchToken))
+        {
+            var managedEnvironment = new Dictionary<string, string>(configuration.ManagedEnvironment, StringComparer.OrdinalIgnoreCase)
+            {
+                ["EDMG_BACKEND_AUTH_TOKEN"] = launchToken
+            };
+            configuration = configuration with { ManagedEnvironment = managedEnvironment };
+        }
+
+        Configuration = configuration;
+        return await BackendSupervisor.ApplyConfigurationAsync(configuration, cancellationToken).ConfigureAwait(false);
+    }
 
     internal bool TryTrackPreviewSession(PreviewRendererSession session)
     {

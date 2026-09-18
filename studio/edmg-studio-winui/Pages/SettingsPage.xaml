@@ -68,6 +68,43 @@
 
                 <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Desktop backend" />
+                        <TextBlock
+                            Opacity="0.72"
+                            Text="Choose whether WinUI supervises the local FastAPI backend or connects to a hosted Studio backend."
+                            TextWrapping="Wrap" />
+                        <ComboBox
+                            x:Name="BackendModeComboBox"
+                            AutomationProperties.AutomationId="SettingsBackendModeComboBox"
+                            Header="Backend mode"
+                            SelectionChanged="BackendModeComboBox_SelectionChanged">
+                            <ComboBoxItem Content="Managed local backend" Tag="managed" />
+                            <ComboBoxItem Content="Remote backend URL" Tag="external" />
+                        </ComboBox>
+                        <TextBox
+                            x:Name="RemoteBackendUrlTextBox"
+                            AutomationProperties.AutomationId="SettingsRemoteBackendUrlTextBox"
+                            Header="Remote backend URL"
+                            PlaceholderText="https://studio-backend.example.com" />
+                        <TextBlock
+                            x:Name="ActiveBackendText"
+                            Opacity="0.68"
+                            TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button
+                                AutomationProperties.AutomationId="SettingsApplyBackendButton"
+                                Click="ApplyBackendButton_Click"
+                                Content="Apply backend" />
+                            <Button
+                                AutomationProperties.AutomationId="SettingsUseManagedBackendButton"
+                                Click="UseManagedBackendButton_Click"
+                                Content="Use managed local" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Video generation route" />
                         <ComboBox
                             x:Name="VideoRouteComboBox"

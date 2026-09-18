@@ -17,8 +17,8 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromMilliseconds(1500);
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromMilliseconds(300);
 
-    private readonly BackendConfiguration _configuration;
-    private readonly BackendLaunchSpecFactory _specFactory;
+    private BackendConfiguration _configuration;
+    private BackendLaunchSpecFactory _specFactory;
     private readonly HttpClient _probeClient;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCancellation = new();
@@ -63,6 +63,30 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
     }
 
     public Uri CurrentBackendUri => Status.CurrentBackendUri;
+
+    public async Task<BackendStatus> ApplyConfigurationAsync(
+        BackendConfiguration configuration,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StopOwnedProcessAsync(CancellationToken.None).ConfigureAwait(false);
+            _configuration = configuration;
+            _specFactory = new BackendLaunchSpecFactory(configuration);
+            return Publish(new BackendStatus(
+                BackendLifecycleState.Stopped,
+                configuration.Mode == RequestedBackendMode.External ? BackendMode.External : BackendMode.Attached,
+                configuration.BackendUri,
+                "Backend target changed. Reconnect to use the selected endpoint.",
+                AcceleratorProfile: configuration.AcceleratorProfile));
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
 
     public async Task<BackendStatus> StartAsync(CancellationToken cancellationToken = default)
     {

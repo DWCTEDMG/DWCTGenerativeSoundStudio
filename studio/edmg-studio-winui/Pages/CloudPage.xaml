@@ -149,7 +149,7 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                 <StackPanel Spacing="12">
                     <TextBlock Text="Lightning.ai bundle" Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Generate a local deployment bundle through FastAPI. Connecting this client to a hosted Lightning backend is unavailable without a backend-settings contract."
+                    <TextBlock Text="Generate a local deployment bundle through FastAPI, then connect WinUI to a hosted backend from Settings."
                                TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <TextBox x:Name="LightningOutputTextBox" Header="Output directory"
                              Text="lightning/lightning_bundle"
@@ -158,8 +158,9 @@
                         <Button Content="Generate bundle" Style="{StaticResource AccentButtonStyle}"
                                 Click="LightningBundle_Click"
                                 AutomationProperties.AutomationId="CloudLightningBundleButton" />
-                        <Button Content="Connect hosted backend" IsEnabled="False"
-                                ToolTipService.ToolTip="No FastAPI contract exists for changing the desktop client's backend target."
+                        <Button Content="Connect hosted backend"
+                                Click="OpenSettings_Click"
+                                ToolTipService.ToolTip="Open Settings to save and apply a remote backend URL."
                                 AutomationProperties.AutomationId="CloudLightningConnectButton" />
                     </StackPanel>
                 </StackPanel>

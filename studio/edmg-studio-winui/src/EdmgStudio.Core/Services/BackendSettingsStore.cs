@@ -14,6 +14,12 @@ public sealed record FoundryProjectSettings(
         new Uri("https://jonlong-1185-resource.services.ai.azure.com/api/projects/jonlong-1185"));
 }
 
+public sealed record DesktopBackendSettings(
+    RequestedBackendMode Mode,
+    Uri? ExternalBackendUri,
+    string Host,
+    int Port);
+
 public static class BackendSettingsStore
 {
     public static string GetDefaultBootstrapPath() =>
@@ -47,6 +53,52 @@ public static class BackendSettingsStore
         root["updatedAt"] = DateTimeOffset.UtcNow.ToString("O");
 
         WriteAtomically(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+    }
+
+    public static void SaveExternalBackend(Uri backendUri, string? bootstrapPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(backendUri);
+        var normalized = BackendConfiguration.NormalizeBackendUri(backendUri.AbsoluteUri)
+            ?? throw new ArgumentException(
+                "Remote backend URL must be an absolute http:// or https:// URL.",
+                nameof(backendUri));
+
+        if (!string.IsNullOrWhiteSpace(normalized.UserInfo))
+        {
+            throw new ArgumentException("Remote backend URL must not include embedded credentials.", nameof(backendUri));
+        }
+
+        var path = Path.GetFullPath(bootstrapPath ?? GetDefaultBootstrapPath());
+        var root = ReadRoot(path);
+        root["backendSettings"] = new JsonObject
+        {
+            ["mode"] = "external",
+            ["host"] = "127.0.0.1",
+            ["port"] = "7863",
+            ["url"] = normalized.AbsoluteUri.TrimEnd('/')
+        };
+        root["updatedAt"] = DateTimeOffset.UtcNow.ToString("O");
+
+        WriteAtomically(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+    }
+
+    public static DesktopBackendSettings LoadDesktopBackendSettings(string? bootstrapPath = null)
+    {
+        var path = Path.GetFullPath(bootstrapPath ?? GetDefaultBootstrapPath());
+        var root = ReadRoot(path);
+        if (root["backendSettings"] is not JsonObject backend)
+        {
+            return new DesktopBackendSettings(RequestedBackendMode.Managed, null, "127.0.0.1", 7863);
+        }
+
+        var mode = string.Equals(ReadOptionalString(backend, "mode"), "external", StringComparison.OrdinalIgnoreCase)
+            ? RequestedBackendMode.External
+            : RequestedBackendMode.Managed;
+        var externalUri = BackendConfiguration.NormalizeBackendUri(ReadOptionalString(backend, "url"));
+        var host = ReadOptionalString(backend, "host") ?? "127.0.0.1";
+        var portText = ReadOptionalString(backend, "port");
+        var port = int.TryParse(portText, out var parsed) && parsed is >= 1 and <= 65535 ? parsed : 7863;
+        return new DesktopBackendSettings(mode, externalUri, host, port);
     }
 
     public static FoundryProjectSettings LoadFoundrySettings(string? bootstrapPath = null)
