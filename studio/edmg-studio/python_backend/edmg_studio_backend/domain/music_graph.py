@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -305,7 +306,14 @@ def music_graph_for_project(project_dir: Path, meta: dict[str, Any] | None) -> d
             json.dumps(graph, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
             encoding="utf-8",
         )
-        os.replace(temporary, cache_path)
+        for attempt in range(4):
+            try:
+                os.replace(temporary, cache_path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.025 * (attempt + 1))
     except OSError as exc:
         graph["provenance"]["storage"] = "derived_in_memory"
         logger.warning("Could not persist Music Graph cache at %s: %s", cache_path, exc)

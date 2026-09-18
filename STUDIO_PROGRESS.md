@@ -32,18 +32,18 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions, the WinUI blueprint, and the latest Reviewer update are loaded. The authorized diagnostics cleanup is complete while preserving the model-admission work and native WinUI priority.
+**Acknowledgement:** Repository instructions and the latest Reviewer update are loaded. This task is limited to compatibility-client clipboard deprecation diagnostics and preserves the native WinUI priority.
 
-- Updated UTC: 2026-09-18T07:27:18Z.
-- Task / blueprint gate: Tooling reliability — align the compatibility client's checked-in TypeScript configuration with Visual Studio strict analysis and clear the native test analyzer backlog.
-- Branch / base commit / dirty state: `codex/Unified` at `8ad7f2a3461ea3f1ea69707932f6724ab4284074`; 45 worktree entries remain, including completed model-admission work and pre-existing unrelated edits.
-- Owned files or work areas: strict TypeScript configuration/contracts and affected compatibility-client production/tests; 13 native Core test files with MSTest analyzer findings; this Implementer section. Unrelated `WindowsAudioEngine.cs`, backend worker/test edits, and deleted documentation remain preserved.
-- Completed: enabled checked-in strict TypeScript; removed all 63 diagnostics through typed fetch routes, domain collections/navigation, closure-safe model actions, test deferred/mock handling, a valid Babel callback, and a Director runtime declaration. Replaced seven obsolete `DataTestMethod` attributes and 13 generic assertions, clearing all 20 forced-rebuild MSTest warnings.
-- Remaining: none for this task.
-- Blockers: none. The default parallel Vitest run could not start 37 fork workers on this workstation; the same complete suite passes with `--maxWorkers=1`. No dependency synchronization or accelerator changes occurred.
-- Validation: from `studio\edmg-studio`, `pnpm run typecheck` exit 0 (`%TEMP%\studio-typescript-typecheck.log`), `pnpm run lint` exit 0 (`%TEMP%\studio-eslint.log`), focused Vitest 6 files/34 tests exit 0 (`%TEMP%\studio-strict-focused-tests.log`), and full single-worker Vitest 42 files/180 tests exit 0 (`%TEMP%\studio-ui-tests-single-worker.log`). From repository root, native Release/x64 solution build exit 0 with 0 warnings/0 errors (`%TEMP%\studio-winui-release-build.log`), forced Core test rebuild exit 0 with 0 warnings/0 errors (`%TEMP%\studio-core-tests-rebuild-clean.log`), and Visual Studio Test Explorer ran 523 tests: 523 passed. `git diff --check` exit 0; line-ending normalization notices only.
-- Next step: reviewer can inspect the saved strict-mode and analyzer-clean changes; no release or real-device qualification is implied.
-- Reviewer findings addressed: active CUDA environment remained untouched; no real-model/device claims changed; native incremental and forced analyzer-visible builds are both clean.
+- Updated UTC: 2026-09-18T09:44:25Z.
+- Task / blueprint gate: Tooling reliability — remove TS6387 from compatibility-client clipboard helpers without changing successful Clipboard API behavior.
+- Branch / base commit / dirty state: `codex/Unified` at `0d2f55bb7d9e709d5264868bab336f86e2901a25`; dirty worktree with pre-existing WinUI/backend edits preserved.
+- Owned files or work areas: `studio/edmg-studio/src/workbenches/AiNlpWorkbench.tsx`, `studio/edmg-studio/src/workbenches/AudioReactiveWorkbench.tsx`, `studio/edmg-studio/src/pages/EdmgDirector.tsx`, and this Implementer section only.
+- Completed: replaced the deprecated `document.execCommand('copy')` fallbacks with explicit Clipboard API unavailability errors; `AudioReactiveWorkbench.tsx` was changed for this request, while the concurrent `AiNlpWorkbench.tsx` and `EdmgDirector.tsx` changes were preserved.
+- Remaining: none for this diagnostic.
+- Blockers: none. No dependency synchronization or accelerator changes occurred.
+- Validation: repository-root `pnpm run typecheck` and `pnpm exec eslint ...` exited 1 because no package manifest or project-local ESLint resolution exists there. From `studio\edmg-studio`, `pnpm run typecheck` exited 0 and `pnpm exec eslint src/workbenches/AiNlpWorkbench.tsx src/workbenches/AudioReactiveWorkbench.tsx src/pages/EdmgDirector.tsx --max-warnings=0` exited 0; source search found 0 remaining `.execCommand(` calls. Repository-root targeted `git diff --check` exited 0 with only a line-ending normalization notice for this handoff file. Candidate remained dirty with 13 worktree entries; no new log files were saved.
+- Next step: hand the focused fix back to the user.
+- Reviewer findings addressed: active accelerator environment and native WinUI files remain untouched; no device or integration claims are made.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 

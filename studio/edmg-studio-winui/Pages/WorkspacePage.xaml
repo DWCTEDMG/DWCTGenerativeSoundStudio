@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:EdmgStudio.WinUI.Pages"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    NavigationCacheMode="Enabled"
     mc:Ignorable="d">
 
     <Page.Resources>
@@ -183,7 +184,7 @@
                                 <AppBarButton x:Name="MakeCommandButton" Icon="Play" Label="Make this" Click="MakeCommand_Click" AutomationProperties.AutomationId="Workspace.Command.Make" />
                                 <AppBarButton x:Name="CancelCommandButton" Icon="Cancel" Label="Cancel" Click="CancelCommand_Click" IsEnabled="False" />
                                 <AppBarButton x:Name="CommandReviewButton" Icon="View" Label="Recover Director draft" Click="CommandReview_Click" />
-                                <AppBarButton x:Name="CommandRenderButton" Icon="Forward" Label="Apply and open Render" Click="CommandRender_Click" />
+                                <AppBarButton x:Name="CommandRenderButton" Icon="Forward" Label="Apply once and open Render" Click="CommandRender_Click" />
                                 <CommandBar.SecondaryCommands>
                                     <AppBarButton Label="Director" Click="OpenFullDirectorButton_Click" />
                                     <AppBarButton Label="Models" Icon="Library" Click="CommandModels_Click" />
@@ -365,11 +366,11 @@
                                 </ListView>
                                 <CommandBar DefaultLabelPosition="Right">
                                     <AppBarButton x:Name="PrepareWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Prepare" Label="Prepare draft" Icon="Refresh" IsEnabled="False" Click="PrepareWorkflowButton_Click" />
-                                    <AppBarButton x:Name="SaveWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Save" Label="Save draft edits" Icon="Save" IsEnabled="False" Click="SaveWorkflowButton_Click" />
-                                    <AppBarButton x:Name="ApplyWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Apply" Label="Apply combined draft to Timeline" Icon="Accept" IsEnabled="False" Click="ApplyWorkflowButton_Click" />
+                                    <AppBarButton x:Name="SaveWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Save" Label="Save draft" Icon="Save" IsEnabled="False" Click="SaveWorkflowButton_Click" />
+                                    <AppBarButton x:Name="ApplyWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Apply" Label="Apply to Timeline" Icon="Accept" IsEnabled="False" Click="ApplyWorkflowButton_Click" />
                                     <AppBarButton x:Name="DiscardWorkflowEditsButton" AutomationProperties.AutomationId="Workspace.Direction.Discard" Label="Discard local edits" Icon="Undo" IsEnabled="False" Click="DiscardWorkflowEditsButton_Click" />
                                 </CommandBar>
-                                <TextBlock Text="Audio analysis prepares scenes and reactive keyframes automatically. The AI Planner and Reactive Lab show the same Workspace draft. Review it, apply once, then render when you are ready." TextWrapping="Wrap"
+                                <TextBlock Text="Audio analysis prepares scenes and reactive keyframes automatically. Save keeps the shared draft for review; Apply commits that draft to Timeline and Render." TextWrapping="Wrap"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                         </Border>

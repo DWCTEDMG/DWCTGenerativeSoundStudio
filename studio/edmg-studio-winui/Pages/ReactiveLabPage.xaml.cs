@@ -107,6 +107,31 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
             externalCancellationToken: cancellationToken);
     }
 
+    public bool TryBuildPendingWorkspaceDraftPayload(out JsonElement payload, out IReadOnlyList<string> errors)
+    {
+        payload = default;
+        if (!TryBuildRequest(out ReactiveLabApplyRequest request, out errors))
+        {
+            return false;
+        }
+
+        payload = JsonSerializer.SerializeToElement(
+            request,
+            StudioJsonContext.Default.ReactiveLabApplyRequest);
+        return true;
+    }
+
+    public async Task AcceptWorkspaceWorkflowReviewAsync(JsonElement workflow, CancellationToken cancellationToken = default)
+    {
+        LoadWorkflow(workflow);
+        UpdateRawJson();
+        await SaveLocalStateAsync();
+        if (!string.IsNullOrWhiteSpace(_activeProjectId))
+        {
+            await RefreshProjectRevisionAsync(_activeProjectId, cancellationToken);
+        }
+    }
+
     private void ReactiveLabPage_Unloaded(object sender, RoutedEventArgs e)
     {
         _pageLoaded = false;

@@ -288,13 +288,7 @@ function formatClock(seconds: number): string {
 
 function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
-  return Promise.resolve();
+  return Promise.reject(new Error('Clipboard API not available'));
 }
 
 function downloadText(filename: string, contents: string, type = 'text/plain'): void {

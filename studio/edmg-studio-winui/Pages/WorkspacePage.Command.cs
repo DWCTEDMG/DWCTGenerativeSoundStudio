@@ -197,16 +197,20 @@ public sealed partial class WorkspacePage
     private async void CommandRender_Click(object sender, RoutedEventArgs e)
     {
         if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
-        if (WorkspacePlannerFrame.Content is AiPlannerLabPage { HasUnsavedEdits: true } ||
-            WorkspaceReactiveFrame.Content is ReactiveLabPage { HasUnsavedEdits: true })
+        if (_directorReviewedJobId is not null && ProtectUnsavedWorkflowEdits())
         {
-            ShowStatus("Save editor changes", "Save your Planner and Reactive edits before applying the combined draft.", InfoBarSeverity.Warning);
+            ShowStatus("Current draft retained", "Save or apply the current draft before replacing it with the reviewed Director proposal.", InfoBarSeverity.Warning);
             return;
         }
-        if (_directorReviewedJobId is not null && ProtectUnsavedWorkflowEdits()) return;
+
         await RunBusyAsync("Preparing render handoff", async token =>
         {
             await UseCommandProposalAsync(projectId, token);
+            if (!await PrepareWorkflowReviewPayloadAsync(projectId, token))
+            {
+                return;
+            }
+
             if (!HasUnsavedWorkflowEdits()) await LoadWorkflowAsync(projectId, token);
             if (_workflowStatus == "draft" && _workflowDraftId is string draftId)
             {

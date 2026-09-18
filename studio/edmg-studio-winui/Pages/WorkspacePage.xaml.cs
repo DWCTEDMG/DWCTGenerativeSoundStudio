@@ -48,6 +48,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private string? _workflowDraftId;
     private string _workflowStatus = "not_prepared";
     private long _workflowRevision;
+    private int _workflowSampleRate = 48_000;
     private bool _workflowWriteInProgress;
 
     public WorkspacePage()
@@ -84,15 +85,6 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     public Task RefreshAsync(CancellationToken cancellationToken = default) =>
         RunBusyAsync("Refreshing Workspace", LoadProjectsAndWorkspaceAsync, cancellationToken);
-
-    protected override void OnNavigatingFrom(NavigatingCancelEventArgs e)
-    {
-        if (ProtectUnsavedWorkflowEdits())
-        {
-            e.Cancel = true;
-        }
-        base.OnNavigatingFrom(e);
-    }
 
     private async Task LoadProjectsAndWorkspaceAsync(CancellationToken cancellationToken)
     {
@@ -1042,13 +1034,10 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         JsonObject? bible = _workflowDocument["story_bible"] as JsonObject;
         WorkflowThemeTextBox.Text = bible?["project_theme"]?.GetValue<string>() ?? string.Empty;
         WorkflowStyleTextBox.Text = bible?["visual_style"]?.GetValue<string>() ?? string.Empty;
-        int sampleRate = draft.TryGetProperty("provenance", out JsonElement provenance) &&
+        _workflowSampleRate = draft.TryGetProperty("provenance", out JsonElement provenance) &&
                          provenance.TryGetProperty("sample_rate", out JsonElement rate) && rate.TryGetInt32(out int value) && value > 0
             ? value : 48_000;
-        foreach (JsonObject scene in (_workflowDocument["scenes"] as JsonArray ?? []).OfType<JsonObject>())
-        {
-            WorkflowSceneItems.Add(new WorkspaceDirectionSceneItem(scene, sampleRate, editable, WorkflowEditsChanged));
-        }
+        PresentWorkflowSceneItems(editable);
         _workflowSavedDocument = BuildWorkflowDocument();
         int cameraCount = 0;
         int motionCount = 0;
@@ -1076,6 +1065,20 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             }
         }
         UpdateWorkflowEditingAvailability();
+    }
+
+    private void PresentWorkflowSceneItems(bool editable)
+    {
+        WorkflowSceneItems.Clear();
+        if (_workflowDocument is null)
+        {
+            return;
+        }
+
+        foreach (JsonObject scene in (_workflowDocument["scenes"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            WorkflowSceneItems.Add(new WorkspaceDirectionSceneItem(scene, _workflowSampleRate, editable, WorkflowEditsChanged));
+        }
     }
 
     private static int WorkflowArrayCount(JsonElement value, string property) =>
@@ -1113,8 +1116,137 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             return false;
         }
-            ShowStatus("Draft edits are unsaved", "Save or apply your Workspace draft edits before continuing, or choose Discard local edits to reload the saved draft.", InfoBarSeverity.Warning);
+        ShowStatus("Draft edits are unsaved", "Save, apply, or discard your Workspace draft edits before replacing this draft.", InfoBarSeverity.Warning);
         return true;
+    }
+
+    private async Task<bool> PrepareWorkflowReviewPayloadAsync(string projectId, CancellationToken cancellationToken)
+    {
+        JsonObject? localWorkflowEdits = HasUnsavedWorkflowEdits()
+            ? BuildWorkflowDocument().DeepClone().AsObject()
+            : null;
+
+        (bool reactiveReady, bool reactiveChanged) = await ReviewEmbeddedReactiveEditsAsync(projectId, cancellationToken);
+        if (!reactiveReady)
+        {
+            return false;
+        }
+        bool embeddedDraftChanged = reactiveChanged;
+
+        if (WorkspacePlannerFrame.Content is AiPlannerLabPage { HasUnsavedEdits: true } planner)
+        {
+            if (!await planner.SavePendingWorkspaceDraftAsync(cancellationToken))
+            {
+                return false;
+            }
+
+            embeddedDraftChanged = true;
+        }
+
+        if (embeddedDraftChanged)
+        {
+            await LoadWorkflowAsync(projectId, cancellationToken, discardLocalEdits: true);
+            if (_workflowStatus != "draft" || _workflowDraftId is null)
+            {
+                ShowStatus(
+                    "Workspace draft changed",
+                    "The embedded editors saved, but the shared draft is no longer ready to save or apply. Prepare a current draft, then try again.",
+                    InfoBarSeverity.Warning);
+                return false;
+            }
+        }
+
+        if (localWorkflowEdits is not null)
+        {
+            MergeWorkflowLocalEdits(localWorkflowEdits);
+        }
+
+        return true;
+    }
+
+    private async Task<(bool Ready, bool Changed)> ReviewEmbeddedReactiveEditsAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (WorkspaceReactiveFrame.Content is not ReactiveLabPage { HasUnsavedEdits: true } reactive)
+        {
+            return (true, false);
+        }
+
+        if (_workflowDraftId is not string draftId || _workflowStatus != "draft")
+        {
+            ShowStatus(
+                "Workspace draft required",
+                "Reactive refinements need a current shared draft. Prepare the draft, then save or apply.",
+                InfoBarSeverity.Warning);
+            return (false, false);
+        }
+
+        if (!reactive.TryBuildPendingWorkspaceDraftPayload(out JsonElement payload, out IReadOnlyList<string> errors))
+        {
+            ShowStatus(
+                "Reactive refinements need attention",
+                string.Join(" ", errors),
+                InfoBarSeverity.Warning);
+            return (false, false);
+        }
+
+        JsonElement response = await App.Services.ApiClient.ReviewReactiveWorkflowAsync(
+            projectId,
+            new DirectorReactiveReviewRequest(_workflowRevision, draftId, payload),
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_session.ActiveProjectId != projectId)
+        {
+            return (false, false);
+        }
+
+        ApplyWorkflowResponse(projectId, response);
+        await reactive.AcceptWorkspaceWorkflowReviewAsync(response, cancellationToken);
+        return (true, true);
+    }
+
+    private void MergeWorkflowLocalEdits(JsonObject localDocument)
+    {
+        if (_workflowDocument is null)
+        {
+            return;
+        }
+
+        JsonObject localBible = localDocument["story_bible"] as JsonObject ?? new JsonObject();
+        JsonObject currentBible = _workflowDocument["story_bible"] as JsonObject ?? new JsonObject();
+        currentBible["project_theme"] = localBible["project_theme"]?.DeepClone();
+        currentBible["visual_style"] = localBible["visual_style"]?.DeepClone();
+        _workflowDocument["story_bible"] = currentBible;
+        WorkflowThemeTextBox.Text = currentBible["project_theme"]?.GetValue<string>() ?? string.Empty;
+        WorkflowStyleTextBox.Text = currentBible["visual_style"]?.GetValue<string>() ?? string.Empty;
+
+        Dictionary<string, JsonObject> localScenes = (localDocument["scenes"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Where(scene => scene["scene_id"]?.GetValue<string>() is { Length: > 0 })
+            .ToDictionary(scene => scene["scene_id"]!.GetValue<string>(), StringComparer.Ordinal);
+
+        foreach (JsonObject currentScene in (_workflowDocument["scenes"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            string? sceneId = currentScene["scene_id"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(sceneId) ||
+                currentScene["renderer_hints"]?["locked"]?.GetValue<bool>() == true ||
+                !localScenes.TryGetValue(sceneId, out JsonObject? localScene) ||
+                localScene is null)
+            {
+                continue;
+            }
+
+            currentScene["intent"] = localScene["intent"]?.DeepClone();
+            currentScene["actions"] = localScene["actions"]?.DeepClone();
+            JsonObject currentCamera = currentScene["camera"] as JsonObject ?? new JsonObject();
+            if (localScene["camera"] is JsonObject localCamera && localCamera["movement"] is JsonNode movement)
+            {
+                currentCamera["movement"] = movement.DeepClone();
+                currentScene["camera"] = currentCamera;
+            }
+        }
+
+        PresentWorkflowSceneItems(_workflowStatus == "draft");
+        WorkflowEditsChanged();
     }
 
     private void WorkflowEditsChanged() => DiscardWorkflowEditsButton.IsEnabled = HasUnsavedWorkflowEdits();
@@ -1185,15 +1317,25 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             return;
         }
-        using JsonDocument payload = JsonDocument.Parse(BuildWorkflowDocument().ToJsonString());
-        JsonElement document = payload.RootElement.Clone();
-        var request = new DirectorWorkflowReviewRequest(_workflowRevision, draftId, document);
         _workflowWriteInProgress = true;
         UpdateWorkflowEditingAvailability();
         try
         {
             await RunBusyAsync(apply ? "Applying Workspace direction and reactive schedule" : "Saving Workspace draft edits", async token =>
             {
+                if (!await PrepareWorkflowReviewPayloadAsync(projectId, token))
+                {
+                    return;
+                }
+
+                if (_workflowProjectId != projectId || _workflowDraftId is not string currentDraftId || _workflowStatus != "draft")
+                {
+                    throw new InvalidOperationException("The shared Workspace draft changed. Prepare a current draft, then try again.");
+                }
+
+                using JsonDocument payload = JsonDocument.Parse(BuildWorkflowDocument().ToJsonString());
+                JsonElement document = payload.RootElement.Clone();
+                var request = new DirectorWorkflowReviewRequest(_workflowRevision, currentDraftId, document);
                 JsonElement response = apply
                     ? await App.Services.ApiClient.ApplyDirectorWorkflowAsync(projectId, request, token)
                     : await App.Services.ApiClient.ReviewDirectorWorkflowAsync(projectId, request, token);

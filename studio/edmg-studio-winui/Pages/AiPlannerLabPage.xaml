@@ -244,7 +244,7 @@
                         AutomationProperties.AutomationId="Planner.SaveWorkspaceDraft"
                         Click="SaveWorkspaceDraftButton_Click"
                         Icon="Save"
-                        Label="Save to Workspace draft" />
+                        Label="Save plan draft" />
                     <AppBarButton
                         AutomationProperties.AutomationId="Planner.OpenWorkspace"
                         Click="OpenWorkspaceButton_Click"

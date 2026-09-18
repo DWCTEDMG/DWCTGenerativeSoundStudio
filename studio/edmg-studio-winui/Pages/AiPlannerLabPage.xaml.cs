@@ -77,6 +77,12 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
         return LoadAsync(cancellationToken);
     }
 
+    public async Task<bool> SavePendingWorkspaceDraftAsync(CancellationToken cancellationToken = default)
+    {
+        if (ProjectComboBox.SelectedItem is ProjectDto project) await RefreshProjectRevisionAsync(project.Id, cancellationToken);
+        return await SaveSelectedVariantAsync(cancellationToken);
+    }
+
     private async Task LoadAsync(CancellationToken externalCancellationToken = default)
     {
         await RunOperationAsync(
@@ -380,8 +386,8 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
         if (!await SaveSelectedVariantAsync()) return;
         ShowStatus(
             InfoBarSeverity.Success,
-            "Workspace draft updated",
-            "The selected scenes and regenerated prompt/keyframe schedule are saved. Return to Workspace to apply the combined draft once.");
+            "Plan draft saved",
+            "The selected scenes and regenerated prompt/keyframe schedule are saved. Apply in Workspace when you are ready to update Timeline.");
     }
     private void SceneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -903,7 +909,7 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
         }
     }
 
-    private async Task<bool> SaveSelectedVariantAsync()
+    private async Task<bool> SaveSelectedVariantAsync(CancellationToken externalCancellationToken = default)
     {
         if (!CommitPendingSceneEdits())
         {
@@ -955,7 +961,8 @@ public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
                 await RefreshProjectRevisionAsync(project.Id, cancellationToken);
                 saved = true;
             },
-            successMessage: "Curated scenes were saved to the project.");
+            successMessage: "Curated scenes were saved to the project.",
+            externalCancellationToken: externalCancellationToken);
         return saved;
     }
 

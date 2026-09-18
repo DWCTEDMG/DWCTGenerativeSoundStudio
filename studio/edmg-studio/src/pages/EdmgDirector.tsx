@@ -34,12 +34,7 @@ async function copyText(text: string): Promise<void> {
     await navigator.clipboard.writeText(text);
     return;
   }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textarea);
+  throw new Error("Clipboard API is unavailable in this environment.");
 }
 
 export default function EdmgDirector({ onNavigate }: PageProps) {

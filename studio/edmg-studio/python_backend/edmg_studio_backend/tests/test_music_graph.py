@@ -60,6 +60,28 @@ def test_project_music_graph_cache_is_reused_and_invalidated(tmp_path) -> None:
     assert changed["tempo"]["bpm"] == 128
 
 
+def test_project_music_graph_retries_transient_windows_replace_failure(tmp_path, monkeypatch) -> None:
+    project_dir = tmp_path / "project"
+    meta = {"analysis": {"features": {"bpm": 120}}}
+    real_replace = __import__("os").replace
+    attempts = 0
+
+    def transient_replace(source, destination) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("cache is temporarily locked")
+        real_replace(source, destination)
+
+    monkeypatch.setattr("edmg_studio_backend.domain.music_graph.os.replace", transient_replace)
+    monkeypatch.setattr("edmg_studio_backend.domain.music_graph.time.sleep", lambda _delay: None)
+    graph = music_graph_for_project(project_dir, meta)
+
+    assert attempts == 3
+    assert graph["provenance"]["storage"] == "persistent_project_cache"
+    assert (project_dir / "analysis" / MUSIC_GRAPH_CACHE_FILENAME).exists()
+
+
 def test_project_music_graph_survives_cache_write_failure(tmp_path, monkeypatch, caplog) -> None:
     project_dir = tmp_path / "project"
     meta = {"analysis": {"features": {"bpm": 120}}}
@@ -68,6 +90,7 @@ def test_project_music_graph_survives_cache_write_failure(tmp_path, monkeypatch,
         raise PermissionError("cache is read-only")
 
     monkeypatch.setattr("edmg_studio_backend.domain.music_graph.os.replace", reject_replace)
+    monkeypatch.setattr("edmg_studio_backend.domain.music_graph.time.sleep", lambda _delay: None)
     graph = music_graph_for_project(project_dir, meta)
 
     assert graph["tempo"]["bpm"] == 120

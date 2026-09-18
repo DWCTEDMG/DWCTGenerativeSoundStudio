@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import sys
 
 from .cuda_dll_path import prepare_cuda_dll_path
@@ -9,8 +12,33 @@ prepare_cuda_dll_path()
 
 import uvicorn
 
-from .app import app, jobs, _execute_job
+from .config import Settings
 from .security import validate_remote_bind_security
+
+
+def _configure_backend_logging(logs_dir: Path) -> Path:
+    log_path = logs_dir / "backend" / "backend-errors.log"
+    package_logger = logging.getLogger("edmg_studio_backend")
+    resolved_path = log_path.resolve()
+    for handler in package_logger.handlers:
+        if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == resolved_path:
+            return resolved_path
+
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        resolved_path,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+        delay=True,
+    )
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s [pid=%(process)d] %(message)s"
+    ))
+    package_logger.setLevel(logging.WARNING)
+    package_logger.addHandler(handler)
+    return resolved_path
 
 
 def _run_single_job(project_id: str, job_id: str, *, attempt: int | None = None) -> int:
@@ -20,6 +48,8 @@ def _run_single_job(project_id: str, job_id: str, *, attempt: int | None = None)
     cannot starve the FastAPI server. Progress/logs/results are written to the
     shared job store that the server polls.
     """
+    from .app import _execute_job, jobs
+
     job = jobs.get(project_id, job_id)
     if job is None:
         sys.stderr.write(f"Job not found: project={project_id} job={job_id}\n")
@@ -55,12 +85,16 @@ def main() -> None:
     rj.add_argument("--attempt", type=int)
 
     args = p.parse_args()
+    log_path = _configure_backend_logging(Settings().logs_dir)
+    logging.getLogger(__name__).info("Backend warning/error log: %s", log_path)
 
     if args.cmd == "serve":
         try:
             validate_remote_bind_security(args.host)
         except RuntimeError as exc:
             p.error(str(exc))
+        from .app import app
+
         uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     elif args.cmd == "run-job":
         raise SystemExit(_run_single_job(args.project, args.job, attempt=args.attempt))
