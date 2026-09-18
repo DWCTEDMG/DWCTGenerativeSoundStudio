@@ -23,6 +23,8 @@ from .model_load_coordinator import ModelLoadCanceled
 CancelCheck = Callable[[], bool]
 ProgressCallback = Callable[[str, str], None]
 logger = logging.getLogger(__name__)
+_probe_cache: dict[tuple[str, int, int], LlamaServerProbe | str] = {}
+_probe_cache_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -46,24 +48,40 @@ class LlamaLaunchPlan:
 
 def probe_llama_server(executable: Path) -> LlamaServerProbe:
     executable = executable.resolve(strict=True)
-    version_result = subprocess.run(
-        [str(executable), "--version"], check=False, capture_output=True, text=True, timeout=30,
-    )
-    version = (version_result.stdout or version_result.stderr).strip().splitlines()
-    device_result = subprocess.run(
-        [str(executable), "--list-devices"], check=False, capture_output=True, text=True, timeout=30,
-    )
-    if device_result.returncode != 0:
-        raise RuntimeError(
-            f"llama.cpp device probe failed for {executable}: "
-            f"{(device_result.stderr or device_result.stdout).strip()}"
-        )
-    lines = [line.strip() for line in (device_result.stdout + "\n" + device_result.stderr).splitlines()]
-    devices = tuple(line for line in lines if line.lower().startswith("cuda") and ":" in line)
     stat = executable.stat()
-    identity = f"{executable}:{stat.st_size}:{stat.st_mtime_ns}:{version[0] if version else 'unknown'}"
-    return LlamaServerProbe(executable, version[0] if version else "unknown", devices, identity)
-
+    cache_key = (str(executable), stat.st_size, stat.st_mtime_ns)
+    with _probe_cache_lock:
+        cached = _probe_cache.get(cache_key)
+        if isinstance(cached, LlamaServerProbe):
+            return cached
+        if isinstance(cached, str):
+            raise RuntimeError(cached)
+        try:
+            version_result = subprocess.run(
+                [str(executable), "--version"], check=False, capture_output=True, text=True, timeout=3,
+            )
+            version = (version_result.stdout or version_result.stderr).strip().splitlines()
+            device_result = subprocess.run(
+                [str(executable), "--list-devices"], check=False, capture_output=True, text=True, timeout=3,
+            )
+        except subprocess.TimeoutExpired as exc:
+            probe_name = "version" if "--version" in exc.cmd else "device"
+            error = f"llama.cpp {probe_name} probe timed out for {executable}"
+            _probe_cache[cache_key] = error
+            raise RuntimeError(error) from exc
+        if device_result.returncode != 0:
+            error = (
+                f"llama.cpp device probe failed for {executable}: "
+                f"{(device_result.stderr or device_result.stdout).strip()}"
+            )
+            _probe_cache[cache_key] = error
+            raise RuntimeError(error)
+        lines = [line.strip() for line in (device_result.stdout + "\n" + device_result.stderr).splitlines()]
+        devices = tuple(line for line in lines if line.lower().startswith("cuda") and ":" in line)
+        identity = f"{executable}:{stat.st_size}:{stat.st_mtime_ns}:{version[0] if version else 'unknown'}"
+        probe = LlamaServerProbe(executable, version[0] if version else "unknown", devices, identity)
+        _probe_cache[cache_key] = probe
+        return probe
 
 def discover_qwen_gguf(package_root: Path) -> tuple[Path, Path]:
     root = package_root.resolve(strict=True)

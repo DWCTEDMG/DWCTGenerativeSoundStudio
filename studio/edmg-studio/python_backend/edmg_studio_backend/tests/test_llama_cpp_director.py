@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +32,49 @@ def _package(tmp_path, *, size="8B"):
     runtime.write_bytes(b"runtime")
     return model, projector, runtime
 
+
+def test_probe_timeout_is_reported_as_runtime_error(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+
+    def timeout(command, **kwargs):
+        assert kwargs["timeout"] == 3
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="version probe timed out"):
+        llama_cpp_director.probe_llama_server(runtime)
+
+
+def test_probe_timeout_is_cached_for_unchanged_executable(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+    calls = 0
+
+    def timeout(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", timeout)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="version probe timed out"):
+            llama_cpp_director.probe_llama_server(runtime)
+    assert calls == 1
+
+def test_device_probe_timeout_is_reported_as_runtime_error(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+    calls = 0
+
+    def timeout_device(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert kwargs["timeout"] == 3
+        if calls == 1:
+            return SimpleNamespace(returncode=0, stdout="version", stderr="")
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", timeout_device)
+    with pytest.raises(RuntimeError, match="device probe timed out"):
+        llama_cpp_director.probe_llama_server(runtime)
 
 def test_discovery_requires_one_matching_model_and_projector(tmp_path):
     model, projector, _runtime = _package(tmp_path)

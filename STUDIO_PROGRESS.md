@@ -32,19 +32,18 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions and the latest Reviewer update are loaded. This task is limited to compatibility-client clipboard deprecation diagnostics and preserves the native WinUI priority.
+**Acknowledgement:** Repository instructions and the latest Reviewer update are loaded. The authorized task is the remote WinUI backend connectivity fix; concurrent multi-GPU planning files are preserved and not owned by this change.
 
-- Updated UTC: 2026-09-18T09:44:25Z.
-- Task / blueprint gate: Tooling reliability — remove TS6387 from compatibility-client clipboard helpers without changing successful Clipboard API behavior.
-- Branch / base commit / dirty state: `codex/Unified` at `0d2f55bb7d9e709d5264868bab336f86e2901a25`; dirty worktree with pre-existing WinUI/backend edits preserved.
-- Owned files or work areas: `studio/edmg-studio/src/workbenches/AiNlpWorkbench.tsx`, `studio/edmg-studio/src/workbenches/AudioReactiveWorkbench.tsx`, `studio/edmg-studio/src/pages/EdmgDirector.tsx`, and this Implementer section only.
-- Completed: replaced the deprecated `document.execCommand('copy')` fallbacks with explicit Clipboard API unavailability errors; `AudioReactiveWorkbench.tsx` was changed for this request, while the concurrent `AiNlpWorkbench.tsx` and `EdmgDirector.tsx` changes were preserved.
-- Remaining: none for this diagnostic.
-- Blockers: none. No dependency synchronization or accelerator changes occurred.
-- Validation: repository-root `pnpm run typecheck` and `pnpm exec eslint ...` exited 1 because no package manifest or project-local ESLint resolution exists there. From `studio\edmg-studio`, `pnpm run typecheck` exited 0 and `pnpm exec eslint src/workbenches/AiNlpWorkbench.tsx src/workbenches/AudioReactiveWorkbench.tsx src/pages/EdmgDirector.tsx --max-warnings=0` exited 0; source search found 0 remaining `.execCommand(` calls. Repository-root targeted `git diff --check` exited 0 with only a line-ending normalization notice for this handoff file. Candidate remained dirty with 13 worktree entries; no new log files were saved.
-- Next step: hand the focused fix back to the user.
-- Reviewer findings addressed: active accelerator environment and native WinUI files remain untouched; no device or integration claims are made.
-
+- Updated UTC: 2026-09-18T11:46:43.6929669Z.
+- Task / blueprint gate: backend reliability supporting the native WinUI Models and Workspace surfaces.
+- Branch / base commit / dirty state: `codex/Unified` at `cf703972639eb0a402154bf234a3d84a0938613a`; dirty with this two-file backend fix plus pre-existing/concurrent `STUDIO_PROGRESS.md`, `blueprint/MULTI_GPU_ORCHESTRATION_PLAN.md`, and `studio/edmg-studio-winui/MULTI_GPU_ORCHESTRATION_PLAN.md` changes preserved.
+- Owned files or work areas: `studio/edmg-studio/python_backend/edmg_studio_backend/services/llama_cpp_director.py`, its focused test file, and this Implementer section only.
+- Completed: changed llama.cpp runtime probes from 30-second uncaught timeouts to bounded 3-second `RuntimeError` results; cached probe success/failure by executable path, size, and modification time so one catalog request does not repeatedly launch a hanging executable; restarted the authenticated backend on `0.0.0.0:7863` without dependency synchronization.
+- Validation: from repository root, `uv run --project studio\edmg-studio\python_backend --frozen --no-sync --group test python -m pytest studio\edmg-studio\python_backend\edmg_studio_backend\tests\test_llama_cpp_director.py -q` exited 0 with 12 passed. The broader two-file command exited 1 with 37 passed and two unrelated LTX package assertions affected by concurrent model work. Live checks: health 200, unauthenticated projects 401, authenticated projects 200, authenticated catalog 200; catalog improved from 27.127 seconds before restart to 5.653 seconds cold and 1.145 seconds warm; exactly one listener at `0.0.0.0:7863`, PID 63340. No real model inference or remote-device UI test was performed.
+- Remaining: none for the identified disconnect cause. The user has now requested that the complete worktree be committed and pushed to the default branch.
+- Blockers: the active Windows network is Public while the user-created inbound rule targets Private; current remote traffic works, but durable remote access still depends on the host network/firewall configuration. HTTP bearer transport should remain limited to a trusted LAN or VPN.
+- Next step: keep detached backend session `studio-backend-auth-final` running and have the remote WinUI client refresh Models against `http://192.168.122.2:7863`.
+- Reviewer findings addressed: preserved GPU-first/no-sync policy and distinguished deterministic tests, live HTTP evidence, and unperformed real-device/model qualification.
 <!-- IMPLEMENTER-UPDATE-END -->
 
 ## Reviewer update
