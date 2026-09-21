@@ -5,22 +5,46 @@ namespace EdmgStudio.WinUI.Services;
 
 public sealed class WindowsTaskbarProgressService : IDisposable
 {
+    private const uint ClsctxInprocServer = 0x1;
+    private static readonly Guid TaskbarListClassId = new("56FDF344-FD6D-11D0-958A-006097C9A090");
+    private static readonly Guid TaskbarList3InterfaceId = new("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEA84");
     private readonly nint _windowHandle;
     private ITaskbarList3? _taskbar;
 
     public WindowsTaskbarProgressService(nint windowHandle)
     {
         _windowHandle = windowHandle;
+        nint taskbarPointer = 0;
         try
         {
-            Type taskbarType = Type.GetTypeFromCLSID(new Guid("56FDF344-FD6D-11D0-958A-006097C9A090"), throwOnError: true)!;
-            _taskbar = (ITaskbarList3)Activator.CreateInstance(taskbarType)!;
-            _taskbar.HrInit();
+            int result = CoCreateInstance(
+                TaskbarListClassId,
+                0,
+                ClsctxInprocServer,
+                TaskbarList3InterfaceId,
+                out taskbarPointer);
+            if (result < 0 || taskbarPointer == 0)
+            {
+                return;
+            }
+
+            _taskbar = (ITaskbarList3)Marshal.GetObjectForIUnknown(taskbarPointer);
+            if (_taskbar.HrInit() < 0)
+            {
+                ReleaseTaskbar();
+            }
         }
         catch (Exception exception)
         {
             CrashLogger.Write("Windows taskbar progress is unavailable.", exception);
-            _taskbar = null;
+            ReleaseTaskbar();
+        }
+        finally
+        {
+            if (taskbarPointer != 0)
+            {
+                Marshal.Release(taskbarPointer);
+            }
         }
     }
 
@@ -33,21 +57,32 @@ public sealed class WindowsTaskbarProgressService : IDisposable
 
         try
         {
-            _taskbar.SetProgressState(_windowHandle, MapState(progress.State));
+            int result = _taskbar.SetProgressState(_windowHandle, MapState(progress.State));
             if (progress.State is StudioTaskbarProgressState.Normal or StudioTaskbarProgressState.Paused)
             {
-                _taskbar.SetProgressValue(_windowHandle, (ulong)Math.Round(progress.Percent), 100);
+                result = _taskbar.SetProgressValue(_windowHandle, (ulong)Math.Round(progress.Percent), 100);
+            }
+
+            if (result < 0)
+            {
+                ReleaseTaskbar();
             }
         }
         catch (Exception exception)
         {
             CrashLogger.Write("Unable to update Windows taskbar progress.", exception);
+            ReleaseTaskbar();
         }
     }
 
     public void Dispose()
     {
         Update(StudioTaskbarProgress.None);
+        ReleaseTaskbar();
+    }
+
+    private void ReleaseTaskbar()
+    {
         if (_taskbar is not null && Marshal.IsComObject(_taskbar))
         {
             Marshal.FinalReleaseComObject(_taskbar);
@@ -79,13 +114,21 @@ public sealed class WindowsTaskbarProgressService : IDisposable
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface ITaskbarList3
     {
-        void HrInit();
-        void AddTab(nint window);
-        void DeleteTab(nint window);
-        void ActivateTab(nint window);
-        void SetActiveAlt(nint window);
-        void MarkFullscreenWindow(nint window, [MarshalAs(UnmanagedType.Bool)] bool fullscreen);
-        void SetProgressValue(nint window, ulong completed, ulong total);
-        void SetProgressState(nint window, TaskbarProgressState state);
+        [PreserveSig] int HrInit();
+        [PreserveSig] int AddTab(nint window);
+        [PreserveSig] int DeleteTab(nint window);
+        [PreserveSig] int ActivateTab(nint window);
+        [PreserveSig] int SetActiveAlt(nint window);
+        [PreserveSig] int MarkFullscreenWindow(nint window, [MarshalAs(UnmanagedType.Bool)] bool fullscreen);
+        [PreserveSig] int SetProgressValue(nint window, ulong completed, ulong total);
+        [PreserveSig] int SetProgressState(nint window, TaskbarProgressState state);
     }
+
+    [DllImport("ole32.dll")]
+    private static extern int CoCreateInstance(
+        in Guid classId,
+        nint outer,
+        uint context,
+        in Guid interfaceId,
+        out nint instance);
 }

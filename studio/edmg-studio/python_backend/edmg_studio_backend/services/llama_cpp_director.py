@@ -25,6 +25,8 @@ ProgressCallback = Callable[[str, str], None]
 logger = logging.getLogger(__name__)
 _probe_cache: dict[tuple[str, int, int], LlamaServerProbe | str] = {}
 _probe_cache_lock = threading.Lock()
+_VERSION_PROBE_TIMEOUT_SECONDS = 3
+_DEVICE_PROBE_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -58,17 +60,25 @@ def probe_llama_server(executable: Path) -> LlamaServerProbe:
             raise RuntimeError(cached)
         try:
             version_result = subprocess.run(
-                [str(executable), "--version"], check=False, capture_output=True, text=True, timeout=3,
-            )
-            version = (version_result.stdout or version_result.stderr).strip().splitlines()
-            device_result = subprocess.run(
-                [str(executable), "--list-devices"], check=False, capture_output=True, text=True, timeout=3,
+                [str(executable), "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_VERSION_PROBE_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
-            probe_name = "version" if "--version" in exc.cmd else "device"
-            error = f"llama.cpp {probe_name} probe timed out for {executable}"
-            _probe_cache[cache_key] = error
-            raise RuntimeError(error) from exc
+            raise RuntimeError(f"llama.cpp version probe timed out for {executable}") from exc
+        version = (version_result.stdout or version_result.stderr).strip().splitlines()
+        try:
+            device_result = subprocess.run(
+                [str(executable), "--list-devices"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_DEVICE_PROBE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"llama.cpp device probe timed out for {executable}") from exc
         if device_result.returncode != 0:
             error = (
                 f"llama.cpp device probe failed for {executable}: "

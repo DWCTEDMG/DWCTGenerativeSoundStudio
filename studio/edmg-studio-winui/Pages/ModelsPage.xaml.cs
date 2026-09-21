@@ -268,9 +268,10 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         SetHunyuanText(HunyuanDistroBox, config, "distro");
         SetHunyuanText(HunyuanPythonBox, config, "python");
         SetHunyuanText(HunyuanRepoBox, config, "repo");
+        SetHunyuanText(HunyuanModelPathBox, config, "model_path");
         HunyuanTimeoutBox.Value = config.TryGetProperty("timeout_s", out JsonElement timeout) && timeout.TryGetDouble(out double timeoutSeconds)
             ? timeoutSeconds
-            : 3600;
+            : 7200;
         SetHunyuanText(HunyuanLlmBox, config, "llm");
         SetHunyuanText(HunyuanByt5Box, config, "byt5");
         SetHunyuanText(HunyuanGlyphBox, config, "glyph");
@@ -303,6 +304,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                     distro = HunyuanDistroBox.Text,
                     python = HunyuanPythonBox.Text,
                     repo = HunyuanRepoBox.Text,
+                    model_path = HunyuanModelPathBox.Text,
                     timeout_s = HunyuanTimeoutBox.Value,
                     llm = HunyuanLlmBox.Text,
                     byt5 = HunyuanByt5Box.Text,

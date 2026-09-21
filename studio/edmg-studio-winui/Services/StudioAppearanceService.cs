@@ -24,6 +24,11 @@ internal static class StudioAppearanceService
     {
         get
         {
+            if (!WindowsPackageIdentity.IsPackaged)
+            {
+                return "studio";
+            }
+
             try
             {
                 string? value = ApplicationData.Current.LocalSettings.Values[ThemeSettingKey] as string;
@@ -46,7 +51,7 @@ internal static class StudioAppearanceService
             throw new ArgumentException($"Unsupported Studio appearance '{themeId}'.", nameof(themeId));
         }
 
-        if (persist)
+        if (persist && WindowsPackageIdentity.IsPackaged)
         {
             try
             {

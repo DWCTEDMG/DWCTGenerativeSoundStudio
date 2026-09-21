@@ -45,6 +45,7 @@ class HunyuanRunnerConfig:
     mode: str
     python: str
     repo: str
+    model_path: str
     distro: str | None
     timeout_s: float
     gpus: str
@@ -54,7 +55,7 @@ class HunyuanRunnerConfig:
 def hunyuan_runner_config(environ: Mapping[str, str] | None = None) -> HunyuanRunnerConfig:
     env = os.environ if environ is None else environ
     mode = str(env.get(f"{HUNYUAN_ENV_PREFIX}RUNNER") or "").strip().lower()
-    timeout_raw = str(env.get(f"{HUNYUAN_ENV_PREFIX}TIMEOUT_SECONDS") or "3600")
+    timeout_raw = str(env.get(f"{HUNYUAN_ENV_PREFIX}TIMEOUT_SECONDS") or "7200")
     try:
         timeout_s = float(timeout_raw)
     except ValueError:
@@ -63,6 +64,7 @@ def hunyuan_runner_config(environ: Mapping[str, str] | None = None) -> HunyuanRu
         mode=mode,
         python=str(env.get(f"{HUNYUAN_ENV_PREFIX}PYTHON") or "").strip(),
         repo=str(env.get(f"{HUNYUAN_ENV_PREFIX}REPO") or "").strip(),
+        model_path=str(env.get(f"{HUNYUAN_ENV_PREFIX}MODEL_PATH") or "").strip(),
         distro=str(env.get(f"{HUNYUAN_ENV_PREFIX}WSL_DISTRO") or "").strip() or None,
         timeout_s=timeout_s,
         gpus=str(env.get(f"{HUNYUAN_ENV_PREFIX}GPUS") or "0,1,2").strip(),
@@ -84,6 +86,7 @@ HUNYUAN_CONFIG_FIELDS = {
     "mode": "RUNNER",
     "python": "PYTHON",
     "repo": "REPO",
+    "model_path": "MODEL_PATH",
     "distro": "WSL_DISTRO",
     "timeout_s": "TIMEOUT_SECONDS",
     "gpus": "GPUS",
@@ -99,6 +102,7 @@ def hunyuan_runner_status(*, probe: bool = False) -> dict[str, Any]:
             "mode": config.mode,
             "python": config.python,
             "repo": config.repo,
+            "model_path": config.model_path,
             "distro": config.distro or "",
             "timeout_s": config.timeout_s,
             "gpus": config.gpus,
@@ -183,6 +187,9 @@ def validate_hunyuan_runner(*, probe: bool = True) -> list[str]:
         "raise SystemExit(bool(missing or mods))"
     )
     required: list[str] = []
+    if config.model_path:
+        model_path_type = PurePosixPath if config.mode in {"wsl", "external"} and config.model_path.startswith("/") else Path
+        required.append(str(model_path_type(config.model_path) / "config.json"))
     for key, (_env_name, names) in HUNYUAN_COMPANIONS.items():
         root = config.companions[key]
         path_type = PurePosixPath if config.mode in {"wsl", "external"} and root.startswith("/") else Path
@@ -667,7 +674,8 @@ def _run_hunyuan(
             "--nproc_per_node", str(len([part for part in config.gpus.split(",") if part.strip()])),
             "-m", "edmg_studio_backend.services.hunyuan_video15_worker",
             "--request", _wsl_path(request_path, config),
-            "--model", _wsl_path(model_dir, config), "--llm", _wsl_path(config.companions["llm"], config),
+            "--model", config.model_path or _wsl_path(model_dir, config),
+            "--llm", _wsl_path(config.companions["llm"], config),
             "--byt5", _wsl_path(config.companions["byt5"], config), "--glyph", _wsl_path(config.companions["glyph"], config),
             "--vision", _wsl_path(config.companions["vision"], config), "--output", _wsl_path(output_path, config),
             "--pid-file", _wsl_path(pid_path, config),

@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 import json
 import os
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -39,6 +42,29 @@ def _save_video(video, output: Path, fps: int) -> None:
     imageio.mimwrite(str(output), frames, fps=fps)
 
 
+def _memory_status(stage: str, rank: int) -> None:
+    import resource
+
+    available_kib = "unknown"
+    swap_free_kib = "unknown"
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+            key, value = line.split(":", 1)
+            values[key] = value.strip().split()[0]
+        available_kib = values.get("MemAvailable", available_kib)
+        swap_free_kib = values.get("SwapFree", swap_free_kib)
+    except (OSError, ValueError):
+        pass
+    peak_rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    print(
+        f"[edmg-memory] time={time.time():.3f} rank={rank} stage={stage} "
+        f"peak_rss_kib={peak_rss_kib} available_kib={available_kib} swap_free_kib={swap_free_kib}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True)
@@ -61,10 +87,11 @@ def main() -> None:
 
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    if world_size > 1 and not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
-    initialize_parallel_state(sp=world_size)
     torch.cuda.set_device(local_rank)
+    load_group_initialized = False
+    if world_size > 1 and not dist.is_initialized():
+        dist.init_process_group(backend="gloo", timeout=timedelta(hours=2))
+        load_group_initialized = True
 
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[request["dtype"]]
     task = request["mode"]
@@ -77,14 +104,27 @@ def main() -> None:
         offload = bool(request["cpu_offload"])
         device = torch.device("cpu" if offload else f"cuda:{local_rank}")
         init_device = torch.device("cpu" if offload else f"cuda:{local_rank}")
-        pipe = HunyuanVideo_1_5_Pipeline.create_pipeline(
-            pretrained_model_name_or_path=str(overlay),
-            transformer_version=transformer_version,
-            create_sr_pipeline=False,
-            transformer_dtype=dtype,
-            device=device,
-            transformer_init_device=init_device,
-        )
+        pipe = None
+        for load_rank in range(world_size):
+            if local_rank == load_rank:
+                _memory_status("pipeline_load_start", local_rank)
+                pipe = HunyuanVideo_1_5_Pipeline.create_pipeline(
+                    pretrained_model_name_or_path=str(overlay),
+                    transformer_version=transformer_version,
+                    create_sr_pipeline=False,
+                    transformer_dtype=dtype,
+                    device=device,
+                    transformer_init_device=init_device,
+                )
+                _memory_status("pipeline_load_complete", local_rank)
+            if world_size > 1:
+                dist.barrier()
+        if pipe is None:
+            raise RuntimeError(f"Pipeline was not loaded for local rank {local_rank}")
+        if load_group_initialized:
+            dist.destroy_process_group()
+            dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
+        initialize_parallel_state(sp=world_size)
         pipe.apply_infer_optimization(
             infer_state=InferState(total_steps=int(request["steps"])),
             enable_offloading=offload,

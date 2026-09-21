@@ -26,13 +26,16 @@ public sealed class StudioSessionService
 
     public StudioSessionService()
     {
-        try
+        if (WindowsPackageIdentity.IsPackaged)
         {
-            _settings = ApplicationData.Current.LocalSettings;
-        }
-        catch
-        {
-            _settings = null;
+            try
+            {
+                _settings = ApplicationData.Current.LocalSettings;
+            }
+            catch
+            {
+                _settings = null;
+            }
         }
 
         _context = new StudioWorkflowContext(

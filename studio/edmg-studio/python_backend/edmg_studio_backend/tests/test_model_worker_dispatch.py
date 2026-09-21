@@ -110,8 +110,13 @@ def test_manual_tick_uses_isolated_director_dispatch(state, monkeypatch):
     calls = []
     monkeypatch.setattr(backend, "_run_job_in_subprocess", lambda job: calls.append(job.id))
     monkeypatch.setattr(backend, "_execute_job", lambda job: pytest.fail("Director ran inside API"))
+    headers = (
+        {"Authorization": f"Bearer {backend.backend_security.auth_token}"}
+        if backend.backend_security.auth_required
+        else {}
+    )
     with TestClient(backend.app) as client:
-        response = client.post("/v1/jobs/tick")
+        response = client.post("/v1/jobs/tick", headers=headers)
 
     assert response.status_code == 200
     assert calls == [queued.id]
@@ -226,9 +231,22 @@ def test_canceled_or_obsolete_cli_attempt_never_runs(state, monkeypatch):
 
     jobs, project = state
     job = jobs.create(project.id, "qwen_director", {})
-    monkeypatch.setattr(cli, "jobs", jobs)
-    monkeypatch.setattr(cli, "_execute_job", lambda job: pytest.fail("Obsolete Director executed"))
+    # The CLI deliberately imports these dependencies lazily from app.
+    monkeypatch.setattr(backend, "jobs", jobs)
+    monkeypatch.setattr(backend, "_execute_job", lambda job: pytest.fail("Obsolete Director executed"))
     jobs.cancel(project.id, job.id)
     assert cli._run_single_job(project.id, job.id, attempt=0) == 0
     jobs.retry(project.id, job.id)
     assert cli._run_single_job(project.id, job.id, attempt=0) == 2
+
+
+def test_runtime_optimization_never_falls_back_into_api_process(state, monkeypatch):
+    jobs, project = state
+    job = jobs.create(project.id, "runtime_optimization", {"operation": "diagnose"})
+    monkeypatch.setattr(backend, "_job_in_subprocess_enabled", lambda: False)
+    monkeypatch.setattr(backend, "_execute_job", lambda job: pytest.fail("Native runtime ran inside API"))
+    def failed_child(job):
+        raise OSError("Cannot start isolated runtime")
+    monkeypatch.setattr(backend, "_run_job_in_subprocess", failed_child)
+    backend._dispatch_job(job)
+    assert jobs.get(project.id, job.id).status == "failed"

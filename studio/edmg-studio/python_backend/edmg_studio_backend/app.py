@@ -7766,8 +7766,8 @@ def _dispatch_admitted_job(job) -> None:
             _run_job_in_subprocess(job)
         except Exception:
             job.status = "failed"
-            logger.exception("Director worker failed: %s", job.id)
-            job.error = "Director worker failed. Check the backend log, then retry the draft."
+            logger.exception("Isolated %s worker failed: %s", job.type, job.id)
+            job.error = "Isolated worker failed. Check the backend log, then retry the operation."
             jobs.save(job)
         return
     if _job_in_subprocess_enabled():

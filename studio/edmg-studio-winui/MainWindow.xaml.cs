@@ -62,6 +62,11 @@ public sealed partial class MainWindow : Window
 
     private static ApplicationDataContainer? TryGetLocalSettings()
     {
+        if (!WindowsPackageIdentity.IsPackaged)
+        {
+            return null;
+        }
+
         try
         {
             return ApplicationData.Current.LocalSettings;

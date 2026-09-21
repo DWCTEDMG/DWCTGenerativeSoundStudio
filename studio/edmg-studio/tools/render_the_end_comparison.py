@@ -22,8 +22,9 @@ ROOT = PROJECT / "outputs/videos/the-end-comparison"
 PYTHON = BACKEND / ".venv/Scripts/python.exe"
 MODELS = STUDIO / "models/internal"
 FPS, WIDTH, HEIGHT = 12, 512, 320
+PREVIEW_DURATION = 4.0
 ENGINES = {
-    "hunyuan_video15": ("hf_hunyuan_video15_internal", 48, 30, 1.0, "Hunyuan"),
+    "hunyuan_video15": ("hf_hunyuan_video15_internal", 48, 8, 1.0, "Hunyuan"),
     "ltx_25": ("hf_ltx_25_distilled_internal", 48, 8, 1.0, "LTX"),
     "animatediff": ("hf_animatediff_motion_adapter_v15_2_internal", 16, 25, 6.0, "AnimateDiff"),
     "svd": ("hf_svd_xt_1_1_internal", 24, 25, 3.0, "SVD-XT"),
@@ -76,7 +77,7 @@ def preflight() -> dict:
             "anchor_sha256": hashlib.file_digest(ANCHOR.open("rb"), "sha256").hexdigest(),
             "duration": info.frames / info.samplerate, "sample_rate": info.samplerate,
             "width": WIDTH, "height": HEIGHT, "native_fps": FPS, "output_fps": 24,
-            "engines": ENGINES, "gpu": 1, "seed": 241600}
+            "engines": ENGINES, "preview_duration": PREVIEW_DURATION, "gpu": 1, "seed": 241600}
     spec["fingerprint"] = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
     return spec
 
@@ -116,7 +117,7 @@ def worker(engine: str, stage: str, spec: dict) -> None:
     lane = ROOT / engine
     clips = lane / "segments"
     clips.mkdir(parents=True, exist_ok=True)
-    target_duration = min(8.0, spec["duration"]) if stage == "preview" else spec["duration"]
+    target_duration = min(PREVIEW_DURATION, spec["duration"]) if stage == "preview" else spec["duration"]
     count = math.ceil(target_duration * FPS / per_clip)
     direction = json.loads(DIRECTION.read_text(encoding="utf-8"))
     # Existing Qwen actions provide the visual vocabulary; timing comes from this audio.
@@ -254,7 +255,17 @@ def main() -> int:
     if args.engine:
         if not args.stage:
             parser.error("--engine requires --stage")
-        worker(args.engine, args.stage, spec)
+        try:
+            worker(args.engine, args.stage, spec)
+        except Exception as exc:
+            save(ROOT / args.engine / "progress.json", {
+                "engine": args.engine,
+                "stage": args.stage,
+                "status": "failed",
+                "error": str(exc),
+                "updated_at": time.time(),
+            })
+            raise
         return 0
     from filelock import FileLock
     ROOT.mkdir(parents=True, exist_ok=True)

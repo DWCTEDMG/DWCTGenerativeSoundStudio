@@ -2,7 +2,8 @@
 
 **Status:** Proposed implementation plan; no multi-GPU qualification is implied.
 **Product surface:** Native WinUI 3 Studio with the shared Python backend.
-**Related gate:** Gate E in `WINUI3_CONSOLIDATED_BLUEPRINT.md`.
+**Related gate:** Gate E in `..\..\blueprint\WINUI3_CONSOLIDATED_BLUEPRINT.md`.
+**Current delivery target:** Phase 0 contracts and deterministic fixtures only; launch behavior remains unchanged.
 
 ## 1. Goal
 
@@ -274,6 +275,70 @@ preflight, cancellation, and recovery. Interactive validation is recorded separa
 
 **Gate:** No mode is advertised as supported without matching hardware/runtime receipts. Packaging,
 clean-machine, upgrade, rollback, and long-render soak evidence are required for release claims.
+
+## 7.1 Phase 0 implementation map
+
+Phase 0 should be a contract-only vertical slice. It must compile and serialize through both backend
+and WinUI layers, but it must not probe hardware, acquire leases, alter environment variables, or
+change any model launch command.
+
+| Responsibility | Initial path | Required output |
+| --- | --- | --- |
+| Backend contracts | `studio/edmg-studio/python_backend/edmg_studio_backend/domain/gpu_orchestration.py` | Frozen/versioned device, policy, workload, assignment, lease, capability, warning, and blocked-reason models. |
+| Policy normalization | `studio/edmg-studio/python_backend/edmg_studio_backend/services/gpu_policy.py` | Pure validation and default resolution with no hardware or process side effects. |
+| Deterministic fixtures | `studio/edmg-studio/python_backend/edmg_studio_backend/tests/fixtures/gpu_inventory.py` | Named single, equivalent-dual, mixed-memory, reordered, stale, unhealthy, and unavailable-provider inventories. |
+| Backend contract tests | `studio/edmg-studio/python_backend/edmg_studio_backend/tests/test_gpu_orchestration_contracts.py` | Round-trip, migration, validation, stable-ID, deterministic-plan, and extension-preservation coverage. |
+| Native DTOs | `studio/edmg-studio-winui/src/EdmgStudio.Core/Models/GpuOrchestrationModels.cs` | JSON-compatible records matching backend wire names and nullable semantics. |
+| Native contract tests | `studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/GpuOrchestrationModelsTests.cs` | Representative payload deserialization, unknown-field tolerance, enum fallback, and round-trip coverage. |
+
+Do not add Phase 0 contracts to the general-purpose `BackendModels.cs`; the orchestration boundary is
+large enough to remain independently reviewable. Do not add API routes or visible controls until the
+contract tests establish a stable wire format.
+
+### Phase 0 defaults and invariants
+
+- `schema_version` starts at `1` on every persisted envelope. Readers reject unsupported future major
+  versions but preserve unknown object members for a same-major read/write cycle.
+- A missing policy resolves to `Automatic`, `maximum_parallel_jobs = 1`, no role bindings, no model
+  splitting, and the existing runtime fallback behavior. This is compatibility behavior, not evidence
+  that a detected GPU is qualified.
+- Stable device IDs are opaque strings. Tests may use fixture IDs such as `cuda:pci-0000-01-00-0`, but
+  production ID format is owned by the later inventory provider and is never parsed by policy code.
+- Byte counts use non-negative 64-bit integers. Utilization is nullable when unavailable. Timestamps
+  are UTC ISO-8601 values. Process-visible ordinals are assignment output, never persisted policy input.
+- Policy validation is deterministic for identical policy, inventory snapshot, runtime capability,
+  and workload request. Tie-breaking uses stable device ID after all safety and load criteria.
+- A blocked plan is a typed result with reason codes and user-facing detail; it is not an exception or
+  an empty successful assignment. Programmer errors and malformed contracts remain explicit errors.
+- Phase 0 feature state is off by default. No existing Qwen, Hunyuan, LTX, Whisper, ComfyUI, render,
+  analysis, or worker path may consume these contracts yet.
+
+### Phase 0 contract decisions
+
+Use string-valued wire enums with explicit unknown handling in WinUI. The initial canonical values are:
+
+- policy mode: `automatic`, `single_gpu`, `parallel_jobs`, `model_split`, `dedicated_roles`, `custom`;
+- lease state: `pending`, `reserved`, `running`, `releasing`, `released`, `expired`, `recovered`, `failed`;
+- assignment strategy: `single_device`, `parallel_job`, `tensor_split`, `distributed`, `external_node`;
+- device health: `healthy`, `degraded`, `unavailable`, `stale`, `unknown`.
+
+`GpuPolicy` contains user intent only. Sampled memory, resolved ordinals, runtime fingerprints, and
+qualification receipts belong to inventory, assignment, and evidence records. Project overrides are
+represented as restrictions over the global policy; Phase 0 validates that they cannot add devices,
+raise concurrency, enable splitting, or weaken qualification requirements beyond the global policy.
+
+### Phase 0 definition of done
+
+1. Backend and native models deserialize the same checked-in representative payloads.
+2. Missing-policy migration produces the safe defaults above without modifying current settings.
+3. Unknown fields survive backend persisted-envelope round trips and do not break WinUI reads.
+4. Reordered fixture ordinals retain the same stable IDs and deterministic assignment choice.
+5. Invalid negative memory, duplicate device IDs, contradictory allow/exclude lists, unsupported split
+   requests, and project policy broadening return specific validation errors.
+6. Existing targeted model-runtime, render-preflight, job-store, API-client, and XAML build checks remain
+   green, demonstrating code presence without claiming working GPU integration.
+7. No subprocess, CUDA import, dependency synchronization, environment mutation, API route, durable
+   lease row, or native control is added in this phase.
 
 ## 8. Validation matrix
 

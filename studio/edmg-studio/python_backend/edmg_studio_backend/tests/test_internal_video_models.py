@@ -19,6 +19,14 @@ def test_hunyuan_worker_enables_distributed_vae_tile_parallelism() -> None:
     source = Path(hunyuan_worker.__file__).read_text(encoding="utf-8")
 
     assert '"enable_vae_tile_parallelism": world_size > 1' in source
+    assert "for load_rank in range(world_size):" in source
+    assert 'timeout=timedelta(hours=2)' in source
+    assert 'dist.init_process_group(backend="gloo", timeout=timedelta(hours=2))' in source
+    assert 'dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))' in source
+    assert source.index('dist.destroy_process_group()') < source.index('initialize_parallel_state(sp=world_size)')
+    assert source.index('initialize_parallel_state(sp=world_size)') < source.index('result = pipe(**kwargs)')
+    assert 'stage=pipeline_load_start' not in source
+    assert '_memory_status("pipeline_load_start", local_rank)' in source
     assert "torch.distributed.destroy_process_group()" in source
 
 
@@ -210,6 +218,7 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
     env = {
         "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
         "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_MODEL_PATH": "/models/hunyuan",
         "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
         "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
         "EDMG_HUNYUAN15_GPUS": "2",
@@ -245,6 +254,7 @@ def test_hunyuan_wsl_runner_maps_paths_and_isolates_cuda(tmp_path: Path, monkeyp
     command, kwargs = calls[0]
     assert command[:4] == ["wsl.exe", "--distribution", "Ubuntu", "--exec"]
     assert "CUDA_VISIBLE_DEVICES=2" in command
+    assert command[command.index("--model") + 1] == "/models/hunyuan"
     assert "-m" in command
     assert "edmg_studio_backend.services.hunyuan_video15_worker" in command
     assert any(value.startswith("PYTHONPATH=/mnt/c/HunyuanVideo-1.5:/mnt/c/python_backend") for value in command)
@@ -262,6 +272,7 @@ def test_hunyuan_worker_failure_preserves_complete_diagnostics(tmp_path: Path, m
     env = {
         "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
         "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_MODEL_PATH": "/models/hunyuan",
         "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
         "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
     }
@@ -301,7 +312,7 @@ def test_hunyuan_worker_failure_preserves_complete_diagnostics(tmp_path: Path, m
 
 
 def test_hunyuan_runner_fails_closed_without_explicit_configuration(monkeypatch) -> None:
-    for name in ("RUNNER", "PYTHON", "REPO", "WSL_DISTRO", "LLM_PATH", "BYT5_PATH", "GLYPH_PATH", "VISION_PATH"):
+    for name in ("RUNNER", "PYTHON", "REPO", "MODEL_PATH", "WSL_DISTRO", "LLM_PATH", "BYT5_PATH", "GLYPH_PATH", "VISION_PATH"):
         monkeypatch.delenv(f"EDMG_HUNYUAN15_{name}", raising=False)
     issues = ivm.validate_hunyuan_runner()
     assert any("RUNNER" in issue for issue in issues)
@@ -312,6 +323,7 @@ def test_hunyuan_wsl_probe_preserves_linux_companion_paths(monkeypatch) -> None:
     env = {
         "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
         "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_MODEL_PATH": "/models/hunyuan",
         "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
         "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
     }
@@ -329,6 +341,7 @@ def test_hunyuan_wsl_probe_preserves_linux_companion_paths(monkeypatch) -> None:
     assert ivm.validate_hunyuan_runner() == []
     required = captured["command"][captured["command"].index("-c") + 2]
     assert "\\\\models" not in required
+    assert "/models/hunyuan/config.json" in required
     assert "/models/qwen/config.json" in required
 
 
@@ -344,6 +357,7 @@ def test_hunyuan_config_persists_allowlisted_values_and_preserves_launcher_setti
         "distro": "Ubuntu",
         "python": "/opt/hunyuan/bin/python",
         "repo": "/opt/HunyuanVideo-1.5",
+        "model_path": "/models/hunyuan",
         "timeout_s": 1800,
         "llm": "/models/qwen",
         "byt5": "/models/byt5",
@@ -356,9 +370,17 @@ def test_hunyuan_config_persists_allowlisted_values_and_preserves_launcher_setti
     assert saved["UNRELATED"] == "keep"
     assert saved["EDMG_STUDIO_HOME"] == "C:/studio"
     assert saved["EDMG_HUNYUAN15_RUNNER"] == "wsl"
+    assert saved["EDMG_HUNYUAN15_MODEL_PATH"] == "/models/hunyuan"
     assert saved["EDMG_HUNYUAN15_TIMEOUT_SECONDS"] == "1800.0"
     assert "ignored" not in json.dumps(saved)
     assert result["config"]["repo"] == "/opt/HunyuanVideo-1.5"
+    assert result["config"]["model_path"] == "/models/hunyuan"
+
+
+def test_hunyuan_config_defaults_to_two_hour_render_timeout() -> None:
+    config = ivm.hunyuan_runner_config({})
+
+    assert config.timeout_s == 7200
 
 
 def test_hunyuan_config_rejects_invalid_mode_without_writing(tmp_path, monkeypatch) -> None:

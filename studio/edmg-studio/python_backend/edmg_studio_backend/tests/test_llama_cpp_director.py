@@ -45,7 +45,7 @@ def test_probe_timeout_is_reported_as_runtime_error(tmp_path, monkeypatch):
         llama_cpp_director.probe_llama_server(runtime)
 
 
-def test_probe_timeout_is_cached_for_unchanged_executable(tmp_path, monkeypatch):
+def test_probe_timeout_is_retried_for_unchanged_executable(tmp_path, monkeypatch):
     _model, _projector, runtime = _package(tmp_path)
     calls = 0
 
@@ -58,7 +58,7 @@ def test_probe_timeout_is_cached_for_unchanged_executable(tmp_path, monkeypatch)
     for _ in range(2):
         with pytest.raises(RuntimeError, match="version probe timed out"):
             llama_cpp_director.probe_llama_server(runtime)
-    assert calls == 1
+    assert calls == 2
 
 def test_device_probe_timeout_is_reported_as_runtime_error(tmp_path, monkeypatch):
     _model, _projector, runtime = _package(tmp_path)
@@ -67,9 +67,10 @@ def test_device_probe_timeout_is_reported_as_runtime_error(tmp_path, monkeypatch
     def timeout_device(command, **kwargs):
         nonlocal calls
         calls += 1
-        assert kwargs["timeout"] == 3
         if calls == 1:
+            assert kwargs["timeout"] == 3
             return SimpleNamespace(returncode=0, stdout="version", stderr="")
+        assert kwargs["timeout"] == 10
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     monkeypatch.setattr(llama_cpp_director.subprocess, "run", timeout_device)
