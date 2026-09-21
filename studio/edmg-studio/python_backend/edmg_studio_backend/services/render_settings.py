@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..runtime.policy import RuntimePolicy
+
 
 STABILITY_SERVICES = ("core", "ultra", "sd3")
 STABILITY_SD3_MODELS = ("sd3.5-large", "sd3.5-large-turbo", "sd3.5-medium")
@@ -46,6 +48,7 @@ VIDEO_GENERATION_PREFERENCES = (
 )
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
+    "runtime": RuntimePolicy().model_dump(),
     "video": {
         "preference": "auto",
         "auto_prefer_gpu": True,
@@ -163,7 +166,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("video", "cosmos", "azure_foundry", "firefly", "stability", "imagineart", "cuda", "directml"):
+        for key in ("runtime", "video", "cosmos", "azure_foundry", "firefly", "stability", "imagineart", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -173,6 +176,7 @@ class RenderSettingsStore:
 
     def _sanitize(self, payload: dict[str, Any]) -> dict[str, Any]:
         out = _clone_defaults()
+        out["runtime"] = RuntimePolicy.model_validate(payload.get("runtime", {})).model_dump()
 
         video = payload.get("video") if isinstance(payload.get("video"), dict) else {}
         cosmos = payload.get("cosmos") if isinstance(payload.get("cosmos"), dict) else {}

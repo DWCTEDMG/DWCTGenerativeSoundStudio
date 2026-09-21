@@ -35,6 +35,7 @@ public sealed partial class SettingsPage : Page
     {
         SubscribeMidiEvents();
         await RefreshAsync();
+        await RefreshRuntimeAsync();
     }
 
     private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)

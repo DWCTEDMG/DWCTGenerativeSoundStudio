@@ -16,6 +16,7 @@ from typing import Any
 
 from ..domain.director_scene import variant_prompt_source_hash
 from ..errors import UserFacingError
+from ..runtime.manager import pipeline_runtime_metadata
 from .deforum_motion import DeforumMotionScheduleBundle, evaluate_motion_state
 from .deforum_normalize import (
     CLIP_SAFE_RENDER_PROMPT_MAX_WORDS,
@@ -171,12 +172,15 @@ class _PipelineCache:
 
     @classmethod
     def clear(cls) -> None:
+        from ..runtime.manager import release_pipeline_runtime
+        for pipes in cls._cache.values():
+            release_pipeline_runtime(getattr(pipes, "txt2img", None))
         cls._cache.clear()
 
     @classmethod
     def drain(cls) -> list[Any]:
         cached = list(cls._cache.values())
-        cls._cache.clear()
+        cls.clear()
         return cached
 
 
@@ -845,7 +849,11 @@ def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any | None, Any | No
 
 
 def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
-    cache_key = (str(model_dir), device, str(role or "video"))
+    from ..runtime.manager import install_pipeline_runtime
+    from ..runtime.policy import load_policy
+    from ..config import Settings
+    policy_key = load_policy(Settings().data_dir).model_dump_json()
+    cache_key = (str(model_dir), device, str(role or "video") + policy_key)
     cached = _PipelineCache.get(cache_key)
     if cached is not None:
         return cached
@@ -1019,6 +1027,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
 
         pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sd15", backend="diffusers")
 
+    install_pipeline_runtime(pipes, model_dir)
     _PipelineCache.set(cache_key, pipes)
     return pipes
 
@@ -2073,6 +2082,7 @@ def render_internal_still_image(
                 "requested_device": requested_device,
                 "family": pipes.family,
                 "backend": pipes.backend,
+                "runtime": pipeline_runtime_metadata(pipes),
                 "seed": seed,
                 "effective_steps": max(1, min(4, int(settings.steps))) if pipes.family == "flux" else int(settings.steps),
                 "effective_cfg": 0.0 if pipes.family == "flux" else float(settings.cfg),
@@ -3807,6 +3817,7 @@ def render_internal_video_variant(
             final_mp4.write_bytes(interp_mp4.read_bytes())
     meta = {
         "renderer_algorithm_version": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION,
+        "runtime": pipeline_runtime_metadata(pipes),
         "work_tag": work_tag,
         "completed_at": __import__("time").time(),
         "variant_index": int(variant.get("index", 0)),

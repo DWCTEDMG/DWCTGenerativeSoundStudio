@@ -3,6 +3,7 @@ import { apiGet, apiPost, normalizeBackendUrl, setBrowserBackendUrl } from "../c
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import BackendSecurityPanel from "../components/BackendSecurityPanel";
+import RuntimeAccelerationPanel from "../components/RuntimeAccelerationPanel";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
@@ -1774,6 +1775,7 @@ export default function Settings(props: PageProps) {
     renderRuntime: (
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>GPU / Render Runtime</div>
+        <RuntimeAccelerationPanel />
         <div className="small" style={{ marginBottom: 10 }}>
           Controls for NVIDIA CUDA GPU acceleration, Stability hosted keyframes, and AMD DirectML. These affect the internal render pipeline — not the AI planning provider above.
         </div>

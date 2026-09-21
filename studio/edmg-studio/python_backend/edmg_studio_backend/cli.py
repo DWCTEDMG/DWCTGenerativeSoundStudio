@@ -84,11 +84,17 @@ def main() -> None:
     rj.add_argument("--job", required=True)
     rj.add_argument("--attempt", type=int)
 
+    runtime_worker = sub.add_parser("runtime-worker", help="Isolated optional acceleration worker")
+    runtime_worker.add_argument("--directory", required=True)
+
     args = p.parse_args()
     log_path = _configure_backend_logging(Settings().logs_dir)
     logging.getLogger(__name__).info("Backend warning/error log: %s", log_path)
 
-    if args.cmd == "serve":
+    if args.cmd == "runtime-worker":
+        from .runtime.worker import serve
+        serve(Path(args.directory))
+    elif args.cmd == "serve":
         try:
             validate_remote_bind_security(args.host)
         except RuntimeError as exc:

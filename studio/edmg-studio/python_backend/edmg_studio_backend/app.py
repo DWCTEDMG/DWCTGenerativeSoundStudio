@@ -3558,6 +3558,9 @@ _setup_router = create_setup_router(
     )
 )
 app.include_router(_setup_router)
+
+from .api.runtime import create_runtime_router
+app.include_router(create_runtime_router(settings, lambda: store, lambda: jobs, render_settings, _hardware_profile))
 # Compatibility names remain callable for tests and embedders; route ownership
 # and endpoint function definitions stay in api.setup.
 _clear_setup_status_cache = _setup_router.clear_status_cache  # type: ignore[attr-defined]
@@ -7306,7 +7309,15 @@ def _execute_job_body(job):
     jobs.append_log(job.project_id, job.id, f"Started job type={job.type}")
 
     try:
-        if job.type == "qwen_director":
+        if job.type == "runtime_optimization":
+            from .runtime.service import run_runtime_job
+            job.result = run_runtime_job(job, settings.data_dir, settings.models_dir,
+                cancel_check=lambda: not _job_attempt_active(job),
+                progress=lambda stage: jobs.update_progress(job.project_id, job.id,
+                    stage=stage, current=0, total=1, message=stage.replace("_", " "),
+                    expected_attempt=job.attempt))
+            job.status = "succeeded"
+        elif job.type == "qwen_director":
             from .services.qwen_director import run_director_job
             job.result = run_director_job(
                 job.payload,
@@ -7685,6 +7696,7 @@ def _run_job_in_subprocess(job) -> None:
 
 
 _LOCAL_MODEL_JOB_TYPES = frozenset({
+    "runtime_optimization",
     "qwen_director", "internal_still_scene", "internal_video", "performer_video",
     "tensorrt_standalone", "tensorrt_deforum", "comfyui_scene", "comfyui_motion_scene",
 })
@@ -7748,7 +7760,7 @@ def _dispatch_job(job) -> None:
 
 def _dispatch_admitted_job(job) -> None:
     """Worker entry point: run the job in a child process when enabled."""
-    if job.type == "qwen_director":
+    if job.type in {"qwen_director", "runtime_optimization"}:
         # Director inference must never fall back into the API process.
         try:
             _run_job_in_subprocess(job)
