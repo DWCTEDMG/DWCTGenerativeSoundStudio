@@ -7,6 +7,7 @@ using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Media;
 using EdmgStudio.Core.Audio;
 using EdmgStudio.Core.RemoteControl;
+using EdmgStudio.Core.Runtime;
 using EdmgStudio.WinUI.Graphics;
 
 namespace EdmgStudio.WinUI.Services;
@@ -31,7 +32,8 @@ public sealed class AppServices : IAsyncDisposable
         IAudioEngine audioEngine,
         StudioCommandDispatcher commands,
         StudioRemoteControlService remoteControl,
-        WindowsMidiInputService midiInput)
+        WindowsMidiInputService midiInput,
+        ILocalRuntimeOrchestrator localRuntime)
     {
         Configuration = configuration;
         BackendSupervisor = backendSupervisor;
@@ -45,6 +47,7 @@ public sealed class AppServices : IAsyncDisposable
         Commands = commands;
         RemoteControl = remoteControl;
         MidiInput = midiInput;
+        LocalRuntime = localRuntime;
         Transport.StateChanged += OnTransportStateChanged;
     }
 
@@ -59,6 +62,7 @@ public sealed class AppServices : IAsyncDisposable
     public StudioCommandDispatcher Commands { get; }
     public StudioRemoteControlService RemoteControl { get; }
     public WindowsMidiInputService MidiInput { get; }
+    public ILocalRuntimeOrchestrator LocalRuntime { get; }
 
     public async Task<BackendStatus> SwitchBackendAsync(
         RequestedBackendMode mode,
@@ -176,6 +180,19 @@ public sealed class AppServices : IAsyncDisposable
             "EDMG Studio", "remote-control.json");
         var remoteControl = new StudioRemoteControlService(new StudioRemoteControlStore(mappingsPath));
         var midiInput = new WindowsMidiInputService(commands, remoteControl);
+        var localRuntimeSettingsStore = new LocalRuntimeSettingsStore();
+        LocalRuntimeSettings localRuntimeSettings = localRuntimeSettingsStore.Load();
+        var wslRunner = new WslCommandRunner(localRuntimeSettings.WslDistro);
+        var localRuntime = new LocalRuntimeOrchestrator(
+            [
+                new LlamaCppRuntime(wslRunner, localRuntimeSettings.LlamaExecutable),
+                new TensorRtLlmRuntime(wslRunner, localRuntimeSettings.TensorRtExecutable)
+            ],
+            wslRunner,
+            new GpuDiscoveryService(wslRunner),
+            new RuntimeHealthService(),
+            new RuntimeProfileResolver(),
+            localRuntimeSettingsStore);
         return new AppServices(
             configuration,
             supervisor,
@@ -188,7 +205,8 @@ public sealed class AppServices : IAsyncDisposable
             audioEngine,
             commands,
             remoteControl,
-            midiInput);
+            midiInput,
+            localRuntime);
     }
 
     public async ValueTask DisposeAsync()
@@ -235,6 +253,15 @@ public sealed class AppServices : IAsyncDisposable
         }
 
         Transport.StateChanged -= OnTransportStateChanged;
+        try
+        {
+            await LocalRuntime.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
         try
         {
             await JobsActivity.DisposeAsync();

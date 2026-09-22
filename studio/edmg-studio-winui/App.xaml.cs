@@ -53,6 +53,7 @@ public partial class App : Application
             Services = services;
             IsInitialized = true;
             _window.InitializeShell();
+            _ = InitializeLocalRuntimeAsync(services, BootstrapCancellation.Token);
         }
         catch (OperationCanceledException) when (BootstrapCancellation.IsCancellationRequested)
         {
@@ -65,6 +66,21 @@ public partial class App : Application
     }
 
     internal static void CancelBootstrap() => BootstrapCancellation.Cancel();
+
+    private static async Task InitializeLocalRuntimeAsync(AppServices services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await services.LocalRuntime.InitializeAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            CrashLogger.Write("Local Director runtime initialization failed; keeping WinUI available.", exception);
+        }
+    }
 
     public static void Navigate(string destination) => Shell?.NavigateTo(destination);
 

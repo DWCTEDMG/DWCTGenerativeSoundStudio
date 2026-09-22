@@ -1,4 +1,10 @@
-# Studio implementation and review handoff
+$env:EDMG_BACKEND_ACCELERATOR_PROFILE = "cuda"
+
+uv run --project studio\edmg-studio\python_backend `
+  --frozen --no-sync `
+  python -m edmg_studio_backend serve `
+  --host 127.0.0.1 `
+  --port 7863# Studio implementation and review handoff
 
 ## Purpose and ownership
 
@@ -32,18 +38,19 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions and the latest Reviewer update are loaded. The TensorRT WinUI vertical slice is implemented while preserving existing renderer, project, timeline, Director/Reactive Lab, automatic-selection, and fallback behavior.
+**Acknowledgement:** Repository instructions and the latest Reviewer update are loaded. The authorized WinUI local AI runtime orchestration implementation is complete without changing backend TensorRT/render dispatch contracts.
 
-- Updated UTC: 2026-09-21T13:16:21Z.
-- Task / blueprint gate: implement `studio\edmg-studio-winui\EDMG_TensorRT_Full_Studio_Wide_Blueprint.md` as a backend-only runtime contract plus native Settings, Models, Render, and Queue surfaces.
-- Branch / base commit / dirty state: `codex/Unified` at `6e6f39b`; 59 modified/untracked paths existed at task start and 67 are present at handoff, including the pre-existing TensorRT candidate and unrelated work. Nothing was staged or published.
-- Owned paths: runtime API/policy/service/app/tests under `studio\edmg-studio\python_backend`; typed runtime models/client, Settings, Models, Render, Queue models/tests, and README under `studio\edmg-studio-winui`; this Implementer section only.
-- Completed: backend-authoritative installed/available/healthy/compatible/accelerating and historical-receipt status; SD1.5 VAE eligibility/engine/profile/benchmark/fallback evidence; typed WinUI runtime APIs; accessible Settings and Models controls; backend-gated Optimize jobs; Automatic/Compatibility/Performance/PyTorch CUDA/TensorRT/CPU modes; optional operation GPU index; runtime Queue labels/failure guidance; documentation and focused tests. Indexed GPU remains `runtime.device`; internal-video `device_preference` uses the backend-compatible `cuda` selector rather than an unsupported `cuda:N` value.
-- Validation/evidence (repository root, candidate `6e6f39b` plus dirty working tree): `uv run --project studio\edmg-studio\python_backend --frozen --no-sync --group test python -m pytest studio\edmg-studio\python_backend\edmg_studio_backend\tests\test_component_runtime.py -q` exited 0, 27 passed/1 deprecation warning, `%TEMP%\tensorrt-winui-backend.log`; focused `dotnet test ... --filter "FullyQualifiedName~StudioApiClientTests|FullyQualifiedName~InternalVideoRenderRequestBuilderTests|FullyQualifiedName~RenderQueueOperationsTests"` exited 0, 80 passed, `%TEMP%\tensorrt-winui-core-tests-rerun.log`; `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 0 warnings/0 errors, `%TEMP%\tensorrt-winui-build-rerun.log`; `git diff --check` exited 0 with existing line-ending notices. An earlier parallel build exited 1 solely because the test process held the test DLL; the serialized rerun passed.
-- Remaining / acceptance limits: no dependency synchronization was run. Real TensorRT engine build/inference, component quality/fallback receipts, proof of the currently accelerating state, actual multi-GPU routing, updated top-level-window interaction, packaged/unpackaged storage exercise, signing, Store submission, and clean-machine/device qualification were not run and are not implied by deterministic tests or compilation.
-- Blockers: the remaining acceptance items require an appropriate TensorRT/model/GPU runtime and interactive native launch evidence.
-- Next step: reviewer assessment of this saved candidate; real-runtime and live-window qualification remain separate gates.
-- Reviewer findings addressed: preserved the GPU-first environment and used frozen/no-sync/no-restore validation; kept evidence claims distinct from live inference; retained backend-owned fallback and did not treat prior Reviewer evidence as candidate proof.
+- Updated UTC: 2026-09-22T05:16:48Z.
+- Task / blueprint gate: implemented `studio\edmg-studio-winui\IMPLEMENTATION_PLAN.md`; supports consolidated blueprint Gates B and E.
+- Branch / base commit / dirty state: `codex/Unified` at `e8e10cd19b97e64fca27d0d5b1a2b32d74f3f119`, aligned 0 ahead/0 behind `origin/codex/Unified` before publication. The user authorized committing and pushing the entire current worktree, including the pre-existing backend contract-test and plan-file changes.
+- Owned paths: `src\EdmgStudio.Core\Runtime\`, local-runtime Core tests, `Services\AppServices.cs`, `App.xaml.cs`, `Pages\SettingsPage.xaml*`, and this Implementer section; publication scope is the complete user-authorized worktree.
+- Completed: persisted runtime settings; WSL/CUDA discovery and safe command execution; llama.cpp and TensorRT-LLM providers; ownership-safe startup, readiness, cancellation cleanup, restart, and bounded shutdown; async app lifecycle integration; native Settings status/actions/diagnostics/log access; malformed-health handling; deterministic coverage.
+- Validation/evidence from repository root against the current dirty candidate: `dotnet test studio\edmg-studio-winui\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 548/548 passed (`files\local-runtime-core-release.log`); focused `FullyQualifiedName~LocalRuntime` exited 0 with 21/21 passed (`files\local-runtime-focused-release.log`); `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 0 warnings/errors and complete XAML compilation (`files\local-runtime-winui-release.log`); frozen/no-sync focused backend contracts exited 0 with 50/50 passed (`files\local-runtime-backend-focused.log`). Logs are under session `155679d1-6423-4733-beb0-e40ece40f2f0`.
+- Baseline regressions observed, not caused by owned paths: aggregate frozen/no-sync run exited 1 with 172 passed/4 skipped/2 static-scan failures from untracked `tools\LTX-2-v1.3.0` and `tools\ltx-2.5-env` contents (`files\local-runtime-python-regressions.log`); backend-only suite exited 1 with 1037 passed/2 skipped/4 existing engine-package expectation failures (`files\local-runtime-backend-release.log`).
+- Remaining / acceptance limits: no live WSL runtime/model was installed or launched, so actual CUDA inference, GPU-memory behavior, endpoint routing, multi-GPU splitting, and interactive Settings operation remain unqualified hardware/device evidence rather than deterministic completion claims.
+- Blockers: none for implementation or deterministic acceptance; live qualification requires installed WSL llama.cpp/TensorRT-LLM binaries and compatible models.
+- Next step: reviewer inspection or separate live-hardware qualification; no additional implementation is pending in this task.
+- Reviewer findings addressed: GPU-first/no-sync policy is preserved; external endpoints are never killed; Studio only stops recorded owned PIDs; render TensorRT remains separate; code presence, deterministic tests, native compilation, and live evidence are reported distinctly.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 

@@ -23,6 +23,7 @@ EXPECTED_JOB_ROUTES = {
     ("GET", "/v1/projects/{project_id}/jobs/{job_id}/log"),
     ("GET", "/v1/projects/{project_id}/jobs/{job_id}/events"),
     ("POST", "/v1/jobs/tick"),
+    ("POST", "/v1/runtime/jobs"),
 }
 
 
@@ -46,4 +47,8 @@ def test_job_route_contract_and_ownership() -> None:
 
     assert actual == EXPECTED_JOB_ROUTES
     assert len(routes) == len(EXPECTED_JOB_ROUTES)
-    assert all(route.endpoint.__module__ == "edmg_studio_backend.api.jobs" for route in routes)
+    assert all(
+        route.endpoint.__module__
+        == ("edmg_studio_backend.api.runtime" if route.path == "/v1/runtime/jobs" else "edmg_studio_backend.api.jobs")
+        for route in routes
+    )

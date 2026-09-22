@@ -26,6 +26,7 @@ public sealed partial class SettingsPage : Page
         InitializeComponent();
         InitializeAppearance();
         LoadBackendSettings();
+        LoadLocalRuntimeSettings();
         Loaded += SettingsPage_Loaded;
         Unloaded += SettingsPage_Unloaded;
         LoadRemoteControlSettings();
@@ -34,12 +35,15 @@ public sealed partial class SettingsPage : Page
     private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
         SubscribeMidiEvents();
+        SubscribeLocalRuntimeEvents();
+        ApplyLocalRuntimeStatus(App.Services.LocalRuntime.CurrentStatus);
         await RefreshAsync();
         await RefreshRuntimeAsync();
     }
 
     private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)
     {
+        UnsubscribeLocalRuntimeEvents();
         if (!_midiEventsSubscribed) return;
         App.Services.MidiInput.MessageLearned -= MidiInput_MessageLearned;
         App.Services.MidiInput.StatusChanged -= MidiInput_StatusChanged;

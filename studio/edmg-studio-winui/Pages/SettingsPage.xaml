@@ -47,6 +47,61 @@
                         <Button AutomationProperties.AutomationId="SettingsRuntimeClearEngine" Content="Clear selected engine cache" Click="ClearRuntimeEngine_Click" HorizontalAlignment="Left" />
                     </StackPanel>
                 </Expander>
+                <Expander Header="Local Director runtime" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="True">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Manages the local OpenAI-compatible Qwen endpoint in WSL. This is separate from video-render TensorRT acceleration above." TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ProgressRing x:Name="LocalRuntimeProgress" Width="18" Height="18" IsActive="False" />
+                            <TextBlock x:Name="LocalRuntimeStateText" AutomationProperties.AutomationId="SettingsLocalRuntimeState" FontWeight="SemiBold" Text="Stopped" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock x:Name="LocalRuntimeDetailsText" AutomationProperties.AutomationId="SettingsLocalRuntimeDetails" FontFamily="Consolas" TextWrapping="Wrap" />
+                        <TextBlock x:Name="LocalRuntimeErrorText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
+                        <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
+                            <AppBarButton x:Name="LocalRuntimeStartButton" AutomationProperties.AutomationId="SettingsLocalRuntimeStart" Label="Start" Icon="Play" Click="LocalRuntimeStart_Click" />
+                            <AppBarButton x:Name="LocalRuntimeStopButton" AutomationProperties.AutomationId="SettingsLocalRuntimeStop" Label="Stop" Icon="Stop" Click="LocalRuntimeStop_Click" />
+                            <AppBarButton x:Name="LocalRuntimeRestartButton" AutomationProperties.AutomationId="SettingsLocalRuntimeRestart" Label="Restart" Icon="RepeatAll" Click="LocalRuntimeRestart_Click" />
+                            <AppBarButton Label="Refresh" Icon="Refresh" Click="LocalRuntimeRefresh_Click" />
+                            <AppBarButton Label="Open logs" Icon="OpenFile" Click="LocalRuntimeOpenLogs_Click" />
+                            <AppBarButton Label="Test" Icon="Accept" Click="LocalRuntimeTest_Click" />
+                        </CommandBar>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowSpacing="8">
+                            <ComboBox x:Name="LocalRuntimeChoice" Header="Runtime">
+                                <ComboBoxItem Content="Auto" Tag="Auto" />
+                                <ComboBoxItem Content="llama.cpp" Tag="LlamaCpp" />
+                                <ComboBoxItem Content="TensorRT-LLM" Tag="TensorRtLlm" />
+                            </ComboBox>
+                            <ComboBox x:Name="LocalRuntimeSplitMode" Grid.Column="1" Header="llama.cpp split mode">
+                                <ComboBoxItem Content="Layer (recommended)" Tag="layer" />
+                                <ComboBoxItem Content="Tensor (experimental)" Tag="tensor" />
+                                <ComboBoxItem Content="None" Tag="none" />
+                            </ComboBox>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
+                            <CheckBox x:Name="LocalRuntimeEnabled" Content="Enable orchestration" IsChecked="True" />
+                            <CheckBox x:Name="LocalRuntimeAutoStart" Grid.Column="1" Content="Auto-start" IsChecked="True" />
+                            <CheckBox x:Name="LocalRuntimeStopOnExit" Grid.Column="2" Content="Stop owned runtime on exit" IsChecked="True" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <CheckBox x:Name="LocalRuntimeCuda" Content="Use CUDA (no implicit CPU fallback)" IsChecked="True" />
+                            <CheckBox x:Name="LocalRuntimeMultiGpu" Grid.Column="1" Content="Use multiple GPUs when available" IsChecked="True" />
+                        </Grid>
+                        <Expander Header="Advanced local inference profile" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <StackPanel Spacing="10">
+                                <TextBox x:Name="LocalRuntimeDevices" Header="GPU devices" PlaceholderText="Empty = all visible GPUs; example: 0,1" />
+                                <TextBox x:Name="LocalRuntimeTensorSplit" Header="llama.cpp tensor split" PlaceholderText="Optional; example: 0.6,0.4" />
+                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                    <NumberBox x:Name="LocalRuntimeTensorParallel" Header="TensorRT tensor parallel size" Minimum="1" Maximum="64" SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="LocalRuntimeContext" Grid.Column="1" Header="Context size" Minimum="1" Maximum="1048576" Value="8192" SpinButtonPlacementMode="Compact" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                    <NumberBox x:Name="LocalRuntimeLlamaPort" Header="llama.cpp port" Minimum="1" Maximum="65535" Value="8080" SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="LocalRuntimeTensorRtPort" Grid.Column="1" Header="TensorRT-LLM port" Minimum="1" Maximum="65535" Value="8081" SpinButtonPlacementMode="Compact" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
+                        <Button AutomationProperties.AutomationId="SettingsLocalRuntimeSave" Content="Save local runtime settings" Click="LocalRuntimeSave_Click" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Expander>
                 <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Remote control and Quick Controls" />
