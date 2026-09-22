@@ -86,3 +86,26 @@ interactive controls; FP16 and production-size profiles; TensorRT 11 real compon
 frozen packaging; broader resume/cancel regression matrix; engine disk management
 under contention; and additional video components/models. Do not describe this
 checkpoint as completion of the blueprint's production-readiness criteria.
+
+
+## Validation schema 2
+
+The SD1.5 VAE component engine identity now uses adapter version 2. This forces a
+new content-addressed engine key after the validation-policy change; failed or ready
+version-1 engines are not deleted and cannot be mistaken for version-2 validation.
+
+FP32 validation no longer rejects an engine solely because one decoded value crosses
+the previous 0.005 maximum-absolute-error boundary. Version 2 evaluates max and mean
+absolute error, RMSE, P99 absolute error, PSNR and a dependency-free global SSIM
+statistic across the fixed validation seeds. Maximum relative error is recorded for
+diagnostics but is not a hard gate because reference values near zero make it
+unstable as a VAE acceptance criterion.
+
+The default FP32 maximum-absolute threshold is 0.0075, while mean error, RMSE, P99,
+PSNR and SSIM independently constrain broad output drift. Strict execution and
+no-fallback behavior remain unchanged.
+
+The existing `services/tensorrt_standalone.py` implementation remains the verified
+SD1.5 UNet TensorRT route. It is reported separately as `tensorrt_standalone`
+rather than claiming that the normal Diffusers component runtime can replace its
+UNet.

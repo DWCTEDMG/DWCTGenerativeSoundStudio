@@ -8,6 +8,15 @@ from pathlib import Path
 
 from .cache import EngineCache, digest_file, engine_key
 from .executor import TensorExecutor
+from .validation import (
+    VALIDATION_SCHEMA,
+    aggregate_validation_metrics,
+    default_validation_limits,
+    evaluate_validation,
+    tensor_validation_metrics,
+)
+
+ADAPTER_VERSION = 2
 
 
 def component_identity(model_dir: Path, shape: list[int], precision: str, device: int, compiler: str) -> dict:
@@ -30,11 +39,14 @@ def component_identity(model_dir: Path, shape: list[int], precision: str, device
             "gpu_name": props.name, "gpu_uuid": str(getattr(props, "uuid", device)),
             "precision": precision, "profile": {"input": shape}, "compiler": compiler,
             "compiler_settings": {"workspace_bytes": 2 * 1024**3, "tf32": False},
-            "diffusers": importlib.metadata.version("diffusers"), "adapter_version": 1}
+            "diffusers": importlib.metadata.version("diffusers"),
+            "adapter_version": ADAPTER_VERSION}
 
 
 def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precision: str,
-                      device: int, allow_build: bool, progress=lambda stage: None):
+                      device: int, allow_build: bool,
+                      validation_limits: dict | None = None,
+                      progress=lambda stage: None):
     import torch
     import tensorrt as trt
     # Prefer the already-installed Torch-TensorRT combination when compatible.
@@ -118,21 +130,54 @@ def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precisi
                 cache.state(key, identity, "validating")
                 progress("validating")
                 executor = TensorExecutor(bytes(engine), device)
-                max_error, mean_error = 0.0, 0.0
-                for seed in (1729, 42, 7):
+                validation_rows = []
+                fixed_seeds = (1729, 42, 7)
+                for seed in fixed_seeds:
                     generator.manual_seed(seed)
                     latent = torch.randn(shape, generator=generator, device=sample.device, dtype=dtype)
                     reference = module(latent)
                     actual = executor(latent)
-                    error = (reference.float() - actual.float()).abs()
-                    if not torch.isfinite(actual).all() or not torch.isfinite(reference).all():
-                        raise RuntimeError("VAE validation returned nonfinite pixels")
-                    max_error = max(max_error, error.max().item())
-                    mean_error = max(mean_error, error.mean().item())
-                # Pixel-domain tolerances are explicit; these are not video quality qualification.
-                passed = max_error <= (0.05 if precision == "fp16" else 0.005) and mean_error <= (0.005 if precision == "fp16" else 0.0005)
+                    validation_rows.append({
+                        "seed": seed,
+                        **tensor_validation_metrics(reference, actual),
+                    })
+
+                limits = dict(validation_limits or default_validation_limits(precision))
+                validation = aggregate_validation_metrics(validation_rows)
+                passed, failures = evaluate_validation(validation, limits)
+                validation.update({
+                    "passed": passed,
+                    "validation_schema": VALIDATION_SCHEMA,
+                    "limits": limits,
+                    "fixed_seeds": list(fixed_seeds),
+                    "quality_scope": "component_numeric_plus_image_statistics",
+                    "failures": failures,
+                    "max_relative_error_is_diagnostic_only": True,
+                })
+
                 if not passed:
-                    raise RuntimeError(f"VAE numerical validation failed: max={max_error}, mean={mean_error}")
+                    cache.state(
+                        key,
+                        identity,
+                        "failed",
+                        reason="VAE numerical validation failed",
+                        validation=validation,
+                    )
+                    raise RuntimeError(
+                        "VAE numerical validation failed: "
+                        + json.dumps(
+                            {
+                                "max": validation["max_absolute_error"],
+                                "mean": validation["mean_absolute_error"],
+                                "rmse": validation["rmse"],
+                                "p99": validation["p99_absolute_error"],
+                                "psnr_db": validation["psnr_db"],
+                                "ssim_global": validation["ssim_global"],
+                                "failures": failures,
+                            },
+                            sort_keys=True,
+                        )
+                    )
                 progress("benchmarking")
                 timings = {}
                 for name, fn in (("pytorch_s", module), ("tensorrt_s", executor)):
@@ -145,12 +190,14 @@ def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precisi
                     timings[name] = (time.perf_counter() - start) / 5
                 timings["build_s"] = build_s
                 timings["beneficial"] = timings["tensorrt_s"] < timings["pytorch_s"] * 0.95
-                manifest = cache.publish(identity, bytes(engine),
-                    {"passed": True, "max_absolute_error": max_error, "mean_absolute_error": mean_error,
-                     "fixed_seeds": [1729, 42, 7], "quality_scope": "component_numeric_only"}, timings)
+                manifest = cache.publish(identity, bytes(engine), validation, timings)
             del module, vae
             torch.cuda.empty_cache()
             return executor, manifest, "built"
         except Exception as exc:
-            cache.state(key, identity, "failed", reason=str(exc))
+            previous = cache.read(key) or {}
+            detail = {}
+            if isinstance(previous.get("validation"), dict):
+                detail["validation"] = previous["validation"]
+            cache.state(key, identity, "failed", reason=str(exc), **detail)
             raise

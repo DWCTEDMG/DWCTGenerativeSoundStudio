@@ -332,6 +332,25 @@ const installRenderMocks = (options: { tensorRtInstalled?: boolean; jobs?: Array
 };
 
 describe("Render page", () => {
+  it("sends a request-only TensorRT opt-out and can return to inherited policy", async () => {
+    const fetchMock = installRenderMocks();
+    renderWithStudio(<Render />);
+    const preference = await screen.findByLabelText("TensorRT for this render");
+    fireEvent.change(preference, { target: { value: "off" } });
+    fireEvent.change(screen.getByLabelText("Component precision"), { target: { value: "fp32" } });
+    fireEvent.change(screen.getByLabelText("If an eligible TensorRT component fails"), { target: { value: "allow" } });
+    const lastPolicy = () => {
+      const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/render/internal/preflight"));
+      return JSON.parse(String(calls.at(-1)?.[1]?.body || "{}")).runtime;
+    };
+    await waitFor(() => expect(lastPolicy()).toMatchObject({ enabled: false, precision: "fp32", allow_fallback: true, strict: false }));
+    fireEvent.change(preference, { target: { value: "inherit" } });
+    fireEvent.change(screen.getByLabelText("Component precision"), { target: { value: "inherit" } });
+    fireEvent.change(screen.getByLabelText("If an eligible TensorRT component fails"), { target: { value: "inherit" } });
+    await waitFor(() => expect(lastPolicy()).toBeNull());
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/runtime/settings"))).toBe(false);
+  }, 10000);
+
   it("puts goal-aware quick controls first and routes Auto master through the real pipeline", async () => {
     const fetchMock = installRenderMocks();
     renderWithStudio(<Render />);

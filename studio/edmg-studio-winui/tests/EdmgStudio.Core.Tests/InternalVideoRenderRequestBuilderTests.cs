@@ -7,6 +7,48 @@ namespace EdmgStudio.Core.Tests;
 public sealed class InternalVideoRenderRequestBuilderTests
 {
     [TestMethod]
+    public void Build_RuntimeChoiceIsScopedToOneRequest()
+    {
+        var settings = new InternalVideoRenderSettings();
+        JsonElement off = InternalVideoRenderRequestBuilder.Build(settings with
+        {
+            Runtime = new OperationRuntimeOptions { Enabled = false, AllowFallback = true, Strict = false }
+        });
+        Assert.IsFalse(off.GetProperty("runtime").GetProperty("enabled").GetBoolean());
+        Assert.IsTrue(off.GetProperty("runtime").GetProperty("allow_fallback").GetBoolean());
+        Assert.AreEqual(JsonValueKind.Null, InternalVideoRenderRequestBuilder.Build(settings).GetProperty("runtime").ValueKind);
+        var still = new RenderScenesRequest { Runtime = new OperationRuntimeOptions { Mode = "compatibility", Precision = "fp32" } };
+        JsonElement serialized = JsonSerializer.SerializeToElement(still);
+        Assert.AreEqual("fp32", serialized.GetProperty("runtime").GetProperty("precision").GetString());
+    }
+
+    [TestMethod]
+    public void Build_SerializesRuntimeModeAndDeviceWithoutChangingInheritedDefaults()
+    {
+        JsonElement inherited = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());
+        Assert.AreEqual(JsonValueKind.Null, inherited.GetProperty("runtime").ValueKind);
+
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            Runtime = new OperationRuntimeOptions
+            {
+                Mode = "cpu",
+                Device = 2,
+                AllowFallback = false,
+                Strict = true,
+            },
+            DevicePreference = "cuda",
+        });
+
+        JsonElement runtime = request.GetProperty("runtime");
+        Assert.AreEqual("cpu", runtime.GetProperty("mode").GetString());
+        Assert.AreEqual(2, runtime.GetProperty("device").GetInt32());
+        Assert.IsFalse(runtime.GetProperty("allow_fallback").GetBoolean());
+        Assert.IsTrue(runtime.GetProperty("strict").GetBoolean());
+        Assert.AreEqual("cuda", request.GetProperty("device_preference").GetString());
+    }
+
+    [TestMethod]
     public void Build_SerializesAdvancedSettingsAndBackendRefinerContract()
     {
         JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings

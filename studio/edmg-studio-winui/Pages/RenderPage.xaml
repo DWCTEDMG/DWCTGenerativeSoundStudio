@@ -39,6 +39,35 @@
                 <TextBlock Text="Native controls for planning, generation, assembly, export, and worker operations."
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            TextWrapping="Wrap" />
+                <Expander Header="Acceleration for this render" HorizontalAlignment="Stretch">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Applies to internal image, video, and layer refinement. Only separately converted components can use TensorRT. Other components keep their existing runtime. The Studio-wide disable switch takes priority."
+                                   TextWrapping="Wrap" />
+                        <ComboBox x:Name="OperationRuntimeMode" Header="TensorRT preference" SelectedIndex="0" HorizontalAlignment="Stretch"
+                                  AutomationProperties.AutomationId="OperationRuntimeMode">
+                            <ComboBoxItem Content="Use Studio settings" Tag="inherit" />
+                            <ComboBoxItem Content="Off for this render" Tag="off" />
+                            <ComboBoxItem Content="Automatic (measured benefit)" Tag="auto" />
+                            <ComboBoxItem Content="Compatibility (cached engines only)" Tag="compatibility" />
+                            <ComboBoxItem Content="Performance (allow component builds)" Tag="performance" />
+                            <ComboBoxItem Content="PyTorch CUDA" Tag="pytorch_cuda" />
+                            <ComboBoxItem Content="Prefer TensorRT where supported" Tag="tensorrt" />
+                            <ComboBoxItem Content="CPU / fallback runtime" Tag="cpu" />
+                        </ComboBox>
+                        <NumberBox x:Name="OperationRuntimeDevice" AutomationProperties.AutomationId="OperationRuntimeDevice" AutomationProperties.Name="GPU index for this render" Header="GPU index" Minimum="0" Maximum="63" Value="NaN" PlaceholderText="Use Studio setting" SpinButtonPlacementMode="Compact" />
+                        <ComboBox x:Name="OperationRuntimePrecision" Header="Component precision" SelectedIndex="0" HorizontalAlignment="Stretch">
+                            <ComboBoxItem Content="Use Studio settings" Tag="inherit" />
+                            <ComboBoxItem Content="Automatic" Tag="auto" />
+                            <ComboBoxItem Content="FP32" Tag="fp32" />
+                            <ComboBoxItem Content="FP16" Tag="fp16" />
+                        </ComboBox>
+                        <ComboBox x:Name="OperationRuntimeFallback" Header="If an eligible TensorRT component fails" SelectedIndex="0" HorizontalAlignment="Stretch">
+                            <ComboBoxItem Content="Use Studio settings" Tag="inherit" />
+                            <ComboBoxItem Content="Continue with the original runtime" Tag="allow" />
+                            <ComboBoxItem Content="Stop this render (strict)" Tag="strict" />
+                        </ComboBox>
+                    </StackPanel>
+                </Expander>
             </StackPanel>
             <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="6">
                 <TextBlock Text="Active project" HorizontalAlignment="Right"

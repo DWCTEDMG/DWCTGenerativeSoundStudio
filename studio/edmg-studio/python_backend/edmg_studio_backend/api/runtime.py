@@ -25,11 +25,12 @@ def create_runtime_router(settings, get_store, get_jobs, render_settings, hardwa
 
     @router.get("/status")
     def status():
-        return runtime_status(settings.data_dir, hardware())
+        return runtime_status(settings.data_dir, hardware(), settings.models_dir)
 
     @router.post("/settings")
     def save_policy(policy: RuntimePolicy):
-        return {"settings": render_settings.update({"runtime": policy.model_dump()})["runtime"]}
+        render_settings.update({"runtime": policy.model_dump()})
+        return runtime_status(settings.data_dir, hardware(), settings.models_dir)
 
     @router.post("/jobs", status_code=202)
     def enqueue(payload: RuntimeJobRequest):

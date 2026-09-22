@@ -53,11 +53,16 @@ public sealed record RenderQueueJobSummary(
         TimeSpan? elapsed = GetElapsed(job, currentTime);
         TimeSpan? eta = EstimateRemaining(job, percent, currentTime);
 
+        bool runtimeJob = job.Type == "runtime_optimization";
+        string title = runtimeJob
+            ? $"{RuntimeOperation(job)} · {ShortId(job.Id)}"
+            : $"{FormatLabel(job.Type)} · {ShortId(job.Id)}";
+
         return new RenderQueueJobSummary(
             job,
-            $"{FormatLabel(job.Type)} · {ShortId(job.Id)}",
+            title,
             status,
-            stage,
+            runtimeJob ? RuntimeStage(job, stage) : stage,
             BuildProgressLabel(job, percent),
             eta is null ? "ETA calculating" : $"ETA {FormatDuration(eta.Value)}",
             elapsed is null ? "Not started" : $"Elapsed {FormatDuration(elapsed.Value)}",
@@ -119,6 +124,12 @@ public sealed record RenderQueueJobSummary(
 
     private static string RecommendationFor(StudioJob job) => job.Status switch
     {
+        "failed" when job.Type == "runtime_optimization" =>
+            "Inspect the runtime log and quarantined engine record. Ordinary renders can continue when fallback is allowed.",
+        "canceled" when job.Type == "runtime_optimization" =>
+            "The runtime operation was canceled. Queue a fresh diagnostics or optimization job when ready.",
+        "succeeded" when job.Type == "runtime_optimization" =>
+            "This receipt records a completed diagnostic or engine validation; live acceleration is reported by each render.",
         "failed" when job.Type.Contains("internal", StringComparison.OrdinalIgnoreCase) =>
             "Inspect the log, then resume from checkpoint or restart clean.",
         "failed" => "Inspect diagnostics, then retry when the dependency is ready.",
@@ -151,6 +162,30 @@ public sealed record RenderQueueJobSummary(
         }
 
         return "Project outputs";
+    }
+
+    private static string RuntimeOperation(StudioJob job)
+    {
+        if (job.Payload is JsonElement payload && payload.ValueKind == JsonValueKind.Object &&
+            payload.TryGetProperty("operation", out JsonElement operation))
+        {
+            return operation.GetString() == "optimize" ? "TensorRT component optimization" : "TensorRT diagnostics";
+        }
+        return "TensorRT runtime operation";
+    }
+
+    private static string RuntimeStage(StudioJob job, string fallback)
+    {
+        string stage = job.Progress?.Stage ?? string.Empty;
+        return stage switch
+        {
+            "build" or "building" => "Building TensorRT engine",
+            "validate" or "validating" => "Validating engine quality",
+            "benchmark" or "benchmarking" => "Benchmarking PyTorch and TensorRT",
+            "quarantine" or "quarantined" => "Engine quarantined",
+            "fallback" => "Continuing with fallback runtime",
+            _ => fallback,
+        };
     }
 
     private static string FormatPriority(int priority) => priority switch

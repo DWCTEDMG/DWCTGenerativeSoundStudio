@@ -1,5 +1,30 @@
 # EDMG Studio Backend (v1.2.0)
 
+## Optional TensorRT component capability
+
+`edmg_studio_backend/runtime/` is the common runtime boundary beneath the Internal Renderer. It
+contains policy, selection, isolated worker execution, engine cache manifests, validation, benchmark
+receipts, quarantine, and fallback. Importing the backend does not require TensorRT. TensorRT is
+activated only in the disposable worker when the package is available and the selected component has
+declared support.
+
+Every component must be qualified separately against a deterministic PyTorch reference before it can
+be selected by `auto`. Current qualification covers the SD1.5 AutoencoderKL VAE decoder. Unsupported
+Hunyuan/LTX/Wan components, Qwen/llama.cpp, Whisper/CTranslate2, external providers, and existing
+specialized runtimes remain unchanged and continue to work without TensorRT.
+
+The worker records model/config checksums, runtime and CUDA versions, GPU architecture, precision,
+profile, validation metrics, benchmark timings, and provenance. Engines are written atomically and
+quarantined when identity, validation, checksum, deserialization, shape, or execution checks fail.
+Normal fallback reuses the same component inputs with PyTorch; strict mode is diagnostic-only and
+disabled by default. Resume checkpoints record runtime metadata but do not require the original
+TensorRT context.
+
+Do not globally install TensorRT, replace PyTorch/CUDA, modify system PATH, copy DLLs into system
+folders, or synchronize dependencies merely to launch the backend. See the root
+[`EDMG_TensorRT_Full_Studio_Wide_Blueprint.md`](../../../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md)
+and [`docs/TENSORRT_RUNTIME_INTEGRATION.md`](../docs/TENSORRT_RUNTIME_INTEGRATION.md).
+
 This backend supports the native WinUI 3 Windows product and the Electron/React Linux and
 compatibility client. Backend work is not a complete product feature until the native WinUI surface
 exposes the capability where applicable. The current cross-project status and qualification rules

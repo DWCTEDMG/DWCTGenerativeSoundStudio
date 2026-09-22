@@ -28,10 +28,34 @@ class RuntimeRegistry:
     capabilities: dict = field(default_factory=lambda: {
         "pytorch_cuda": {"role": "existing_internal_pipelines"},
         "tensorrt": {"sd15": ["vae_decoder"], "precision": ["fp32", "fp16"]},
+        "tensorrt_standalone": {
+            "sd15": ["unet"],
+            "role": "verified_sd15_bundle_renderer",
+        },
         "llama_cpp": {"role": "existing_qwen_gguf"},
         "ctranslate2": {"role": "existing_faster_whisper"},
         "cpu": {"role": "explicit_existing_fallback"},
     })
+
+    def component_status(self) -> list[dict]:
+        """Admission inventory, distinct from per-engine or full-model qualification."""
+        families = {
+            "sd15": ["vae_decoder", "text_encoder", "unet"],
+            "sdxl": ["vae_decoder", "text_encoder", "unet"],
+            "sd3": ["vae_decoder", "text_encoder", "transformer"],
+            "flux": ["vae_decoder", "text_encoder", "transformer"],
+            "svd": ["vae_decoder", "vision_encoder", "unet"],
+            "animatediff": ["vae_decoder", "text_encoder", "unet"],
+            "ltx_25": ["vae_decoder", "text_encoder", "transformer"],
+            "wan": ["vae_decoder", "text_encoder", "transformer"],
+            "hunyuan_video15": ["vae_decoder", "text_encoder", "transformer"],
+            "qwen": ["language_model"], "whisper": ["audio_encoder", "decoder"],
+        }
+        return [{"model_family": family, "component": component,
+                 "status": "adapter_available" if component in self.capabilities["tensorrt"].get(family, []) else "not_converted",
+                 "requires_engine_validation": True,
+                 "fallback_runtime": "llama_cpp" if family == "qwen" else "ctranslate2" if family == "whisper" else "existing_model_runtime"}
+                for family, components in families.items() for component in components]
 
 
 class RuntimeSelector:
@@ -87,6 +111,8 @@ class RuntimeManager:
         import torch
         device = str(value.device)
         self.plan.device = device
+        if self.disabled and (self.policy.strict or not self.policy.allow_fallback):
+            raise RuntimeError("TensorRT strict execution remains failed for this pipeline; fallback is disabled")
         if self.disabled or not RuntimeSelector.permits_tensorrt(self.policy, "sd15", "vae_decoder", device):
             return self.original_decode(value, return_dict=return_dict, generator=generator, **kwargs)
         try:
@@ -104,7 +130,9 @@ class RuntimeManager:
                 self.process = RuntimeProcess(self.data_dir, self.policy.package_path)
                 result = self.process.request("prepare", timeout_s=1800,
                     model_dir=str(self.model_dir), shape=list(value.shape), precision=precision,
-                    device=value.device.index or 0, allow_build=RuntimeSelector.may_build(self.policy))
+                    device=value.device.index or 0,
+                    allow_build=RuntimeSelector.may_build(self.policy),
+                    validation_limits=self.policy.validation_limits(precision))
                 manifest = result["manifest"]
                 self.plan.engine_id = manifest["engine_id"]
                 self.plan.cache = result["cache"]
@@ -151,11 +179,12 @@ class RuntimeManager:
             return self.original_decode(value, return_dict=return_dict, generator=generator, **kwargs)
 
 
-def install_pipeline_runtime(pipes, model_dir: Path):
+def install_pipeline_runtime(pipes, model_dir: Path, *, policy=None):
     from ..config import Settings
     from .policy import load_policy
     data_dir = Settings().data_dir
-    policy = load_policy(data_dir)
+    policy = policy or load_policy(data_dir)
+    pipes.runtime_policy = policy.model_dump()
     if pipes.family != "sd15" or not RuntimeSelector.permits_tensorrt(policy, pipes.family, "vae_decoder", pipes.device):
         return
     from ..services.model_weights import diffusers_weight_load_kwargs
@@ -176,8 +205,14 @@ def release_pipeline_runtime(pipe):
         manager.cleanup()
 
 
-def pipeline_runtime_metadata(pipes) -> dict:
+def pipeline_runtime_metadata(pipes, operation=None) -> dict:
     if pipes is None:
-        return {"selected": "existing_video_model_runtime"}
+        return {"selected": "existing_video_model_runtime", "operation": operation,
+                "reason": "No converted TensorRT component is installed for this pipeline"}
     manager = getattr(getattr(pipes.txt2img, "vae", None), "_edmg_runtime", None)
-    return asdict(manager.plan) if manager else {"selected": pipes.backend, "device": pipes.device}
+    return {**asdict(manager.plan), "operation": operation} if manager else {
+        "selected": pipes.backend, "device": pipes.device,
+        "requested": getattr(pipes, "runtime_policy", {}).get("mode", "auto"),
+        "operation": operation,
+        "reason": "Existing model runtime; no eligible TensorRT component selected",
+    }

@@ -267,6 +267,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife">("auto");
   const [internalModelId, setInternalModelId] = useState<string>("auto");
   const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt">("auto");
+  const [operationRuntime, setOperationRuntime] = useState("inherit");
+  const [operationPrecision, setOperationPrecision] = useState("inherit");
+  const [operationFallback, setOperationFallback] = useState("inherit");
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
   const [internalAllowHostedFallback, setInternalAllowHostedFallback] = useState<boolean>(true);
@@ -721,6 +724,17 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     });
   }, [projectAssets.refs, projectOutputImages]);
 
+  const buildOperationRuntime = () => {
+    if ([operationRuntime, operationPrecision, operationFallback].every(value => value === "inherit")) return null;
+    return {
+      mode: ["inherit", "off"].includes(operationRuntime) ? null : operationRuntime,
+      enabled: operationRuntime === "off" ? false : null,
+      precision: operationPrecision === "inherit" ? null : operationPrecision,
+      allow_fallback: operationFallback === "inherit" ? null : operationFallback === "allow",
+      strict: operationFallback === "inherit" ? null : operationFallback === "strict",
+    };
+  };
+
   const buildInternalPayload = () => {
     const useTensorRt = internalRenderMode === "tensorrt";
     const tensorRtModelId = tensorRtInternalModel?.id || "local_sd15_tensorrt_bundle";
@@ -775,6 +789,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       render_mode: internalRenderMode,
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
+      runtime: buildOperationRuntime(),
       allow_hosted_fallback: internalRenderMode === "diffusion" ? false : internalAllowHostedFallback,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
       source_asset: sourceAsset || undefined,
@@ -807,6 +822,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     const upscaler = hiresFix.upscaler || "latent_bislerp";
     const payload: Record<string, any> = {
       workflow_family: selectedStillFamily === "flux" ? "txt2img" : stillWorkflow,
+      runtime: buildOperationRuntime(),
       ...buildDiffusionPayload(),
     };
     if (stillWorkflow === "img2img" || stillWorkflow === "inpaint" || stillWorkflow === "outpaint") {
@@ -1305,6 +1321,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     internalInterp,
     internalModelId,
     internalRenderMode,
+    operationRuntime,
+    operationPrecision,
+    operationFallback,
     internalRenderTier,
     internalDevicePreference,
     internalTemporalMode,
@@ -1944,6 +1963,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
         negative_prompt: renderNegativePrompt,
         seed: renderSeed ? Number(renderSeed) : undefined,
         batch_size: trtBatchSize,
+        runtime: buildOperationRuntime(),
       });
       setInfo(d);
       await refreshProjectJobs(); // Poll for TRT job in the generic internal status widget for now
@@ -2746,6 +2766,26 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                     </select>
                   </div>
                   <div style={{ minWidth: 190 }}>
+                    <label className="small" htmlFor="operation-runtime">TensorRT for this render</label>
+                    <select id="operation-runtime" value={operationRuntime} onChange={(e) => setOperationRuntime(e.target.value)}>
+                      <option value="inherit">Use Studio settings</option>
+                      <option value="off">Off for this render</option>
+                      <option value="auto">Automatic (measured benefit)</option>
+                      <option value="compatibility">Compatibility (cached only)</option>
+                      <option value="performance">Performance (allow builds)</option>
+                      <option value="tensorrt">Prefer TensorRT where supported</option>
+                    </select>
+                    <label className="small" htmlFor="operation-precision">Component precision</label>
+                    <select id="operation-precision" value={operationPrecision} onChange={(e) => setOperationPrecision(e.target.value)}>
+                      <option value="inherit">Use Studio settings</option><option value="auto">Automatic</option>
+                      <option value="fp32">FP32</option><option value="fp16">FP16</option>
+                    </select>
+                    <label className="small" htmlFor="operation-fallback">If an eligible TensorRT component fails</label>
+                    <select id="operation-fallback" value={operationFallback} onChange={(e) => setOperationFallback(e.target.value)}>
+                      <option value="inherit">Use Studio settings</option><option value="allow">Continue with original runtime</option>
+                      <option value="strict">Stop this render (strict)</option>
+                    </select>
+                    <div className="small">Unconverted components keep their existing runtime. Studio-wide disable takes priority.</div>
                     <div className="small">Render tier</div>
                     <select value={internalRenderTier} onChange={(e) => setInternalRenderTier(e.target.value as any)}>
                       <option value="auto">Auto (hardware-aware)</option>

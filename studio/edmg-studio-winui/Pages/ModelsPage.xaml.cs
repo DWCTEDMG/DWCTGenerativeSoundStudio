@@ -22,6 +22,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     private ModelCatalogueResponse? _catalogue;
     private ModelPresentation? _selectedModel;
     private TensorRtMigrationStatus? _tensorRtStatus;
+    private RuntimeStatusResponse? _runtimeStatus;
     private string? _taskFingerprint;
     private bool _isRefreshing;
     private bool _isPolling;
@@ -63,7 +64,9 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             {
                 _tensorRtStatus = await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
             }
+            _runtimeStatus = await _apiClient.GetRuntimeStatusAsync(cancellationToken);
             UpdateTensorRt();
+            UpdateComponentAcceleration();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -524,6 +527,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         CivitaiImportButton.IsEnabled = !_isCommandRunning && !string.IsNullOrWhiteSpace(CivitaiUrlBox.Text);
         UpdatePackSelection();
         UpdateTensorRt();
+        UpdateComponentAcceleration();
     }
 
     private async void Revalidate_Click(object sender, RoutedEventArgs e)
@@ -982,6 +986,31 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
             + (migration.Available
                 ? "\nCopy-only migration is available; source files will be preserved."
                 : $"\nMigration unavailable: {FormatBlockedReason(migration.BlockedReason)}");
+    }
+
+    private void UpdateComponentAcceleration()
+    {
+        RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
+            value.ModelFamily == "sd15" && value.Component == "vae_decoder");
+        ComponentOptimizeButton.IsEnabled = !_isCommandRunning && component?.OptimizationEligible == true;
+        ComponentAccelerationText.Text = component is null
+            ? "Component acceleration status is unavailable."
+            : $"SD1.5 VAE decoder: {component.Status}; {component.ValidatedEngineCount} validated engine(s); "
+              + $"{component.ProfileCoverage.Count} profile(s); fallback {component.FallbackRuntime}.";
+        ComponentAccelerationReasonText.Text = component?.OptimizationEligible == true
+            ? "Eligible for an explicit 512 x 512 optimization job. Rendering remains usable through fallback."
+            : $"Optimize unavailable: {FormatBlockedReason(component?.OptimizationReason)}.";
+    }
+
+    private async void ComponentOptimize_Click(object sender, RoutedEventArgs e)
+    {
+        await RunCommandAsync(
+            async token =>
+            {
+                await _apiClient.StartRuntimeJobAsync(new RuntimeJobRequest("optimize"), token);
+                await App.Services.JobsActivity.RefreshAsync(token);
+            },
+            "Component optimization queued in Render Queue.");
     }
 
     private void UpdateStorage(ModelCatalogueResponse response)

@@ -7948,6 +7948,7 @@ def _run_internal_still_scene(project_id: str, job_id: str, payload: dict[str, A
         vae=str(payload.get("vae") or "").strip() or None,
         hires_fix=dict(payload.get("hires_fix")) if isinstance(payload.get("hires_fix"), dict) else None,
         refiner=resolved_refiner,
+        runtime=payload.get("runtime"),
         upscaler=str(payload.get("upscaler") or "").strip() or None,
         device_preference="auto",
     )
@@ -9161,6 +9162,8 @@ def _server_resolved_tensorrt_payload(req: TensorRTStandaloneRenderRequest) -> d
     Workers resolve the private installation path immediately before execution.
     """
 
+    from .runtime.policy import require_tensorrt_enabled
+    require_tensorrt_enabled(settings.data_dir, req.runtime)
     supported_model_id = TENSORRT_VIDEO_MODEL_ID
     requested_model_id = str(req.model_id or supported_model_id).strip()
     if requested_model_id != supported_model_id:
@@ -9191,6 +9194,8 @@ def _server_resolved_tensorrt_payload(req: TensorRTStandaloneRenderRequest) -> d
 
 def _resolved_tensorrt_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Inject the trusted bundle path only into an in-memory execution payload."""
+    from .runtime.policy import require_tensorrt_enabled
+    require_tensorrt_enabled(settings.data_dir, payload.get("runtime"))
 
     model_id = str(payload.get("model_id") or TENSORRT_VIDEO_MODEL_ID).strip()
     if model_id != TENSORRT_VIDEO_MODEL_ID:
@@ -9468,6 +9473,7 @@ def _internal_settings_from_payload(
         refiner=refiner,
         render_tier=render_tier,
         device_preference=device_preference,
+        runtime=payload.get("runtime"),
         temporal_mode=temporal_mode if temporal_mode is not None else str(payload.get("temporal_mode", "frame_img2img")),
         temporal_strength=float(payload.get("temporal_strength", 0.35)),
         temporal_steps=(int(payload["temporal_steps"]) if payload.get("temporal_steps") is not None else None),
@@ -10372,6 +10378,8 @@ def _tensorrt_model_id_from_payload(payload: dict[str, Any]) -> str:
 
 
 def _tensorrt_render_preflight_data(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from .runtime.policy import require_tensorrt_enabled
+    require_tensorrt_enabled(settings.data_dir, payload.get("runtime"))
     proj = store.get(project_id)
     if not proj:
         raise UserFacingError("Project not found", hint="Open Projects and select a valid project.")
@@ -10630,9 +10638,23 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
         settings_obj=settings_obj,
     )
     installed_internal = _installed_internal_models_status()
+    from .runtime.policy import resolve_policy
+    from .runtime.manager import RuntimeRegistry
+    operation_policy = resolve_policy(settings.data_dir, settings_obj.runtime)
     return {
         "ok": True,
         "mode": "diffusion",
+        "runtime": {
+            "requested": settings_obj.runtime,
+            "effective": {
+                **{key: value for key, value in operation_policy.model_dump().items()
+                   if key in {"mode", "enabled", "precision", "allow_fallback", "strict"}},
+                "device": settings_obj.runtime.get("device") if settings_obj.runtime else None,
+            },
+            "components": [item for item in RuntimeRegistry().component_status() if item["model_family"] == model_family],
+            "accelerating": False,
+            "scope": "preflight_policy_only; actual execution is reported in render metadata",
+        },
         "plan_source": "creative_direction_fallback" if used_fallback_plan else "last_plan",
         "variant_index": int(payload.get("variant_index", 0)),
         "model_id": model_id,
@@ -11405,6 +11427,7 @@ def _run_layered_animation(project_id: str, job_id: str, payload: dict[str, Any]
         diffusion_refine=refine,
         refine_model_dir=refine_model_dir,
         refine_device=refine_device,
+        runtime=payload.get("runtime"),
         refine_prompt=str(payload.get("refine_prompt") or ""),
         refine_negative=str(payload.get("refine_negative") or "blurry, low quality, watermark, text, logo"),
         refine_denoise=float(payload.get("refine_denoise", 0.3)),

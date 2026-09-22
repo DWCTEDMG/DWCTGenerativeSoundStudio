@@ -807,6 +807,143 @@ public sealed class UnrealReturnImportResponse
     public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
+public sealed record RuntimeSettings
+{
+    [JsonPropertyName("mode")]
+    public string Mode { get; init; } = "auto";
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+
+    [JsonPropertyName("auto_build")]
+    public bool AutoBuild { get; init; } = true;
+
+    [JsonPropertyName("allow_fallback")]
+    public bool AllowFallback { get; init; } = true;
+
+    [JsonPropertyName("strict")]
+    public bool Strict { get; init; }
+
+    [JsonPropertyName("precision")]
+    public string Precision { get; init; } = "auto";
+
+    [JsonPropertyName("cache_limit_gb")]
+    public double CacheLimitGb { get; init; } = 100;
+
+    [JsonPropertyName("package_path")]
+    public string PackagePath { get; init; } = string.Empty;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed record RuntimeComponentStatus
+{
+    [JsonPropertyName("model_family")]
+    public string ModelFamily { get; init; } = string.Empty;
+
+    [JsonPropertyName("component")]
+    public string Component { get; init; } = string.Empty;
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("fallback_runtime")]
+    public string FallbackRuntime { get; init; } = string.Empty;
+
+    [JsonPropertyName("optimization_eligible")]
+    public bool OptimizationEligible { get; init; }
+
+    [JsonPropertyName("optimization_reason")]
+    public string? OptimizationReason { get; init; }
+
+    [JsonPropertyName("validated_engine_count")]
+    public int ValidatedEngineCount { get; init; }
+
+    [JsonPropertyName("profile_coverage")]
+    public List<Dictionary<string, JsonElement>> ProfileCoverage { get; init; } = [];
+
+    [JsonPropertyName("last_benchmark")]
+    public Dictionary<string, JsonElement>? LastBenchmark { get; init; }
+
+    [JsonPropertyName("last_engine_state")]
+    public string LastEngineState { get; init; } = "missing";
+
+    [JsonPropertyName("last_engine_id")]
+    public string? LastEngineId { get; init; }
+
+    [JsonPropertyName("last_failure")]
+    public string? LastFailure { get; init; }
+}
+
+public sealed record RuntimeStatusResponse
+{
+    [JsonPropertyName("settings")]
+    public RuntimeSettings Settings { get; init; } = new();
+
+    [JsonPropertyName("state")]
+    public string State { get; init; } = "unprobed";
+
+    [JsonPropertyName("installed")]
+    public bool Installed { get; init; }
+
+    [JsonPropertyName("available")]
+    public bool Available { get; init; }
+
+    [JsonPropertyName("healthy")]
+    public bool Healthy { get; init; }
+
+    [JsonPropertyName("compatible")]
+    public bool Compatible { get; init; }
+
+    [JsonPropertyName("accelerating")]
+    public bool Accelerating { get; init; }
+
+    [JsonPropertyName("tensorrt_version")]
+    public string? TensorRtVersion { get; init; }
+
+    [JsonPropertyName("cuda_status")]
+    public JsonElement? CudaStatus { get; init; }
+
+    [JsonPropertyName("pytorch_cuda_available")]
+    public bool PytorchCudaAvailable { get; init; }
+
+    [JsonPropertyName("gpus")]
+    public List<JsonElement> Gpus { get; init; } = [];
+
+    [JsonPropertyName("supported_component_count")]
+    public int SupportedComponentCount { get; init; }
+
+    [JsonPropertyName("cache_bytes")]
+    public long CacheBytes { get; init; }
+
+    [JsonPropertyName("diagnostics")]
+    public JsonElement? Diagnostics { get; init; }
+
+    [JsonPropertyName("diagnostics_scope")]
+    public string DiagnosticsScope { get; init; } = string.Empty;
+
+    [JsonPropertyName("components")]
+    public List<RuntimeComponentStatus> Components { get; init; } = [];
+
+    [JsonPropertyName("engines")]
+    public List<JsonElement> Engines { get; init; } = [];
+}
+
+public sealed record RuntimeJobRequest(
+    [property: JsonPropertyName("operation")] string Operation = "diagnose",
+    [property: JsonPropertyName("device")] int Device = 0,
+    [property: JsonPropertyName("precision")] string Precision = "fp16",
+    [property: JsonPropertyName("width")] int Width = 512,
+    [property: JsonPropertyName("height")] int Height = 512);
+
+public sealed record RuntimeJobResponse(
+    [property: JsonPropertyName("job_id")] string JobId,
+    [property: JsonPropertyName("project_id")] string ProjectId,
+    [property: JsonPropertyName("status")] string Status);
+
+public sealed record RuntimeCacheClearResponse([property: JsonPropertyName("ok")] bool Ok);
+
 public static class StudioJson
 {
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
@@ -934,6 +1071,12 @@ public static class StudioJson
 [JsonSerializable(typeof(TensorRtCanonicalStatus))]
 [JsonSerializable(typeof(TensorRtMigrationAvailability))]
 [JsonSerializable(typeof(TensorRtDiskStatus))]
+[JsonSerializable(typeof(RuntimeSettings))]
+[JsonSerializable(typeof(RuntimeStatusResponse))]
+[JsonSerializable(typeof(RuntimeComponentStatus))]
+[JsonSerializable(typeof(RuntimeJobRequest))]
+[JsonSerializable(typeof(RuntimeJobResponse))]
+[JsonSerializable(typeof(RuntimeCacheClearResponse))]
 [JsonSerializable(typeof(InternalRenderPreflightResponse))]
 [JsonSerializable(typeof(RenderCapabilityEvidence))]
 [JsonSerializable(typeof(JsonElement))]

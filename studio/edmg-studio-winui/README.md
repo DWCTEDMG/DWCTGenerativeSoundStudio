@@ -323,3 +323,27 @@ unchanged and is still validated before packaging.
 
 The Electron client remains the Linux and compatibility surface while packaged WinUI customer-flow
 release validation proceeds.
+## Optional TensorRT controls
+
+The native WinUI client is the priority surface for this backend-driven capability. Settings exposes
+Installed, Available, Healthy, Compatible, and Accelerating as separate states, together with global
+enablement, Automatic/Compatibility/Performance/PyTorch CUDA/TensorRT/CPU modes, fallback, precision,
+GPU selection, diagnostics, optimization jobs, prior receipts, and engine cleanup. Models shows
+backend-declared component eligibility, validated engines, profile coverage, benchmark evidence, and
+fallback state. Render keeps mode and optional GPU overrides under Advanced settings, and Render Queue
+shows build, validation, benchmark, cancellation, quarantine, and fallback events.
+
+WinUI never loads TensorRT DLLs or chooses runtimes itself. It consumes the same backend API as the
+Electron compatibility client. TensorRT is optional: the app launches and existing workflows remain
+available when TensorRT is absent, disabled, incompatible, or broken. Unsupported model components
+continue using their existing PyTorch or specialized runtime. Automatic mode and fallback remain the
+defaults. The first qualified component is the SD1.5 VAE decoder; additional components are enabled
+only after separate reference, benchmark, fallback, resume, and packaged-runtime evidence.
+
+Runtime controls use stock keyboard-focusable WinUI controls and explicit automation names. A displayed
+diagnostic or engine receipt is historical evidence, not proof that the current render is accelerated;
+live runtime selection is reported by each render result. A successful build likewise does not prove a
+launched native window, real TensorRT inference, packaging, signing, or clean-machine qualification.
+
+See [`EDMG_TensorRT_Full_Studio_Wide_Blueprint.md`](EDMG_TensorRT_Full_Studio_Wide_Blueprint.md)
+and the [root blueprint](../../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md).

@@ -572,3 +572,13 @@ CUDA release validation:
 cd studio/edmg-studio
 pnpm run validate:release:linux:cuda
 ```
+## Optional TensorRT packaging
+
+CUDA/TensorRT Linux profiles are optional. The CPU profile and generic backend must remain launchable
+without TensorRT. A CUDA profile may include the managed TensorRT runtime, but engine execution still
+depends on the target driver, GPU architecture, model weights, and per-component validation. Do not
+describe a CUDA package as universal TensorRT support without component receipts.
+
+Runtime workers use process-local library discovery and the existing Studio Home cache. They do not
+modify host-wide CUDA/PyTorch installations. TensorRT failures fall back to the existing runtime when
+the render contract permits it. See the root full-capability blueprint for the qualification matrix.

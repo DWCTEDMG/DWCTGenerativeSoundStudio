@@ -393,3 +393,9 @@ or feed into ComfyUI workflows
 or use Diffusers runner for open HF video models
 
 If you want, tell me your OS (Windows/macOS/Linux) and whether you want A1111 or ComfyUI as your main renderer, and I’ll give you a “single straight-line path” with exactly the buttons/commands to click in order.
+
+Optional Studio-wide TensorRT capability
+
+EDMG Studio supports optional TensorRT acceleration through the shared backend runtime manager. Studio settings provide the global switch; native Render controls can override the preference, precision, and fallback for an individual internal render. Turning TensorRT off preserves the original runtime and does not require TensorRT to be installed.
+
+This area retains its existing runtime and workflow; the shared Studio policy applies only to eligible internal inference components. The SD1.5 VAE decoder has an adapter; other model components remain on their existing runtimes until separately converted and validated. Hosted providers, audio processing, compositing, and exports do not acquire a TensorRT dependency. See the EDMG_TensorRT_Full_Studio_Wide_Blueprint.md for component admission and validation requirements.

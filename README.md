@@ -37,6 +37,22 @@ and accepted phase evidence remain authoritative over prose.
 
 ## Product architecture
 
+### Optional Studio-wide TensorRT capability
+
+EDMG has one backend-driven runtime manager beneath the Internal Renderer. TensorRT is an optional
+acceleration capability across the Studio: it may be selected per render operation and per model
+component when that component has a validated engine and measured benefit. The Studio still launches,
+opens projects, installs models, analyzes audio, plans, renders, resumes, and exports when TensorRT is
+absent or disabled. A failed or incompatible TensorRT engine falls back to the existing PyTorch CUDA
+or specialized runtime when the operation permits it.
+
+The first qualified component is the SD1.5 VAE decoder. Hunyuan, LTX, Wan, Qwen/llama.cpp, and
+Whisper/CTranslate2 retain their existing runtimes until each component separately passes reference
+comparison, engine validation, benchmarking, fallback, and resume tests. TensorRT never replaces
+CUDA, PyTorch, llama.cpp, CTranslate2, or external providers, and it never requires a global PATH or
+system DLL installation. See [`EDMG_TensorRT_Full_Studio_Wide_Blueprint.md`](EDMG_TensorRT_Full_Studio_Wide_Blueprint.md)
+and [`docs/TENSORRT_RUNTIME_INTEGRATION.md`](docs/TENSORRT_RUNTIME_INTEGRATION.md).
+
 The Studio product has one active Windows client, one compatibility client, and
 one authoritative backend:
 

@@ -307,6 +307,7 @@ def render_layered_animation(
     diffusion_refine: bool = False,
     refine_model_dir: Path | None = None,
     refine_device: str = "auto",
+    runtime: dict[str, Any] | None = None,
     refine_prompt: str = "",
     refine_negative: str = "blurry, low quality, watermark, text, logo",
     refine_denoise: float = 0.3,
@@ -349,7 +350,7 @@ def render_layered_animation(
             )
         try:
             device = iv._device_auto(refine_device)
-            pipes = iv._try_load_pipelines(Path(refine_model_dir), device=device)
+            pipes = iv._try_load_pipelines(Path(refine_model_dir), device=device, **({"runtime": runtime} if runtime is not None else {}))
             pe = iv._encode_prompt(pipes, refine_prompt or "cinematic")
             ne = iv._encode_prompt(pipes, refine_negative or "")
             refine_active = True

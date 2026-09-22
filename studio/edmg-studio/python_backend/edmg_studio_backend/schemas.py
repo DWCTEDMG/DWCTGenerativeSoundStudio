@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .version import STUDIO_VERSION
+from .runtime.policy import OperationRuntimePolicy
 
 ConditioningMode = Literal["raw", "blur", "edge", "external"]
 DiffusionWorkflowFamily = Literal["auto", "txt2img", "img2img", "inpaint", "outpaint", "controlnet"]
@@ -167,6 +168,7 @@ class StoryboardVariantUpdateRequest(BaseModel):
 
 class RenderScenesRequest(BaseModel):
     """Render one still image per scene."""
+    runtime: OperationRuntimePolicy | None = None
     variant_index: int = 0
     model_id: str | None = None
     checkpoint: str | None = None  # optional checkpoint filename for ComfyUI
@@ -249,6 +251,7 @@ class AssembleVideoRequest(BaseModel):
     fps: int = 30
 
 class TensorRTStandaloneRenderRequest(BaseModel):
+    runtime: OperationRuntimePolicy | None = None
     variant_index: int = Field(default=0, ge=0, le=9999)
     model_id: str | None = Field(default=None, max_length=260)
     prompt: str | None = Field(default=None, max_length=10_000)
@@ -274,6 +277,7 @@ class InternalVideoRenderRequest(BaseModel):
       - tensorrt: generate SD1.5 TensorRT keyframes, then assemble locally
     """
     variant_index: int = 0
+    runtime: OperationRuntimePolicy | None = None
 
     fps_output: int = Field(default=24, ge=1, le=60)
     fps_render: int = Field(default=2, ge=1, le=30)
@@ -493,6 +497,7 @@ class LayeredAnimateRequest(BaseModel):
       - background: parallax the background behind a near-static subject
     """
 
+    runtime: OperationRuntimePolicy | None = None
     source_asset: str
     mode: Literal["parallax", "masked", "segment", "background"] = "parallax"
     motion: str | None = None  # motion profile id (defaults to full_3d)

@@ -30,3 +30,9 @@ license: openrail
 - [Visual DNA and Render Conductor spec](VISUAL_DNA_AND_RENDER_CONDUCTOR_SPEC.md)
 - [Starlift VM deploy](STARLIFT_VM_DEPLOY.md)
 - [GCP GPU VM deploy](GCP_GPU_VM_DEPLOY.md)
+
+## Optional Studio-wide TensorRT capability
+
+EDMG Studio supports optional TensorRT acceleration through the shared backend runtime manager. Studio settings provide the global switch; native Render controls can override the preference, precision, and fallback for an individual internal render. Turning TensorRT off preserves the original runtime and does not require TensorRT to be installed.
+
+This area retains its existing runtime and workflow; the shared Studio policy applies only to eligible internal inference components. The SD1.5 VAE decoder has an adapter; other model components remain on their existing runtimes until separately converted and validated. Hosted providers, audio processing, compositing, and exports do not acquire a TensorRT dependency. See the [Studio-wide TensorRT blueprint](../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md) for component admission and validation requirements.

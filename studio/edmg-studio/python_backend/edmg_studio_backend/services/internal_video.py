@@ -88,6 +88,7 @@ class InternalVideoSettings:
     upscaler: str | None = None
     render_tier: str = "auto"
     device_preference: str = "auto"
+    runtime: dict[str, Any] | None = None
 
     # Temporal consistency
     temporal_mode: str = "frame_img2img"  # off|keyframes|frame_img2img|video_model
@@ -525,6 +526,7 @@ def _render_signature(
         "upscaler": str(settings.upscaler or ""),
         "render_tier": str(settings.render_tier),
         "device_preference": str(settings.device_preference),
+        **({"runtime": settings.runtime} if settings.runtime is not None else {}),
         "temporal_mode": str(settings.temporal_mode),
         "temporal_strength": float(settings.temporal_strength),
         "temporal_steps": int(settings.temporal_steps or 0),
@@ -848,11 +850,12 @@ def _load_diffusers_runtime(family: str) -> tuple[Any, Any, Any | None, Any | No
     return torch, padded[0], padded[1], padded[2]
 
 
-def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
+def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", runtime=None) -> _Pipes:
     from ..runtime.manager import install_pipeline_runtime
-    from ..runtime.policy import load_policy
+    from ..runtime.policy import resolve_policy
     from ..config import Settings
-    policy_key = load_policy(Settings().data_dir).model_dump_json()
+    policy = resolve_policy(Settings().data_dir, runtime)
+    policy_key = policy.model_dump_json()
     cache_key = (str(model_dir), device, str(role or "video") + policy_key)
     cached = _PipelineCache.get(cache_key)
     if cached is not None:
@@ -1027,7 +1030,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video") ->
 
         pipes = _Pipes(txt2img=txt, img2img=img, inpaint=inpaint, device=device, family="sd15", backend="diffusers")
 
-    install_pipeline_runtime(pipes, model_dir)
+    install_pipeline_runtime(pipes, model_dir, policy=policy)
     _PipelineCache.set(cache_key, pipes)
     return pipes
 
@@ -1089,11 +1092,11 @@ def _try_load_directml(model_dir: Path, *, role: str = "video") -> _Pipes:
     return pipes
 
 
-def _try_load_pipelines(model_dir: Path, device: str, *, role: str = "video") -> _Pipes:
+def _try_load_pipelines(model_dir: Path, device: str, *, role: str = "video", runtime=None) -> _Pipes:
     try:
         if device == "directml":
             return _try_load_directml(model_dir, role=role)
-        return _try_load_diffusers(model_dir, device=device, role=role)
+        return _try_load_diffusers(model_dir, device=device, role=role, runtime=runtime)
     except UserFacingError:
         raise
     except Exception as exc:
@@ -1863,7 +1866,7 @@ def _apply_refiner(
         if base_path_raw:
             should_load_dedicated_refiner = refiner_dir.resolve() != Path(base_path_raw).resolve()
         if should_load_dedicated_refiner:
-            refiner_pipes = _try_load_pipelines(refiner_dir, device=device, role="still")
+            refiner_pipes = _try_load_pipelines(refiner_dir, device=device, role="still", runtime=settings.runtime)
             if callable(log_fn):
                 log_fn(f"Using dedicated refiner model: {refiner_model or refiner_dir.name}")
 
@@ -1927,7 +1930,7 @@ def render_internal_still_image(
         workflow_family in {"inpaint", "outpaint", "controlnet"} or bool(settings.loras) or family == "sd3"
     ):
         device = "cpu"
-    pipes = _try_load_pipelines(model_dir, device=device, role="still")
+    pipes = _try_load_pipelines(model_dir, device=device, role="still", runtime=settings.runtime)
     width = int(settings.width)
     height = int(settings.height)
     negative_prompt = str(settings.negative_prompt or "").strip()
@@ -2082,7 +2085,7 @@ def render_internal_still_image(
                 "requested_device": requested_device,
                 "family": pipes.family,
                 "backend": pipes.backend,
-                "runtime": pipeline_runtime_metadata(pipes),
+                "runtime": pipeline_runtime_metadata(pipes, settings.runtime),
                 "seed": seed,
                 "effective_steps": max(1, min(4, int(settings.steps))) if pipes.family == "flux" else int(settings.steps),
                 "effective_cfg": 0.0 if pipes.family == "flux" else float(settings.cfg),
@@ -2815,6 +2818,9 @@ def render_internal_video_variant(
     )
     resolved_tensorrt_bundle_path: Path | None = None
     if use_tensorrt_keyframes:
+        from ..config import Settings
+        from ..runtime.policy import require_tensorrt_enabled
+        require_tensorrt_enabled(Settings().data_dir, settings.runtime)
         if tensorrt_bundle_path is None:
             raise UserFacingError(
                 "The TensorRT storyboard-anchor bundle is not installed",
@@ -2999,7 +3005,7 @@ def render_internal_video_variant(
         negative_embeds = None
         if not use_tensorrt_keyframes and not direct_video_source:
             if pipes is None:
-                pipes = _try_load_pipelines(model_dir, device=device)
+                pipes = _try_load_pipelines(model_dir, device=device, runtime=settings.runtime)
                 default_negative_embeds = _encode_prompt(pipes, settings.negative_prompt)
             negative_embeds = (
                 default_negative_embeds
@@ -3817,7 +3823,7 @@ def render_internal_video_variant(
             final_mp4.write_bytes(interp_mp4.read_bytes())
     meta = {
         "renderer_algorithm_version": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION,
-        "runtime": pipeline_runtime_metadata(pipes),
+        "runtime": pipeline_runtime_metadata(pipes, settings.runtime),
         "work_tag": work_tag,
         "completed_at": __import__("time").time(),
         "variant_index": int(variant.get("index", 0)),
@@ -3971,7 +3977,7 @@ def render_internal_video_variant(
             artifact_path=final_mp4,
             schedule_identity=meta["timeline_digest"],
             model_fingerprint=_json_digest({"model_id": settings.video_model_id, "model_path": settings.video_model_path}),
-            runtime_fingerprint=_json_digest({"engine": settings.video_model_engine, "algorithm": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION}),
+            runtime_fingerprint=_json_digest({"engine": settings.video_model_engine, "algorithm": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION, **({"runtime": settings.runtime} if settings.runtime is not None else {})}),
             device_fingerprint=_json_digest({"device": settings.device_preference, "dtype": settings.video_model_dtype}),
             codec="h264",
             width=int(settings.width),
@@ -5318,7 +5324,7 @@ def render_internal_diffusion_preview_segment(
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     device = _device_auto(settings.device_preference)
-    pipes = _try_load_pipelines(model_dir, device=device)
+    pipes = _try_load_pipelines(model_dir, device=device, runtime=settings.runtime)
 
     try:
         import torch  # type: ignore

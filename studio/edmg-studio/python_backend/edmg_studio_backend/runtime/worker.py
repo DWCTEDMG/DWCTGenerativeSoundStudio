@@ -62,6 +62,7 @@ def serve(root: Path) -> None:
                 executor, manifest, cache_status = prepare_component(
                     Path(configuration["data_dir"]), Path(command["model_dir"]), command["shape"],
                     command["precision"], int(command["device"]), bool(command["allow_build"]),
+                    validation_limits=command.get("validation_limits"),
                     progress=lambda stage: atomic_write(root / "progress.json", json.dumps(stage if isinstance(stage, dict) else {"stage": stage}).encode()))
                 result = {"manifest": manifest, "cache": cache_status}
             elif command["operation"] == "execute":

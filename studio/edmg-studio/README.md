@@ -10,6 +10,28 @@ active Windows UI; the Electron/React client and its launch/build commands below
 Linux, browser development, and compatibility. See the [WinUI 3 consolidated blueprint](../../blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md)
 for the current status, capability boundaries, and release gates.
 
+## Optional TensorRT runtime manager
+
+The backend exposes TensorRT as an optional capability below the existing Internal Renderer. It is
+safe to run without TensorRT, and it can be disabled globally or for an individual render. Runtime
+selection is backend-driven; Electron and WinUI consume the same status, settings, diagnostic, job,
+and cache APIs. The supported modes are `auto`, `compatibility`, `performance`, `pytorch_cuda`,
+`tensorrt`, and explicit CPU/fallback.
+
+Automatic selection requires a validated engine and a measured end-to-end benefit. Performance mode
+may build an engine. If an engine is missing, stale, corrupted, unsupported, too slow after transfer
+overhead, or fails during execution, the existing PyTorch CUDA or specialized runtime continues when
+fallback is allowed. The first qualified component is the SD1.5 VAE decoder. Other model components
+are added one at a time only after deterministic reference comparison, engine validation, benchmark,
+fallback, and resume evidence. TensorRT does not replace Hunyuan/LTX/Wan runtimes, Qwen/llama.cpp,
+Whisper/CTranslate2, ComfyUI, or external providers.
+
+Runtime endpoints are `GET /v1/runtime/status`, `POST /v1/runtime/settings`, `POST /v1/runtime/jobs`,
+and `DELETE /v1/runtime/tensorrt/cache/{engine_id}`. Long diagnostics and optimization builds use
+the existing job queue. Engine data lives under `data/tensorrt/`; cleanup never deletes model weights.
+See [`../../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md`](../../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md)
+and [`docs/TENSORRT_RUNTIME_INTEGRATION.md`](docs/TENSORRT_RUNTIME_INTEGRATION.md).
+
 The shared Studio stack includes:
 
 - Local **FastAPI** backend for projects, assets, analysis/transcription, planning, Director review,

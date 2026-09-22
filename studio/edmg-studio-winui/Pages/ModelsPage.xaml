@@ -490,6 +490,21 @@
                     </Border>
 
                     <Border
+                        Padding="20"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Component acceleration" />
+                            <TextBlock x:Name="ComponentAccelerationText" AutomationProperties.AutomationId="ModelsComponentAccelerationStatus" Text="Checking component acceleration status..." TextWrapping="Wrap" />
+                            <TextBlock x:Name="ComponentAccelerationReasonText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            <Button x:Name="ComponentOptimizeButton" AutomationProperties.AutomationId="ModelsOptimizeSd15Vae" AutomationProperties.Name="Optimize SD1.5 VAE decoder" Click="ComponentOptimize_Click" Content="Optimize SD1.5 decoder" IsEnabled="False" HorizontalAlignment="Left" Style="{StaticResource AccentButtonStyle}" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Optimization compiles and validates one backend-managed profile. It is separate from model download and legacy bundle migration." TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border
                         x:Name="TensorRtCard"
                         Padding="20"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"

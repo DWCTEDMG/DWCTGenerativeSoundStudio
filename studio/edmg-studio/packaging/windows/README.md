@@ -270,3 +270,14 @@ Release evidence also includes `dependency-inventory.json`, normalizing availabl
 `release/candidate/release-candidate.json` is created before packaging, copied into the MSIX, and finalized with the exact MSIX and installer hashes. `winui-msix.json`, backend manifest, installer metadata, SBOM/checksum evidence, and lifecycle receipts must carry that same candidate ID. The candidate ID hashes only immutable source/build inputs; later artifact/evidence references are outside that core, avoiding self-referential hashes.
 
 `pnpm run stage:winui:msix` creates an unsigned developer structural package and labels it non-distributable. Production staging explicitly uses `-ReleaseMode production -IncludeProductionBackend -RequireSigning` and fails on dirty source, missing backend, development identity, unsigned artifacts, or mismatches. Store mode consumes an externally completed `StoreSubmission.schema.json` document; `StoreSubmission.example.json` values are placeholders and are rejected. Signing keys and Partner Center credentials are never stored here.
+## Optional TensorRT packaging
+
+TensorRT is an optional acceleration capability and is not required for the Windows package to launch.
+The packaged backend must continue to work with TensorRT absent. If TensorRT is bundled or discovered,
+it is loaded only by the backend runtime worker and only for separately qualified model components.
+The package must not replace CUDA/PyTorch, modify global PATH, copy DLLs into system folders, or claim
+that a successful package build proves TensorRT inference qualification.
+
+Release evidence must identify the exact TensorRT package/runtime, CUDA and GPU identity, component
+engine manifests, validation and benchmark receipts, fallback tests, and whether the UI was actually
+launch-verified. Clean install, upgrade, rollback, and TensorRT-absent checks remain separate gates.

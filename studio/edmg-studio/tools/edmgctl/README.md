@@ -128,3 +128,9 @@ orchestration/diagnostic surface.
   flow is Windows-first.
 - `release validate` delegates to the existing Studio scripts and behaves the
   same way those scripts behave on the current host.
+
+## Optional Studio-wide TensorRT capability
+
+EDMG Studio supports optional TensorRT acceleration through the shared backend runtime manager. Studio settings provide the global switch; native Render controls can override the preference, precision, and fallback for an individual internal render. Turning TensorRT off preserves the original runtime and does not require TensorRT to be installed.
+
+This area retains its existing runtime and workflow; the shared Studio policy applies only to eligible internal inference components. The SD1.5 VAE decoder has an adapter; other model components remain on their existing runtimes until separately converted and validated. Hosted providers, audio processing, compositing, and exports do not acquire a TensorRT dependency. See the [Studio-wide TensorRT blueprint](../../../../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md) for component admission and validation requirements.

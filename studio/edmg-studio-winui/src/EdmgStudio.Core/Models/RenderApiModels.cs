@@ -236,6 +236,8 @@ public sealed record OutpaintSettings
 
 public sealed record RenderScenesRequest
 {
+    [JsonPropertyName("runtime")]
+    public OperationRuntimeOptions? Runtime { get; init; }
     public RenderScenesRequest(
         int variantIndex = 0,
         string? modelId = null,
@@ -476,6 +478,8 @@ public sealed record RenderMotionRequest
 
 public sealed record TensorRtStandaloneRenderRequest
 {
+    [JsonPropertyName("runtime")]
+    public OperationRuntimeOptions? Runtime { get; init; }
     public TensorRtStandaloneRenderRequest(
         int variantIndex = 0,
         string? modelId = null,
@@ -618,6 +622,8 @@ public sealed record LayerMaskSpec
 
 public sealed record LayeredAnimateRequest
 {
+    [JsonPropertyName("runtime")]
+    public OperationRuntimeOptions? Runtime { get; init; }
     public LayeredAnimateRequest(
         string sourceAsset,
         string mode = "parallax",

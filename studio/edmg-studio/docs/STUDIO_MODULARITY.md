@@ -2,6 +2,11 @@
 
 ## Goal
 
+TensorRT follows the same modularity rule: it is an optional runtime capability owned by the backend
+Runtime Manager, not a new top-level renderer or page. Model components declare support independently,
+and each validated component can be selected or bypassed per render operation without changing the
+rest of a project workflow.
+
 Make EDMG Studio more personal and modular without changing the core application shape:
 
 - keep top-level tabs stable

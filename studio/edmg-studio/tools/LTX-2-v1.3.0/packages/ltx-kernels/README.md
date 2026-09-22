@@ -111,3 +111,9 @@ uv run pytest packages/ltx-kernels/tests/test_nvfp4.py -v
 - **allgather** -- Gathers sequence tokens from all ranks
 
 All operations support BFloat16 and Float8 (e4m3fn) data types.
+
+## Optional Studio-wide TensorRT capability
+
+EDMG Studio supports optional TensorRT acceleration through the shared backend runtime manager. Studio settings provide the global switch; native Render controls can override the preference, precision, and fallback for an individual internal render. Turning TensorRT off preserves the original runtime and does not require TensorRT to be installed.
+
+These vendored LTX sources retain their upstream runtime; no LTX component is currently admitted to the Studio TensorRT adapter. The SD1.5 VAE decoder has an adapter; other model components remain on their existing runtimes until separately converted and validated. Hosted providers, audio processing, compositing, and exports do not acquire a TensorRT dependency. See the [Studio-wide TensorRT blueprint](../../../../../../EDMG_TensorRT_Full_Studio_Wide_Blueprint.md) for component admission and validation requirements.

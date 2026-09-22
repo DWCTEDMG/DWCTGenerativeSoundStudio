@@ -2323,6 +2323,64 @@ public sealed class StudioApiClientTests
         Assert.IsTrue(observedToken.IsCancellationRequested);
     }
 
+    [TestMethod]
+    public async Task RuntimeEndpoints_UseTypedContractsAndEscapeEngineIdentity()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return (request.Method.Method, request.RequestUri!.AbsolutePath) switch
+            {
+                ("GET", "/v1/runtime/status") => JsonResponse("""
+                    {"settings":{"mode":"auto","enabled":true,"auto_build":true,"allow_fallback":true,"strict":false,"precision":"fp16","cache_limit_gb":100,"package_path":""},
+                     "state":"ready","installed":true,"available":true,"healthy":true,"compatible":true,"accelerating":false,
+                     "tensorrt_version":"10.9","pytorch_cuda_available":true,"supported_component_count":1,"cache_bytes":42,
+                     "diagnostics_scope":"last_run_receipt_not_live_health","gpus":[{"index":1}],"engines":[],
+                     "components":[{"model_family":"sd15","component":"vae_decoder","status":"adapter_available","fallback_runtime":"pytorch_cuda","optimization_eligible":true,"validated_engine_count":1,"profile_coverage":[{"input":[1,4,64,64]}],"last_engine_state":"ready"}]}
+                    """),
+                ("POST", "/v1/runtime/settings") => JsonResponse("""{"settings":{"mode":"cpu","enabled":true},"state":"ready","installed":true,"available":true,"healthy":true,"compatible":true,"accelerating":false,"components":[],"engines":[],"gpus":[]}"""),
+                ("POST", "/v1/runtime/jobs") => JsonResponse("""{"job_id":"runtime-1","project_id":"runtime","status":"queued"}"""),
+                ("DELETE", "/v1/runtime/tensorrt/cache/engine%2Fone") => JsonResponse("""{"ok":true}"""),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("session-token"),
+            httpClient);
+
+        RuntimeStatusResponse status = await client.GetRuntimeStatusAsync();
+        RuntimeStatusResponse saved = await client.SaveRuntimeSettingsAsync(new RuntimeSettings
+        {
+            Mode = "cpu",
+            Enabled = true,
+            AllowFallback = false,
+            Strict = true,
+        });
+        RuntimeJobResponse job = await client.StartRuntimeJobAsync(new RuntimeJobRequest("optimize", 2, "fp16", 768, 512));
+        RuntimeCacheClearResponse cleared = await client.ClearRuntimeEngineAsync("engine/one");
+
+        Assert.AreEqual("10.9", status.TensorRtVersion);
+        Assert.IsTrue(status.Components.Single().OptimizationEligible);
+        Assert.HasCount(1, status.Components.Single().ProfileCoverage);
+        Assert.AreEqual("cpu", saved.Settings.Mode);
+        Assert.AreEqual("runtime-1", job.JobId);
+        Assert.IsTrue(cleared.Ok);
+        using JsonDocument settingsBody = JsonDocument.Parse(captured.Single(item => item.Uri.AbsolutePath == "/v1/runtime/settings").Body);
+        Assert.IsFalse(settingsBody.RootElement.GetProperty("allow_fallback").GetBoolean());
+        Assert.IsTrue(settingsBody.RootElement.GetProperty("strict").GetBoolean());
+        using JsonDocument jobBody = JsonDocument.Parse(captured.Single(item => item.Uri.AbsolutePath == "/v1/runtime/jobs").Body);
+        Assert.AreEqual(2, jobBody.RootElement.GetProperty("device").GetInt32());
+        Assert.AreEqual(768, jobBody.RootElement.GetProperty("width").GetInt32());
+        Assert.IsTrue(captured.Any(item => item.Method == HttpMethod.Delete && item.Uri.AbsolutePath == "/v1/runtime/tensorrt/cache/engine%2Fone"));
+    }
+
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")

@@ -1974,17 +1974,17 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     public Task<JsonElement> GetRenderProvidersAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/settings/render_providers", null, true, cancellationToken);
 
-    public Task<JsonElement> GetRuntimeStatusAsync(CancellationToken cancellationToken = default) =>
-        SendJsonElementAsync(HttpMethod.Get, "/v1/runtime/status", null, true, cancellationToken);
+    public Task<RuntimeStatusResponse> GetRuntimeStatusAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<RuntimeStatusResponse>(HttpMethod.Get, "/v1/runtime/status", null, true, cancellationToken);
 
-    public Task<JsonElement> SaveRuntimeSettingsAsync(JsonObject request, CancellationToken cancellationToken = default) =>
-        PostJsonElementAsync("/v1/runtime/settings", request, cancellationToken);
+    public Task<RuntimeStatusResponse> SaveRuntimeSettingsAsync(RuntimeSettings request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<RuntimeSettings, RuntimeStatusResponse>("/v1/runtime/settings", request, cancellationToken);
 
-    public Task<JsonElement> StartRuntimeJobAsync(JsonObject request, CancellationToken cancellationToken = default) =>
-        PostJsonElementAsync("/v1/runtime/jobs", request, cancellationToken);
+    public Task<RuntimeJobResponse> StartRuntimeJobAsync(RuntimeJobRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<RuntimeJobRequest, RuntimeJobResponse>("/v1/runtime/jobs", request, cancellationToken);
 
-    public Task<JsonElement> ClearRuntimeEngineAsync(string engineId, CancellationToken cancellationToken = default) =>
-        SendJsonElementAsync(HttpMethod.Delete, $"/v1/runtime/tensorrt/cache/{Uri.EscapeDataString(engineId)}", null, true, cancellationToken);
+    public Task<RuntimeCacheClearResponse> ClearRuntimeEngineAsync(string engineId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<RuntimeCacheClearResponse>(HttpMethod.Delete, $"/v1/runtime/tensorrt/cache/{Uri.EscapeDataString(engineId)}", null, true, cancellationToken);
 
     public Task<JsonElement> SaveRenderProvidersAsync(
         JsonElement request,

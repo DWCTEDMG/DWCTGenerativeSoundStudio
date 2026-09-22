@@ -63,6 +63,21 @@ public sealed class RenderQueueOperationsTests
     }
 
     [TestMethod]
+    public void Create_RuntimeOptimizationExplainsStageAndReceiptScope()
+    {
+        StudioJob job = ReadJob("""
+            {"id":"runtime-job","project_id":"runtime","type":"runtime_optimization","status":"succeeded",
+             "progress":{"percent":100,"stage":"benchmarking"},"payload":{"operation":"optimize"}}
+            """);
+
+        RenderQueueJobSummary summary = RenderQueueJobSummary.Create(job, Now);
+
+        Assert.AreEqual("TensorRT component optimization · runtime-", summary.Title);
+        Assert.AreEqual("Benchmarking PyTorch and TensorRT", summary.StageLabel);
+        StringAssert.Contains(summary.Recommendation, "live acceleration is reported by each render");
+    }
+
+    [TestMethod]
     public void Snapshot_AggregatesQueueOperationalState()
     {
         StudioJob[] jobs =

@@ -604,7 +604,8 @@ public sealed partial class RenderPage : Page
       ModelId = EmptyToNull(ModelBox.Text) ?? "auto",
       RenderMode = Selected(ModeComboBox, "auto"),
       RenderTier = Selected(TierComboBox, "balanced"),
-      DevicePreference = Selected(DeviceComboBox, "auto"),
+      DevicePreference = OperationDevicePreference(Selected(DeviceComboBox, "auto")),
+      Runtime = BuildOperationRuntime(),
       AllowHostedFallback = HostedFallbackToggle.IsOn,
       HostedService = Selected(HostedProviderComboBox, "default"),
       HostedModel = EmptyToNull(HostedModelBox.Text),
@@ -1294,7 +1295,7 @@ public sealed partial class RenderPage : Page
           0.3,
           20,
           7.0,
-          null);
+          null) { Runtime = BuildOperationRuntime() };
   }
 
   private async void AnimateLayers_Click(object sender, RoutedEventArgs e)
@@ -1327,7 +1328,28 @@ public sealed partial class RenderPage : Page
           steps: Number(StillsStepsBox, 28),
           cfg: Number(StillsCfgBox, 7.0),
           sampler: "euler",
-          negativePrompt: StillsNegativeBox.Text.Trim());
+          negativePrompt: StillsNegativeBox.Text.Trim()) { Runtime = BuildOperationRuntime() };
+  }
+
+  private string OperationDevicePreference(string inherited) =>
+    double.IsFinite(OperationRuntimeDevice.Value) ? "cuda" : inherited;
+
+  private OperationRuntimeOptions? BuildOperationRuntime()
+  {
+    string mode = Selected(OperationRuntimeMode, "inherit");
+    string precision = Selected(OperationRuntimePrecision, "inherit");
+    string fallback = Selected(OperationRuntimeFallback, "inherit");
+    int? device = double.IsFinite(OperationRuntimeDevice.Value) ? (int)OperationRuntimeDevice.Value : null;
+    if (mode == "inherit" && precision == "inherit" && fallback == "inherit" && device is null) return null;
+    return new OperationRuntimeOptions
+    {
+      Mode = mode is "inherit" or "off" ? null : mode,
+      Enabled = mode == "off" ? false : null,
+      Precision = precision == "inherit" ? null : precision,
+      AllowFallback = fallback == "inherit" ? null : fallback == "allow",
+      Strict = fallback == "inherit" ? null : fallback == "strict",
+      Device = device,
+    };
   }
 
   private async void RenderStills_Click(object sender, RoutedEventArgs e)
@@ -1395,7 +1417,7 @@ public sealed partial class RenderPage : Page
           cfg: Number(TensorCfgBox, 7.0),
           sampler: Selected(TensorSamplerComboBox, "pndm"),
           negativePrompt: TensorNegativeBox.Text.Trim(),
-          batchSize: Number(TensorBatchBox, 1));
+          batchSize: Number(TensorBatchBox, 1)) { Runtime = BuildOperationRuntime() };
   }
 
   private async void PreviewTensorRt_Click(object sender, RoutedEventArgs e)
@@ -1726,6 +1748,10 @@ public sealed partial class RenderPage : Page
 
   private void ResetRender_Click(object sender, RoutedEventArgs e)
   {
+    OperationRuntimeMode.SelectedIndex = 0;
+    OperationRuntimeDevice.Value = double.NaN;
+    OperationRuntimePrecision.SelectedIndex = 0;
+    OperationRuntimeFallback.SelectedIndex = 0;
     SelectComboValue(QuickGoalComboBox, "auto");
     SelectComboValue(QuickQualityComboBox, "balanced");
     SelectComboValue(QuickResolutionComboBox, "768x432");

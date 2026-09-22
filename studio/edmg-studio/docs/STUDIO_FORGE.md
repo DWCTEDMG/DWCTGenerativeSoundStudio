@@ -1,5 +1,11 @@
 # Studio Forge
 
+Forge may report TensorRT package, diagnostic receipt, engine-cache, model-component, and fallback
+readiness using the existing backend status APIs. It must distinguish installed, available, healthy,
+compatible, and currently accelerating. Forge does not build engines, choose runtimes, or present an
+unqualified component as ready; Settings, Models, Render, and the backend job queue remain the owners
+of those actions. TensorRT remains optional and must never become a prerequisite for Forge or Studio.
+
 Studio Forge is the default-visible, Studio-side 1.0 readiness and guided-workflow surface for EDMG Studio. It reports what the current machine, selected project, selected variant, models, providers, storage, and render routes can actually do, then sends the user to the canonical Studio page that owns the next safe action.
 
 Forge is available by default. To hide it for a packaging or support fallback, set:

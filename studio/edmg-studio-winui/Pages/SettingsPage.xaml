@@ -21,10 +21,12 @@
                 <Expander Header="AI runtime / NVIDIA acceleration" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Automatic uses validated cached engines when beneficial. Performance may compile on first use. The first supported component is the SD1.5 VAE decoder." TextWrapping="Wrap" />
-                        <ComboBox x:Name="RuntimeMode" Header="Runtime mode" SelectedIndex="0">
-                            <x:String>auto</x:String><x:String>compatibility</x:String><x:String>performance</x:String><x:String>pytorch_cuda</x:String><x:String>tensorrt</x:String>
+                        <TextBlock x:Name="RuntimeStateText" AutomationProperties.AutomationId="SettingsRuntimeEvidenceStates" FontWeight="SemiBold" Text="Refresh to inspect runtime evidence." TextWrapping="Wrap" />
+                        <TextBlock x:Name="RuntimeEvidenceText" AutomationProperties.AutomationId="SettingsRuntimeEvidenceSummary" Opacity="0.72" TextWrapping="Wrap" />
+                        <ComboBox x:Name="RuntimeMode" AutomationProperties.AutomationId="SettingsRuntimeMode" AutomationProperties.Name="Studio runtime mode" Header="Runtime mode" SelectedIndex="0">
+                            <x:String>auto</x:String><x:String>compatibility</x:String><x:String>performance</x:String><x:String>pytorch_cuda</x:String><x:String>tensorrt</x:String><x:String>cpu</x:String>
                         </ComboBox>
-                        <CheckBox x:Name="RuntimeEnabled" Content="Enable TensorRT" IsChecked="True" />
+                        <CheckBox x:Name="RuntimeEnabled" AutomationProperties.AutomationId="SettingsRuntimeEnabled" Content="Enable TensorRT" IsChecked="True" />
                         <CheckBox x:Name="RuntimeBuild" Content="Allow automatic engine builds in Performance mode" IsChecked="True" />
                         <CheckBox x:Name="RuntimeFallback" Content="Allow PyTorch CUDA fallback" IsChecked="True" />
                         <CheckBox x:Name="RuntimeStrict" Content="Strict TensorRT diagnostics (fail instead of fallback)" IsChecked="False" />
@@ -39,9 +41,10 @@
                             <AppBarButton Label="Optimize SD1.5" Icon="Play" Click="OptimizeRuntime_Click" />
                             <AppBarButton Label="Refresh" Icon="Refresh" Click="RefreshRuntime_Click" />
                         </CommandBar>
-                        <TextBox x:Name="RuntimeStatusText" Header="Runtime status and engine IDs" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="320" />
-                        <TextBox x:Name="RuntimeEngineId" Header="Engine ID to clear" />
-                        <Button Content="Clear selected engine cache" Click="ClearRuntimeEngine_Click" HorizontalAlignment="Left" />
+                        <TextBlock x:Name="RuntimeComponentsText" AutomationProperties.AutomationId="SettingsRuntimeComponents" Text="Refresh to see component conversion status." TextWrapping="Wrap" />
+                        <TextBox x:Name="RuntimeStatusText" AutomationProperties.AutomationId="SettingsRuntimeEngines" Header="Validated and quarantined engine records" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="320" />
+                        <TextBox x:Name="RuntimeEngineId" AutomationProperties.AutomationId="SettingsRuntimeEngineId" Header="Engine ID to clear" />
+                        <Button AutomationProperties.AutomationId="SettingsRuntimeClearEngine" Content="Clear selected engine cache" Click="ClearRuntimeEngine_Click" HorizontalAlignment="Left" />
                     </StackPanel>
                 </Expander>
                 <Border Style="{StaticResource StudioCardStyle}">
