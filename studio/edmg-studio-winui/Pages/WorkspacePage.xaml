@@ -367,10 +367,10 @@
                                 <CommandBar DefaultLabelPosition="Right">
                                     <AppBarButton x:Name="PrepareWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Prepare" Label="Prepare draft" Icon="Refresh" IsEnabled="False" Click="PrepareWorkflowButton_Click" />
                                     <AppBarButton x:Name="SaveWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Save" Label="Save draft" Icon="Save" IsEnabled="False" Click="SaveWorkflowButton_Click" />
-                                    <AppBarButton x:Name="ApplyWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Apply" Label="Apply to Timeline" Icon="Accept" IsEnabled="False" Click="ApplyWorkflowButton_Click" />
+                                    <AppBarButton x:Name="ApplyWorkflowButton" AutomationProperties.AutomationId="Workspace.Direction.Apply" Label="Apply" Icon="Accept" IsEnabled="False" Click="ApplyWorkflowButton_Click" />
                                     <AppBarButton x:Name="DiscardWorkflowEditsButton" AutomationProperties.AutomationId="Workspace.Direction.Discard" Label="Discard local edits" Icon="Undo" IsEnabled="False" Click="DiscardWorkflowEditsButton_Click" />
                                 </CommandBar>
-                                <TextBlock Text="Audio analysis prepares scenes and reactive keyframes automatically. Save keeps the shared draft for review; Apply commits that draft to Timeline and Render." TextWrapping="Wrap"
+                                <TextBlock Text="Run whenever you are ready. Save keeps an editable shared draft; Apply saves the current edits and commits them to Timeline and Render." TextWrapping="Wrap"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                         </Border>

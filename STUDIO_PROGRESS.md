@@ -32,15 +32,15 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. Existing untracked agent configuration and `studio/edmg-studio-winui/TextFile1.txt` are preserved and excluded; CUDA and dependency profiles will not be synchronized.
+**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. Existing dirty Settings/runtime work is preserved and excluded; CUDA and dependency profiles were not synchronized.
 
-- Updated UTC: 2026-09-23T02:36:43.4007223Z. Task / gate: fix the next WinUI Settings-page navigation crash surfaced through generated `App.g.i.cs`.
-- Branch / base / state: `codex/Unified` at `1c0e95fe5624bfcfa29338415eff954f404974a3`; dirty in owned `SettingsPage.xaml.cs`, prior `SettingsPage.Runtime.cs`, and this section, plus pre-existing untracked paths.
-- Owned paths: `studio/edmg-studio-winui/Pages/SettingsPage.xaml.cs`, prior `studio/edmg-studio-winui/Pages/SettingsPage.Runtime.cs`, and this implementer section only.
-- Completed: the latest crash entry at `%LOCALAPPDATA%\DWCT\EDMG Studio\Logs\winui-crash.log` identifies `InvalidOperationException` from `ApplicationData.Current` in `LoadVst3ScanRoots`, not `App.xaml` or generated code. Package-identity gating now makes unpackaged Debug sessions use standard VST3 roots and skip unavailable LocalSettings persistence; packaged behavior is unchanged.
-- Validation: from repository root, isolated Release x64 `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.csproj --no-restore --configuration Release -p:PlatformTarget=x64` with temporary output/intermediate paths exited 0 with 0 warnings and 0 errors, including XAML compilation; log `%TEMP%\edmg-settings-localsettings-build.log`. `git diff --check` exited 0. Tests were not rerun because this is a WinUI package-context guard and the native compile is the focused available validation.
-- Remaining / blockers / next step: implementation is complete. Restart the currently hung Debug process to load the updated assembly; interactive navigation is not claimed because that existing process was deliberately left untouched.
-- Reviewer findings addressed: none newly applicable; prior runtime-evidence and real-device caveats remain explicit.
+- Updated UTC: 2026-09-23T04:38:18Z. Task / gate: remove the mandatory-save blocker from native Workspace execution while preserving distinct Save and Apply behavior.
+- Branch / base / state: `codex/Unified` at `f433749bc8d0e2741daf3fb8d17a96d29a3d5317`; dirty with this Workspace change and pre-existing Settings/runtime changes listed by `git status --short`.
+- Owned paths: `studio/edmg-studio-winui/Pages/WorkspacePage.Command.cs`, `studio/edmg-studio-winui/Pages/WorkspacePage.xaml`, `studio/edmg-studio-winui/Pages/WorkspacePage.xaml.cs`, and this implementer section only. `WorkspacePage.Flow.cs` was inspected but has no final diff.
+- Completed: **Make this** no longer checks inline draft save state. **Save draft** remains save-only. **Apply** sends the current document to the apply endpoint, persisting and committing it. Render handoff no longer requires Save and does not replace unsaved inline edits with a reviewed proposal. Explicit draft-replacement actions retain overwrite protection.
+- Validation: from repository root, `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.csproj --no-restore --configuration Release -p:PlatformTarget=x64` exited 0 with 0 warnings/0 errors; `%TEMP%\edmg-workspace-save-semantics-release-build.log`. `git diff --check` exited 0; `%TEMP%\edmg-workspace-save-semantics-diff-check.log`. An earlier Visual Studio Debug workspace build was blocked by active XAML compiler PID 40340 locking the Debug intermediate DLL; no process was terminated.
+- Remaining / blockers / next step: no code blocker. Native interactive clicking was not run, so runtime UI behavior is not claimed; code presence and XAML compilation are verified.
+- Reviewer findings addressed: latest diagnostics were read; this change does not alter the package-storage or WSL retry repairs.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 

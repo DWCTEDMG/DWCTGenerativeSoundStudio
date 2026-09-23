@@ -66,7 +66,7 @@ public abstract class WslInferenceRuntime : ILocalInferenceRuntime
     protected static string BuildCudaPrefix(ResolvedRuntimeProfile profile)
     {
         if (!profile.Cuda || profile.GpuDevices.IsDefaultOrEmpty) return string.Empty;
-        return $"CUDA_VISIBLE_DEVICES={WslCommandRunner.ShellQuote(string.Join(',', profile.GpuDevices))} ";
+        return $"env CUDA_VISIBLE_DEVICES={WslCommandRunner.ShellQuote(string.Join(',', profile.GpuDevices))} ";
     }
 
     protected static string JoinArguments(IEnumerable<string> arguments) => string.Join(' ', arguments.Select(WslCommandRunner.ShellQuote));

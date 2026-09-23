@@ -45,11 +45,34 @@ public sealed class WslCommandRunner : IWslCommandRunner
     public async Task<DetachedCommandResult> StartDetachedAsync(string command, string logPath, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logPath);
-        string script = $"mkdir -p -- {ShellQuote(Path.GetDirectoryName(logPath)?.Replace('\\', '/') ?? ".")} && nohup setsid bash -lc {ShellQuote("exec " + command)} > {ShellQuote(logPath.Replace('\\', '/'))} 2>&1 < /dev/null & echo $!";
+        string normalizedLogPath = logPath.Replace('\\', '/');
+        string pidPath = normalizedLogPath + ".pid";
+        string childCommand = $"printf '%s\\n' \"$$\" > {ShellQuote(pidPath)}; exec {command}";
+        string script = $"mkdir -p -- {ShellQuote(Path.GetDirectoryName(normalizedLogPath)?.Replace('\\', '/') ?? ".")}; " +
+            $"rm -f -- {ShellQuote(pidPath)}; " +
+            $"nohup setsid --fork bash -lc {ShellQuote(childCommand)} > {ShellQuote(normalizedLogPath)} 2>&1 < /dev/null";
         CommandResult result = await RunAsync(script, timeout, cancellationToken).ConfigureAwait(false);
-        if (!result.Succeeded || !int.TryParse(result.StandardOutput.Trim().Split('\n').LastOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out int pid) || pid <= 0)
+        CommandResult pidResult = result;
+        if (result.Succeeded)
         {
-            throw new InvalidOperationException($"WSL server launch failed: {result.StandardError.Trim()}");
+            for (int attempt = 0; attempt < 100; attempt++)
+            {
+                pidResult = await RunAsync($"cat -- {ShellQuote(pidPath)} 2>/dev/null", TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                if (pidResult.Succeeded && !string.IsNullOrWhiteSpace(pidResult.StandardOutput)) break;
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+            }
+            _ = await RunAsync($"rm -f -- {ShellQuote(pidPath)}", TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        }
+        if (!result.Succeeded || !pidResult.Succeeded || !int.TryParse(pidResult.StandardOutput.Trim().Split('\n').LastOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out int pid) || pid <= 0)
+        {
+            string detail = string.Join(" | ", new[]
+            {
+                result.TimedOut || pidResult.TimedOut ? "launcher timed out" : null,
+                string.IsNullOrWhiteSpace(result.StandardError) ? null : result.StandardError.Trim(),
+                string.IsNullOrWhiteSpace(pidResult.StandardError) ? null : pidResult.StandardError.Trim(),
+                string.IsNullOrWhiteSpace(pidResult.StandardOutput) ? "launched process did not publish its process ID" : $"unexpected launcher output: {pidResult.StandardOutput.Trim()}"
+            }.Where(value => value is not null));
+            throw new InvalidOperationException($"WSL server launch failed: {detail}");
         }
         return new DetachedCommandResult(pid, logPath);
     }
@@ -82,14 +105,16 @@ public sealed class WslCommandRunner : IWslCommandRunner
 public sealed class GpuDiscoveryService : IGpuDiscoveryService
 {
     private const string Query = "nvidia-smi --query-gpu=index,name,memory.total,memory.free,driver_version --format=csv,noheader,nounits";
-    private const int MaxAttempts = 3;
+    // A cold WSL boot can expose the distribution before the NVIDIA bridge is ready.
+    // Keep the GPU-first contract, but give the bridge a bounded window to appear.
+    private const int MaxAttempts = 15;
     private readonly IWslCommandRunner _runner;
     private readonly TimeSpan _retryDelay;
 
     public GpuDiscoveryService(IWslCommandRunner runner, TimeSpan? retryDelay = null)
     {
         _runner = runner;
-        _retryDelay = retryDelay ?? TimeSpan.FromMilliseconds(500);
+        _retryDelay = retryDelay ?? TimeSpan.FromSeconds(1);
     }
 
     public async Task<GpuTopology> DetectAsync(CancellationToken cancellationToken = default)

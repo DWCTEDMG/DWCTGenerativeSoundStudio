@@ -34,7 +34,7 @@
                         <NumberBox x:Name="RuntimeCacheLimit" Header="Maximum cache (GB)" Minimum="1" Maximum="1000" Value="100" />
                         <TextBox x:Name="RuntimePackage" Header="Optional TensorRT SDK folder" PlaceholderText="Empty uses the installed runtime" />
                         <NumberBox x:Name="RuntimeDevice" Header="GPU index for diagnostics / optimization" Minimum="0" Maximum="63" Value="0" />
-                        <ComboBox x:Name="RuntimeComponent" Header="SD1.5 component" SelectedIndex="0" SelectionChanged="RuntimeComponent_SelectionChanged"><ComboBoxItem Content="UNet" Tag="unet" /><ComboBoxItem Content="VAE decoder" Tag="vae_decoder" /></ComboBox>
+                        <ComboBox x:Name="RuntimeComponent" Header="Compatible TensorRT target" PlaceholderText="Refresh to load compatible targets" SelectionChanged="RuntimeComponent_SelectionChanged" />
                         <TextBlock Text="Optimize builds and validates a 512 x 512 profile for the selected component. Jobs and cancellation are available in the Studio job queue. Diagnostics are timestamped receipts, not proof that a render used TensorRT." TextWrapping="Wrap" />
                         <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
                             <AppBarButton Label="Save" Icon="Save" Click="SaveRuntime_Click" />

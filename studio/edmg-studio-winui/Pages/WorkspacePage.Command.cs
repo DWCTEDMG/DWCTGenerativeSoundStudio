@@ -69,7 +69,7 @@ public sealed partial class WorkspacePage
 
     private async void MakeCommand_Click(object sender, RoutedEventArgs e)
     {
-        if (_commandRunning || !TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits()) return;
+        if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
         string provider = GetComboTag(CommandProvider, "internal_qwen");
         bool internalModel = provider == "internal_qwen";
         string? directorModel = NullIfWhiteSpace(GetComboTag(CommandDirectorModel, ""));
@@ -197,15 +197,13 @@ public sealed partial class WorkspacePage
     private async void CommandRender_Click(object sender, RoutedEventArgs e)
     {
         if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
-        if (_directorReviewedJobId is not null && ProtectUnsavedWorkflowEdits())
-        {
-            ShowStatus("Current draft retained", "Save or apply the current draft before replacing it with the reviewed Director proposal.", InfoBarSeverity.Warning);
-            return;
-        }
 
         await RunBusyAsync("Preparing render handoff", async token =>
         {
-            await UseCommandProposalAsync(projectId, token);
+            if (!HasUnsavedWorkflowEdits())
+            {
+                await UseCommandProposalAsync(projectId, token);
+            }
             if (!await PrepareWorkflowReviewPayloadAsync(projectId, token))
             {
                 return;

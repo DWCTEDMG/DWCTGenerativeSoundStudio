@@ -27,8 +27,17 @@ public sealed partial class SettingsPage
         _runtimeStatus = status;
         RuntimeStateText.Text = $"Installed: {YesNo(status.Installed)}   Available: {YesNo(status.Available)}   Healthy: {YesNo(status.Healthy)}   Compatible: {YesNo(status.Compatible)}   Accelerating now: {YesNo(status.Accelerating)}";
         RuntimeEvidenceText.Text = $"State: {status.State}; TensorRT: {status.TensorRtVersion ?? "not reported"}; PyTorch CUDA: {YesNo(status.PytorchCudaAvailable)}; GPUs in last receipt: {status.Gpus.Count}; validated cache: {FormatBytes(status.CacheBytes)}; supported components: {status.SupportedComponentCount}. Diagnostics are a prior test receipt, not live inference proof.";
-        RuntimeComponentsText.Text = string.Join(Environment.NewLine, status.Components.Select(component =>
-            $"{component.ModelFamily} / {component.Component}: {component.Status}; {component.ValidatedEngineCount} validated engine(s); fallback {component.FallbackRuntime}; optimize {(component.OptimizationEligible ? "available" : component.OptimizationReason ?? "unavailable")}."));
+        PopulateRuntimeTargets(status);
+        RuntimeComponentStatus[] compatible = status.Components
+            .Where(component => component.OptimizationEligible || component.ValidatedEngineCount > 0)
+            .ToArray();
+        int fallbackOnlyCount = status.Components.Count - compatible.Length;
+        RuntimeComponentsText.Text = string.Join(Environment.NewLine,
+            compatible.Select(component =>
+                $"{component.ModelFamily} / {component.Component}: {component.Status}; {component.ValidatedEngineCount} validated engine(s); optimize {(component.OptimizationEligible ? "available" : component.OptimizationReason ?? "unavailable")}.")
+            .Append(fallbackOnlyCount > 0
+                ? $"{fallbackOnlyCount} other components remain on their existing validated providers; they are not TensorRT targets and do not require selection here."
+                : "All reported components are TensorRT targets."));
         RuntimeStatusText.Text = string.Join(Environment.NewLine, status.Engines.Select(engine => JsonSerializer.Serialize(engine, StudioJson.Options)));
         _runtimePolicy = status.Settings;
         RuntimeMode.SelectedItem = _runtimePolicy.Mode;
@@ -41,6 +50,36 @@ public sealed partial class SettingsPage
         RuntimePackage.Text = _runtimePolicy.PackagePath;
         UpdateRuntimeActionState();
     }
+
+    private void PopulateRuntimeTargets(RuntimeStatusResponse status)
+    {
+        string? selected = (RuntimeComponent.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+        RuntimeComponent.Items.Clear();
+        foreach (RuntimeComponentStatus component in status.Components.Where(value =>
+                     value.ModelFamily == "sd15" && (value.OptimizationEligible || value.ValidatedEngineCount > 0)))
+        {
+            RuntimeComponent.Items.Add(new ComboBoxItem
+            {
+                Content = $"SD1.5 — {FormatRuntimeComponent(component.Component)}",
+                Tag = component.Component
+            });
+        }
+
+        RuntimeComponent.SelectedItem = RuntimeComponent.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), selected, StringComparison.OrdinalIgnoreCase));
+        if (RuntimeComponent.SelectedItem is null && RuntimeComponent.Items.Count > 0)
+        {
+            RuntimeComponent.SelectedIndex = 0;
+        }
+    }
+
+    private static string FormatRuntimeComponent(string component) => component switch
+    {
+        "unet" => "UNet",
+        "vae_decoder" => "VAE decoder",
+        _ => component.Replace('_', ' ')
+    };
 
     private void UpdateRuntimeActionState()
     {

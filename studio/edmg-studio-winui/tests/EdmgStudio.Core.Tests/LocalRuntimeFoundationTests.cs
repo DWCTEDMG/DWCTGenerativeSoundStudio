@@ -41,6 +41,19 @@ public sealed class LocalRuntimeFoundationTests
     }
 
     [TestMethod]
+    public async Task GpuDiscovery_WaitsForCudaDuringColdWslStartup()
+    {
+        var runner = new DelayedGpuRunner(failuresBeforeReady: 6);
+        var discovery = new GpuDiscoveryService(runner, TimeSpan.Zero);
+
+        GpuTopology topology = await discovery.DetectAsync();
+
+        Assert.IsTrue(topology.CudaAvailable);
+        Assert.AreEqual(3, topology.GpuCount);
+        Assert.AreEqual(7, runner.CallCount);
+    }
+
+    [TestMethod]
     public void ProfileResolver_DefaultsToLlamaAndAllVisibleGpus()
     {
         var topology = CreateTopology(2);
@@ -218,6 +231,25 @@ public sealed class LocalRuntimeFoundationTests
             return Task.FromResult(CallCount == 1
                 ? new CommandResult(1, string.Empty, "WSL is still starting", false)
                 : new CommandResult(0, "0, NVIDIA RTX A6000, 49140, 47000, 597.06", string.Empty, false));
+        }
+
+        public Task<DetachedCommandResult> StartDetachedAsync(string command, string logPath, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class DelayedGpuRunner(int failuresBeforeReady) : IWslCommandRunner
+    {
+        public int CallCount { get; private set; }
+
+        public Task<CommandResult> RunAsync(string command, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(CallCount <= failuresBeforeReady
+                ? new CommandResult(1, string.Empty, "WSL CUDA bridge is still starting", false)
+                : new CommandResult(0, string.Join('\n',
+                    "0, NVIDIA RTX A6000, 49140, 47000, 597.06",
+                    "1, NVIDIA RTX A6000, 49140, 47000, 597.06",
+                    "2, NVIDIA RTX A6000, 49140, 47000, 597.06"), string.Empty, false));
         }
 
         public Task<DetachedCommandResult> StartDetachedAsync(string command, string logPath, TimeSpan timeout, CancellationToken cancellationToken = default) =>

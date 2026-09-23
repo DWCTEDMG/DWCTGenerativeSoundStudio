@@ -1116,7 +1116,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             return false;
         }
-        ShowStatus("Draft edits are unsaved", "Save, apply, or discard your Workspace draft edits before replacing this draft.", InfoBarSeverity.Warning);
+        ShowStatus("Draft edits are unsaved", "Apply or discard your Workspace draft edits before replacing this draft.", InfoBarSeverity.Warning);
         return true;
     }
 
