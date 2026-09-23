@@ -79,15 +79,36 @@ public sealed class WslCommandRunner : IWslCommandRunner
     }
 }
 
-public sealed class GpuDiscoveryService(IWslCommandRunner runner) : IGpuDiscoveryService
+public sealed class GpuDiscoveryService : IGpuDiscoveryService
 {
     private const string Query = "nvidia-smi --query-gpu=index,name,memory.total,memory.free,driver_version --format=csv,noheader,nounits";
+    private const int MaxAttempts = 3;
+    private readonly IWslCommandRunner _runner;
+    private readonly TimeSpan _retryDelay;
+
+    public GpuDiscoveryService(IWslCommandRunner runner, TimeSpan? retryDelay = null)
+    {
+        _runner = runner;
+        _retryDelay = retryDelay ?? TimeSpan.FromMilliseconds(500);
+    }
 
     public async Task<GpuTopology> DetectAsync(CancellationToken cancellationToken = default)
     {
-        CommandResult result = await runner.RunAsync(Query, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-        if (!result.Succeeded) return GpuTopology.Unavailable;
-        return Parse(result.StandardOutput);
+        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            CommandResult result = await _runner.RunAsync(Query, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                return Parse(result.StandardOutput);
+            }
+
+            if (attempt < MaxAttempts && _retryDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(_retryDelay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return GpuTopology.Unavailable;
     }
 
     public static GpuTopology Parse(string csv)

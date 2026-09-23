@@ -28,6 +28,19 @@ public sealed class LocalRuntimeFoundationTests
     }
 
     [TestMethod]
+    public async Task GpuDiscovery_RetriesTransientWslStartupFailure()
+    {
+        var runner = new TransientGpuRunner();
+        var discovery = new GpuDiscoveryService(runner, TimeSpan.Zero);
+
+        GpuTopology topology = await discovery.DetectAsync();
+
+        Assert.IsTrue(topology.CudaAvailable);
+        Assert.AreEqual(1, topology.GpuCount);
+        Assert.AreEqual(2, runner.CallCount);
+    }
+
+    [TestMethod]
     public void ProfileResolver_DefaultsToLlamaAndAllVisibleGpus()
     {
         var topology = CreateTopology(2);
@@ -193,6 +206,22 @@ public sealed class LocalRuntimeFoundationTests
         Assert.IsTrue(result.IsReachable);
         Assert.IsTrue(result.IsReady);
         Assert.AreEqual("qwen-test", result.Model);
+    }
+
+    private sealed class TransientGpuRunner : IWslCommandRunner
+    {
+        public int CallCount { get; private set; }
+
+        public Task<CommandResult> RunAsync(string command, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(CallCount == 1
+                ? new CommandResult(1, string.Empty, "WSL is still starting", false)
+                : new CommandResult(0, "0, NVIDIA RTX A6000, 49140, 47000, 597.06", string.Empty, false));
+        }
+
+        public Task<DetachedCommandResult> StartDetachedAsync(string command, string logPath, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     [TestMethod]

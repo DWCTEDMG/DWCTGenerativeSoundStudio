@@ -289,15 +289,24 @@ public sealed partial class SettingsPage : Page
 
     private static string LoadVst3ScanRoots()
     {
-        if (ApplicationData.Current.LocalSettings.Values[Vst3ScanRootsSettingKey] is string saved)
+        if (WindowsPackageIdentity.IsPackaged &&
+            ApplicationData.Current.LocalSettings.Values[Vst3ScanRootsSettingKey] is string saved)
+        {
             return saved;
+        }
+
         return string.Join(Environment.NewLine, Vst3ModuleDiscovery.StandardWindowsRoots());
     }
 
     private void SaveVst3ScanRoots()
     {
+        if (!WindowsPackageIdentity.IsPackaged)
+        {
+            return;
+        }
+
         try { ApplicationData.Current.LocalSettings.Values[Vst3ScanRootsSettingKey] = string.Join(Environment.NewLine, ParseVst3ScanRoots()); }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        catch (Exception exception) when (exception is InvalidOperationException or UnauthorizedAccessException or IOException)
         {
             ShowStatus($"VST3 scan roots could not be saved: {exception.Message}", InfoBarSeverity.Warning);
         }

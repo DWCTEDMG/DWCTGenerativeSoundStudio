@@ -60,8 +60,13 @@ public sealed partial class SettingsPage
             && string.Equals(component.LastEngineState, "ready", StringComparison.OrdinalIgnoreCase);
     }
 
-    private void RuntimeComponent_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+    private void RuntimeComponent_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // SelectedIndex is applied while InitializeComponent is still connecting fields.
+        // Command-bar controls declared after this ComboBox are not available until the page loads.
+        if (!IsLoaded) return;
         UpdateRuntimeActionState();
+    }
 
     private static string YesNo(bool value) => value ? "Yes" : "No";
 

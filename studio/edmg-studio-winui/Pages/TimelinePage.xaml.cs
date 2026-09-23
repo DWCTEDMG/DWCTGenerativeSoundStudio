@@ -4140,7 +4140,7 @@ public sealed partial class TimelinePage : Page
                 return localPaths;
             }
 
-            string cacheRoot = System.IO.Path.Combine(ApplicationData.Current.LocalCacheFolder.Path, "audio-media");
+            string cacheRoot = ResolveTimelineCacheRoot("audio-media");
             foreach (MediaAsset asset in project.MediaAssets.Where(asset => referencedAssetIds.Contains(asset.Id)))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -5307,11 +5307,23 @@ public sealed partial class TimelinePage : Page
         string extension = System.IO.Path.GetExtension(asset.Path);
         if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
             extension = ".media";
-        string cacheRoot = System.IO.Path.Combine(ApplicationData.Current.LocalCacheFolder.Path, "post-alignment-media");
+        string cacheRoot = ResolveTimelineCacheRoot("post-alignment-media");
         string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
         if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
             await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(projectId, asset.Path, destination, cancellationToken);
         return destination;
+    }
+
+    private static string ResolveTimelineCacheRoot(string leaf)
+    {
+        string? packagedPath = WindowsPackageIdentity.IsPackaged
+            ? ApplicationData.Current.LocalCacheFolder.Path
+            : null;
+        return StudioStoragePaths.ResolveRoot(
+            WindowsPackageIdentity.IsPackaged,
+            packagedPath,
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            WindowsPackageIdentity.IsPackaged ? leaf : System.IO.Path.Combine("cache", leaf));
     }
 
     private async void ApplyPostSync_Click(object sender, RoutedEventArgs e)

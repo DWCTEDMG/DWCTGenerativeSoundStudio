@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
+using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Storage;
@@ -1043,13 +1044,13 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
 
     private async Task<ReactiveLabLocalState?> LoadLocalStateAsync(string projectId)
     {
-        var item = await ApplicationData.Current.LocalFolder.TryGetItemAsync(LocalStateFileName(projectId));
-        if (item is not StorageFile file)
+        string path = LocalStatePath(projectId);
+        if (!File.Exists(path))
         {
             return null;
         }
 
-        var json = await FileIO.ReadTextAsync(file);
+        string json = await File.ReadAllTextAsync(path);
         ReactiveLabLocalState? state = JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabLocalState);
         return state is not null && state.TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
             ? normalized
@@ -1078,11 +1079,24 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
         await _localStateWriteLock.WaitAsync();
         try
         {
-            var file = await ApplicationData.Current.LocalFolder.CreateFileAsync(
-                LocalStateFileName(projectId), CreationCollisionOption.ReplaceExisting);
-            await FileIO.WriteTextAsync(file, json);
+            string path = LocalStatePath(projectId);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, json);
         }
         finally { _localStateWriteLock.Release(); }
+    }
+
+    private static string LocalStatePath(string projectId)
+    {
+        string? packagedPath = WindowsPackageIdentity.IsPackaged
+            ? ApplicationData.Current.LocalFolder.Path
+            : null;
+        string root = StudioStoragePaths.ResolveRoot(
+            WindowsPackageIdentity.IsPackaged,
+            packagedPath,
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ".");
+        return Path.Combine(root, LocalStateFileName(projectId));
     }
 
     private void UpdatePresetNames(string? selectedName = null)

@@ -1,0 +1,1081 @@
+Work directly in this repository:
+
+C:\Users\user\source\repos\DWCTGenerativeSoundStudio
+
+Complete the current TensorRT, WinUI, and VST3 implementation fully.
+
+Do not stop at intermediate milestones.
+Do not just give me instructions.
+Do not merely create scaffolding, interfaces, placeholders, TODOs, or fake-success paths.
+Inspect the existing implementation first, preserve legitimate work, implement the missing functionality, run the applicable tests/builds, and continue fixing failures until the work is genuinely complete or an external dependency makes further validation impossible.
+
+==================================================
+SOURCE CONTROL SAFETY
+==================================================
+
+Before making changes:
+
+1. Run:
+
+git status --short
+
+2. Preserve all legitimate existing uncommitted work.
+
+3. Do NOT use:
+
+git reset --hard
+git restore .
+git clean -fd
+
+or otherwise discard existing work.
+
+4. Remove only these obvious accidental files if they exist:
+
+- tatus --short
+- tore .studioedmg-studio-winuiEdmgStudio.WinUI.csproj
+
+5. Treat:
+
+studio/edmg-studio-winui/Studio-Local-Signing-20260922/
+
+as generated local signing output.
+
+Do not commit that directory.
+
+Move it outside the repository or add an appropriate ignore rule if that matches existing repository conventions.
+
+6. Do not commit or push until all implementation and verification work described below is complete.
+
+==================================================
+INITIAL AUDIT
+==================================================
+
+Before changing architecture, inspect:
+
+- git status
+- git diff
+- existing README files
+- STUDIO_PROGRESS.md
+- blueprint documents
+- planning documents
+- TensorRT documentation
+- VST3-related documentation
+- WinUI implementation
+- Python backend implementation
+- EdmgStudio.Core
+- existing VST3 scanner/client/session interfaces
+- existing audio/plugin abstractions
+- tests
+- packaging scripts
+- release scripts
+
+Search the entire repository for at least:
+
+Vst3
+VST3
+Vst3Scanner
+Vst3ScannerClient
+Vst3Host
+Vst3HostSession
+UnavailableVst3HostSession
+plugin scan
+plugin host
+audio processor
+MIDI
+Steinberg
+IPluginFactory
+IComponent
+IAudioProcessor
+EditController
+process context
+plugin state
+parameter automation
+
+Determine what is:
+
+- fully implemented
+- partially implemented
+- placeholder-only
+- simulated
+- test-only
+- unreachable
+- missing
+
+Continue the existing design where sound.
+
+Do not replace working architecture unnecessarily.
+
+==================================================
+TENSORRT RUNTIME REQUIREMENTS
+==================================================
+
+Review all modified and untracked runtime files under:
+
+studio/edmg-studio/python_backend/edmg_studio_backend/runtime
+
+Keep the component adapter architecture.
+
+Keep separate VAE decoder and UNet TensorRT support.
+
+Verify and complete:
+
+- multi-input/multi-output TensorRT execution
+- engine identity/cache handling
+- cache invalidation
+- build-time VRAM guards
+- workspace selection
+- cached engine validation
+- TensorRT deserialization
+- actual execution validation
+- output validation
+- automatic PyTorch CUDA fallback behavior
+- strict TensorRT behavior
+- per-render TensorRT enable/disable
+- per-render device selection
+- independent GPU selection
+- runtime status reporting
+- optimize
+- optimize-all
+- validate
+- rebuild
+- engine quarantine/failure behavior
+
+Do not claim that one TensorRT inference spans multiple GPUs unless the implementation actually does so.
+
+==================================================
+TENSORRT VALIDATION-LIMIT CORRECTION
+==================================================
+
+Inspect:
+
+studio/edmg-studio/python_backend/edmg_studio_backend/runtime/manager.py
+
+Inside UnetRuntimeManager, ensure the UNet prepare path uses:
+
+self.policy.validation_limits(precision, "unet")
+
+rather than:
+
+self.policy.validation_limits(precision)
+
+because component-specific UNet FP16 validation thresholds exist.
+
+Also verify that the VAE path uses:
+
+validation_limits(precision, "vae_decoder")
+
+Verify all component-specific validation thresholds are actually used by the corresponding runtime paths.
+
+==================================================
+NEW / UNTRACKED TENSORRT FILES
+==================================================
+
+Review these new files and keep/include them if they are legitimate parts of the implementation:
+
+studio/edmg-studio/python_backend/edmg_studio_backend/runtime/adapters.py
+
+studio/edmg-studio/python_backend/edmg_studio_backend/runtime/resources.py
+
+studio/edmg-studio/python_backend/edmg_studio_backend/runtime/unet_builder.py
+
+tests/test_packaged_backend_startup.py
+
+Do not delete them merely because they are untracked.
+
+==================================================
+VST3 IMPLEMENTATION
+==================================================
+
+Complete the VST3 implementation as real working functionality.
+
+Do not leave the application with a VST3 UI that points to an executable or host implementation that does not exist.
+
+Inspect the current code first and determine the intended boundary between:
+
+- WinUI
+- EdmgStudio.Core
+- scanner process
+- host process/session
+- audio engine
+- plugin metadata storage
+- plugin state
+- rendering
+- realtime/preview processing
+
+Implement the missing pieces using the existing project architecture where possible.
+
+==================================================
+VST3 SCANNER EXECUTABLE
+==================================================
+
+The repository currently contains code paths that may expect an executable named:
+
+EdmgStudio.Vst3Scanner.exe
+
+Ensure a real x64 scanner executable/project exists and is built.
+
+If the existing architecture expects this exact executable name, preserve that contract unless there is a strong reason to change it.
+
+The scanner must:
+
+- run out-of-process from the main Studio application
+- accept explicit scan requests
+- scan individual VST3 bundles/files
+- scan configured VST3 directories
+- avoid crashing the Studio process when a plugin crashes
+- enforce per-plugin scan timeouts
+- detect hung plugins
+- return structured machine-readable results
+- report failures truthfully
+- include plugin metadata
+- distinguish scan failure from unsupported plugin
+- support cancellation where practical
+
+Collect useful metadata including, where available:
+
+- plugin name
+- vendor
+- version
+- category/class
+- VST3 class ID
+- module path
+- architecture
+- audio input buses
+- audio output buses
+- event/MIDI input buses
+- event/MIDI output buses
+- parameter count
+- plugin capabilities
+- scan timestamp
+- scan status
+- failure reason
+
+Use the repository's existing metadata models/store if they already exist.
+
+Do not create a second incompatible plugin database if a suitable existing store exists.
+
+==================================================
+VST3 DISCOVERY
+==================================================
+
+Support normal Windows VST3 discovery locations as appropriate, including the standard system VST3 location when present.
+
+Allow configured custom search paths if the existing Settings UI supports them or the architecture calls for them.
+
+Prevent duplicate plugin records where the same plugin is found through multiple paths.
+
+Track enough identity information to distinguish different plugin classes contained in one VST3 module.
+
+Do not blindly recurse through arbitrary drives unless explicitly configured.
+
+==================================================
+VST3 HOST IMPLEMENTATION
+==================================================
+
+Replace placeholder/unavailable-only hosting where necessary with a functional native VST3 host path.
+
+Search specifically for classes such as:
+
+UnavailableVst3HostSession
+
+If such a class is currently the only implementation used in production code, implement a real host session and wire it into the normal runtime.
+
+Keep an unavailable/fallback implementation only where it truthfully represents unsupported environments.
+
+The host must correctly implement the required VST3 lifecycle, including the equivalent of:
+
+- load module
+- obtain plugin factory
+- enumerate/select plugin class
+- instantiate component
+- instantiate/connect controller where required
+- initialize
+- configure buses
+- negotiate sample size
+- configure sample rate
+- configure maximum block size
+- configure processing mode
+- activate buses
+- activate component
+- start processing
+- process blocks
+- stop processing
+- deactivate component
+- terminate
+- unload safely
+
+Follow the VST3 SDK/API lifecycle required by the plugin implementation.
+
+Do not fake initialization success.
+
+==================================================
+VST3 AUDIO PROCESSING
+==================================================
+
+Implement actual audio processing through hosted VST3 plugins.
+
+Support the Studio's existing audio format/contracts rather than inventing an unrelated audio representation.
+
+At minimum, handle correctly where applicable:
+
+- mono
+- stereo
+- common multi-channel bus configurations already supported by Studio
+- sample rate
+- block size
+- float processing
+- bypass
+- silence flags where relevant
+- input buffers
+- output buffers
+- plugin latency
+- tail handling where practical
+- flush/end-of-stream behavior
+
+Ensure processing failures propagate as real errors rather than silently returning unprocessed audio while claiming the plugin ran.
+
+If fallback/bypass is intentionally supported, clearly distinguish:
+
+plugin processed successfully
+
+from:
+
+plugin failed and was bypassed
+
+==================================================
+VST3 MIDI / EVENT SUPPORT
+==================================================
+
+Implement MIDI/event delivery for instrument/effect plugins where the Studio architecture supports it.
+
+Support the event types needed by the application, such as:
+
+- note on
+- note off
+- velocity
+- channel
+- sample/block offset
+- controller/event data where already represented by Studio
+
+Do not claim MIDI support if only audio processing is implemented.
+
+If the existing render engine has no MIDI/event path yet, implement the required bridge if that functionality is part of Studio's intended VST3 feature set.
+
+==================================================
+VST3 PARAMETER SUPPORT
+==================================================
+
+Implement parameter discovery and control.
+
+Support:
+
+- parameter IDs
+- parameter names
+- normalized values
+- default values where available
+- readable/display values where available
+- writable/read-only state
+- parameter changes during processing
+- automation queues where required by the hosting API
+
+Connect VST3 parameters to the Studio's existing plugin/effect parameter model where one exists.
+
+Do not create UI controls whose changes are not actually sent to the plugin.
+
+==================================================
+VST3 PLUGIN STATE
+==================================================
+
+Implement plugin state persistence where supported.
+
+Support:
+
+- component state
+- controller state where applicable
+- save project/session
+- restore project/session
+- reopening a project with the same plugin state
+
+Persist plugin identity robustly enough to detect:
+
+- plugin missing
+- plugin moved
+- plugin version changed
+- plugin class unavailable
+
+Do not silently substitute an unrelated plugin.
+
+==================================================
+VST3 PROCESS ISOLATION AND RELIABILITY
+==================================================
+
+Prefer crash isolation appropriate for third-party native plugins.
+
+The main WinUI Studio process must not be unnecessarily vulnerable to a faulty third-party VST3 plugin.
+
+Where the existing design uses a separate scanner and/or host process, complete that architecture.
+
+Implement appropriate:
+
+- process startup
+- IPC
+- request IDs
+- timeout handling
+- cancellation
+- clean shutdown
+- crash detection
+- error propagation
+- recovery behavior
+- orphan process cleanup
+
+Avoid deadlocks if a plugin stops responding.
+
+A plugin crash should be reported with enough information to identify the plugin.
+
+==================================================
+VST3 QUARANTINE / FAILURE TRACKING
+==================================================
+
+Implement or complete plugin failure tracking where appropriate.
+
+If a plugin repeatedly:
+
+- crashes during scan
+- hangs during scan
+- crashes during initialization
+- crashes during processing
+
+mark it accordingly rather than repeatedly crashing Studio.
+
+Provide a way to retry/rescan/clear failure state.
+
+Do not permanently blacklist a plugin because of one transient failure unless that is already the intended policy.
+
+==================================================
+VST3 WINUI INTEGRATION
+==================================================
+
+Complete the WinUI VST3 experience.
+
+Inspect:
+
+SettingsPage
+RenderPage
+ModelsPage if applicable
+plugin-related pages/controls
+existing Vst3ScannerClient usage
+
+Ensure the application can:
+
+- configure VST3 search paths
+- start a scan
+- cancel a scan if supported
+- show scan progress
+- show discovered plugins
+- show failed/quarantined plugins
+- rescan
+- clear/retry failures
+- select a plugin
+- add/use the plugin in the appropriate Studio signal/render path
+- edit supported plugin parameters
+- display unavailable/missing plugin state truthfully
+
+Do not report a plugin as available merely because its file exists.
+
+Availability should mean the required scan/host checks succeeded.
+
+==================================================
+VST3 RENDER / SIGNAL-CHAIN INTEGRATION
+==================================================
+
+Wire VST3 processing into the actual Studio audio/render pipeline.
+
+A plugin selected in the UI must affect actual audio processing.
+
+Verify the flow end-to-end, for example:
+
+Studio project/render
+-> plugin configuration
+-> VST3 host/session
+-> audio/MIDI processing
+-> processed audio
+-> downstream Studio processing/output
+
+If Studio supports multiple plugins in a chain, preserve ordering.
+
+If only one plugin slot is currently designed, do not invent a fake multi-plugin system solely to satisfy this task.
+
+Honor existing architecture.
+
+==================================================
+VST3 REALTIME VS OFFLINE PROCESSING
+==================================================
+
+Where the Studio distinguishes realtime preview and offline rendering:
+
+- configure the plugin processing mode correctly
+- do not assume realtime behavior for offline rendering
+- do not run UI-thread blocking plugin processing
+- preserve deterministic offline behavior where possible
+
+Report plugins that cannot support the requested processing mode rather than pretending they can.
+
+==================================================
+VST3 PLUGIN EDITORS
+==================================================
+
+Inspect whether the existing Studio design intends to support native VST3 plugin editor windows.
+
+If there is already intended/plugin-editor architecture, finish it.
+
+If plugin editor embedding is not currently part of the architecture, do not destabilize the project merely to add it.
+
+At minimum, parameter-based control must work if that is the existing supported UI path.
+
+Clearly document whether native VST3 editor hosting is:
+
+- implemented and tested
+- implemented but not validated with a real plugin
+- intentionally not implemented
+
+==================================================
+VST3 SDK / DEPENDENCY HANDLING
+==================================================
+
+Inspect existing native dependencies and build configuration first.
+
+If the Steinberg VST3 SDK or another legitimate host abstraction is already included/configured, use it consistently.
+
+Do not silently download, vendor, or redistribute dependencies in a way that violates their license.
+
+If an external SDK must be installed or fetched to build the existing intended implementation, automate that through the repository's accepted dependency/build system where legally and technically appropriate.
+
+Document the exact requirement.
+
+==================================================
+VST3 x64 REQUIREMENT
+==================================================
+
+The current Studio build is x64.
+
+Ensure the VST3 scanner/host and loaded plugins use compatible architecture.
+
+Do not attempt to load incompatible binaries into the x64 host.
+
+Report architecture incompatibility clearly.
+
+Do not claim 32-bit bridge support unless an actual bridge is implemented and tested.
+
+==================================================
+VST3 TESTING
+==================================================
+
+Add or complete tests for at least:
+
+- plugin discovery
+- duplicate handling
+- scanner request/response
+- scan timeout handling
+- malformed plugin handling
+- missing plugin handling
+- host lifecycle
+- host startup/shutdown
+- plugin identity mapping
+- parameter mapping
+- plugin state serialization
+- plugin state restoration
+- process crash detection
+- process timeout handling
+- audio buffer routing
+- bypass behavior
+- plugin failure reporting
+- cancellation where supported
+
+Use deterministic test doubles where necessary for unit tests.
+
+Clearly distinguish those tests from validation with an actual third-party VST3 plugin.
+
+==================================================
+REAL VST3 VALIDATION
+==================================================
+
+If legitimate VST3 plugins are already installed on the machine, identify suitable test plugins and perform real validation.
+
+Do not install arbitrary third-party software without permission.
+
+For at least one available compatible VST3 effect, where possible, verify:
+
+1. scanner discovers it
+2. metadata is returned
+3. Studio stores the plugin record
+4. host loads the plugin
+5. plugin initializes
+6. audio buses configure
+7. audio is processed
+8. parameter changes affect processing if applicable
+9. state can be saved
+10. state can be restored
+11. host unloads cleanly
+
+If a suitable VST3 instrument is available, also validate MIDI/event input where supported.
+
+If no real VST3 plugin is installed or licensing/access prevents validation, report exactly that.
+
+Do not fabricate a successful real-plugin test.
+
+==================================================
+WINUI / TENSORRT REQUIREMENTS
+==================================================
+
+Review all current changes under:
+
+studio/edmg-studio-winui
+
+Verify Models, Settings, and Render pages correctly expose and send TensorRT runtime settings.
+
+Verify:
+
+- backend startup/supervision
+- device selection
+- optimize
+- optimize-all
+- rebuild
+- validate
+- unsupported-component behavior
+- status rendering
+- serialization/API compatibility
+
+Ensure the UI does not report unsupported components as successfully optimized.
+
+Ensure engine/runtime status accurately distinguishes:
+
+- unsupported
+- disabled
+- incompatible
+- adapter available
+- building
+- validated
+- invalid
+- quarantined
+- other genuine runtime states
+
+Ensure C# API models match Python backend schemas.
+
+==================================================
+PACKAGING REQUIREMENTS
+==================================================
+
+Review and test:
+
+studio/edmg-studio/python_backend/pyinstaller.spec
+
+studio/edmg-studio/python_backend/pyproject.toml
+
+studio/edmg-studio/python_backend/uv.lock
+
+studio/edmg-studio/python_backend/backend_entry.py
+
+studio/edmg-studio/scripts/prepare-release-bundle.mjs
+
+Windows staging/signing scripts
+
+Package.appxmanifest
+
+EdmgStudio.WinUI.csproj
+
+Also verify that all required VST3 scanner/host binaries and runtime dependencies are included in the packaged application where appropriate.
+
+If the WinUI code expects:
+
+EdmgStudio.Vst3Scanner.exe
+
+verify that the packaged application actually contains that executable at the expected runtime location.
+
+Do the same for any VST3 host executable/DLL introduced or already expected by the application.
+
+Ensure packaging does not accidentally include:
+
+- test plugins
+- SDK samples
+- local developer-only artifacts
+- generated signing test output
+
+Do not undo the existing Trusted Signing/manifest fixes.
+
+==================================================
+PYTHON TESTING
+==================================================
+
+Use the installed Visual Studio Developer PowerShell and current machine hardware.
+
+This machine has:
+
+- 3 NVIDIA RTX A6000 GPUs
+- 32 vCPUs
+- approximately 176 GB RAM
+
+From the Python backend directory, run at minimum:
+
+uv sync --python 3.12 --extra cuda --group test
+
+uv run pytest edmg_studio_backend/tests/test_component_runtime.py edmg_studio_backend/tests/test_runtime_validation.py -v
+
+uv run pytest edmg_studio_backend/tests/test_llama_cpp_director.py -v
+
+Then run the complete backend test suite.
+
+Fix failures caused by or relevant to this work.
+
+==================================================
+REPOSITORY TESTING
+==================================================
+
+From the appropriate repository environment, run:
+
+uv run pytest tests/test_packaged_backend_startup.py -v
+
+uv run pytest tests/test_uv_migration_static.py -v
+
+Also run any VST3-specific repository/native tests added or already present.
+
+==================================================
+C# TESTING
+==================================================
+
+Run:
+
+dotnet test studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj -c Debug
+
+Add appropriate EdmgStudio.Core tests for VST3 behavior where the C# side owns:
+
+- scanner launching
+- IPC
+- plugin metadata models
+- plugin state
+- settings
+- host/session selection
+- failure handling
+
+Fix all relevant failures.
+
+==================================================
+NATIVE VST3 BUILD TESTING
+==================================================
+
+Build every native VST3-related project required by the Studio.
+
+At minimum, verify that the expected scanner executable is actually produced.
+
+If applicable verify:
+
+EdmgStudio.Vst3Scanner.exe
+
+and any host/helper binaries.
+
+Use x64.
+
+Resolve:
+
+- compiler errors
+- linker errors
+- missing SDK references
+- runtime library issues
+- deployment path issues
+
+Do not accept a C# build passing while the native VST3 host/scanner cannot build.
+
+==================================================
+WINUI BUILD
+==================================================
+
+Build:
+
+studio/edmg-studio-winui/EdmgStudio.WinUI.csproj
+
+for:
+
+Debug
+x64
+
+Resolve all build errors caused by this work.
+
+Also perform a Release x64 build before declaring the work finished.
+
+==================================================
+GPU HARDWARE VALIDATION
+==================================================
+
+Run:
+
+nvidia-smi -L
+
+Confirm all three RTX A6000 GPUs.
+
+Where the implementation supports real runtime validation, validate:
+
+GPU 0
+GPU 1
+GPU 2
+
+separately.
+
+Test cached TensorRT engine:
+
+- lookup
+- checksum/identity
+- deserialize
+- execute
+- output validation
+
+Do not treat engine-file existence as validation.
+
+==================================================
+REAL SD1.5 TENSORRT VALIDATION
+==================================================
+
+If the managed SD1.5 assets required for a real engine build are installed:
+
+perform real FP16 SD1.5 validation for:
+
+- UNet
+- VAE decoder
+
+Perform real build/deserialize/execution where practical.
+
+If required model assets are missing, report the exact missing asset/path instead of fabricating a pass.
+
+==================================================
+LIVE APPLICATION VALIDATION
+==================================================
+
+Launch the WinUI application if policy/tool access permits.
+
+Verify:
+
+- Studio starts
+- backend starts
+- Settings page works
+- Models page works
+- Render page works
+- GPU/runtime settings propagate to backend requests
+- TensorRT status is truthful
+- no serialization mismatch occurs
+- no startup exception occurs
+
+Also validate VST3 functionality through the live application where possible:
+
+- VST3 settings load
+- VST3 scanner executable launches
+- scanning begins
+- scan results return
+- installed plugins appear
+- failed plugins show failure rather than success
+- plugin selection works
+- plugin parameters load
+- plugin can be inserted into the applicable processing path
+- audio actually passes through the plugin
+- processed output differs where expected
+- state save/restore works
+- Studio remains alive if the plugin scanner/host process fails
+
+If live UI execution cannot be automated because of policy/tool restrictions, build everything and report exactly which UI actions require manual verification.
+
+Do not claim those actions were tested when they were not.
+
+==================================================
+BACKEND / UI CONTRACT VERIFICATION
+==================================================
+
+Audit contracts across:
+
+WinUI
+EdmgStudio.Core
+Python backend
+native VST3 helper processes
+
+Verify:
+
+- JSON field names
+- enums
+- nullable fields
+- error responses
+- process exit codes
+- plugin identifiers
+- file paths
+- status values
+- cancellation
+- timeout semantics
+
+Do not allow each layer to invent conflicting status names.
+
+==================================================
+SECURITY / STABILITY
+==================================================
+
+Treat VST3 plugins as untrusted third-party native code.
+
+Do not expose arbitrary command execution through scanner/host IPC.
+
+Validate paths and request types.
+
+Do not allow malformed plugin metadata to crash Studio.
+
+Avoid loading third-party VST3 binaries into the WinUI process if the intended architecture provides process isolation.
+
+Do not weaken existing application security or signing configuration merely to make plugin loading work.
+
+==================================================
+DOCUMENTATION
+==================================================
+
+Update documentation only after implementation and verification.
+
+Review/update as appropriate:
+
+STUDIO_PROGRESS.md
+
+blueprint/WINUI3_CONSOLIDATED_BLUEPRINT.md
+
+blueprint/planning.md
+
+docs/TENSORRT_RUNTIME_INTEGRATION.md
+
+Create or update VST3 documentation if the repository has an appropriate existing location.
+
+Document:
+
+- VST3 architecture
+- scanner
+- host
+- IPC
+- plugin lifecycle
+- search paths
+- state persistence
+- failure isolation
+- packaging
+- supported features
+- unsupported features
+- real validation performed
+
+Do not mark anything:
+
+complete
+validated
+verified
+production-ready
+
+unless it was actually tested at the corresponding level.
+
+==================================================
+COMPLETION STANDARD
+==================================================
+
+Finish the entire task rather than stopping at milestones.
+
+Do not stop because:
+
+- one test passes
+- the code compiles
+- interfaces exist
+- scanner scaffolding exists
+- VST3 plugin metadata is visible
+- TensorRT engine files exist
+- mocked tests pass
+
+Continue through integration and validation.
+
+A feature counts as implemented only when the actual execution path exists.
+
+A feature counts as validated only at the level actually tested.
+
+==================================================
+FINAL VERIFICATION
+==================================================
+
+Before finishing, run:
+
+git status --short
+
+Review all modified/untracked files.
+
+Ensure no accidental files or generated local signing output will be committed.
+
+Run the complete applicable:
+
+- Python tests
+- repository tests
+- C# tests
+- native VST3 tests
+- native VST3 builds
+- WinUI Debug x64 build
+- WinUI Release x64 build
+- real GPU checks
+- available TensorRT runtime checks
+- available real VST3 checks
+
+==================================================
+FINAL REPORT
+==================================================
+
+At the end, report:
+
+1. Every file changed or created.
+
+2. TensorRT implementation completed.
+
+3. VST3 implementation completed, broken down into:
+   - scanner
+   - discovery
+   - hosting
+   - audio processing
+   - MIDI/events
+   - parameters
+   - state persistence
+   - process isolation
+   - WinUI
+   - packaging
+
+4. Exact Python test results.
+
+5. Exact repository test results.
+
+6. Exact C# test results.
+
+7. Exact native VST3 build/test results.
+
+8. Exact WinUI build results.
+
+9. Real TensorRT GPU validation performed.
+
+10. Which RTX A6000 devices were actually tested.
+
+11. Real VST3 plugins actually tested, including their names/paths only when discovered from the machine.
+
+12. Clearly distinguish:
+    - unit tests
+    - mocked tests
+    - synthetic validation
+    - packaged validation
+    - real GPU validation
+    - real VST3 plugin validation
+    - live WinUI validation
+
+13. Anything that remains impossible to validate and the exact reason.
+
+14. Final:
+
+git status --short
+
+15. Do not commit or push until all implementation and verification work is finished.
+
+16. Once everything passes, stage only legitimate project files.
+
+Exclude:
+- generated local signing output
+- accidental files
+- temporary build products
+- downloaded/test VST3 binaries that do not belong in source control
+- local caches
+- machine-specific artifacts
+
+17. Stop before commit/push and report that the tree is ready for final review unless I explicitly instruct you to commit and push.

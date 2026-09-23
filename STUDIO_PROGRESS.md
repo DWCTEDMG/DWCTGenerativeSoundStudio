@@ -32,18 +32,15 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. The user expanded the VST3 gate to require a separately named x64 `EdmgStudio.Vst3Scanner.exe`; existing staged TensorRT/VST3 work is preserved and CUDA was not synchronized or replaced.
+**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. Existing untracked agent configuration and `studio/edmg-studio-winui/TextFile1.txt` are preserved and excluded; CUDA and dependency profiles will not be synchronized.
 
-- Updated UTC: 2026-09-23T01:30:00Z. Task / gate: commit and push the qualified TensorRT, WinUI, and split native VST3 implementation to the repository default branch.
-- Branch / base / state: `codex/Unified`; implementation commit `e7e4ff8` (`Complete TensorRT and native VST3 integration`) was pushed to `origin/codex/Unified`. The committed 89-file batch passed `git diff --cached --check`; unrelated `.github/agents/` remains untracked and excluded.
-- Completed: built distinct C++17 x64 `EdmgStudio.Vst3Scanner.exe` and `EdmgStudio.Vst3Host.exe` targets from Steinberg VST3 SDK 3.8.1 commit `3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96`. Compile-time operation gates restrict scanning to the scanner and qualification/workers to the host. Valid modules without audio-effect classes return explicit unsupported status, are cached, and are not quarantined. Settings resolves scanner and host independently and reports ready/unsupported/failed counts. Candidate and MSIX contracts bind both executable identities.
-- Processing retained: paired-pipe float32 DSP, selected event-bus MIDI, rich parameter metadata/editing, component/controller state, latency, fatal crash/timeout isolation, worker compatibility checks, ordered inserts and delayed bypass, project persistence/lifecycle, Timeline controls, and negotiated-quantum AudioGraph-to-Core mixer bridging.
-- Real plug-in evidence: clean and extracted scanners each found two AGain classes with status `success`; clean and extracted hosts each qualified AGain 2-in/2-out, one event-input bus, three parameters, 12 component-state bytes, 257 controller-state bytes, and finite checksum `0.375`, exit 0 (`%TEMP%\edmg-vst3-dedicated-scan.log`, `%TEMP%\edmg-vst3-dedicated-qualify.log`, `%TEMP%\edmg-vst3-split-packaged-scan.log`, `%TEMP%\edmg-vst3-split-packaged-qualify.log`). Scanner worker mode and host scan mode both failed closed with exit 2. Clean and extracted host lifecycle/MIDI/state/crash/timeout tests each passed 3/3 (`%TEMP%\edmg-vst3-native-managed-split.log`, `%TEMP%\edmg-vst3-split-packaged-managed.log`).
-- Regression/package evidence from repository root unless noted: focused scanner/VST3/mixer/audio tests passed 27 with 3 native tests skipped when environment paths were absent (`%TEMP%\edmg-vst3-scanner-focused-final.log`); those three native tests passed separately with real paths. Complete Core Debug run passed 560 with the same 3 environment-dependent tests skipped (`%TEMP%\edmg-vst3-core-split-full.log`); WinUI Debug x64 built with 0 warnings/errors (`%TEMP%\edmg-vst3-scanner-winui.log`); release-candidate Node tests passed 9/9 (`%TEMP%\edmg-vst3-scanner-release-final.log`); packaging foundations passed (`%TEMP%\edmg-vst3-scanner-packaging-final.log`). All commands exited 0.
-- Exact candidate: packaged Release x64 build passed with 0 warnings/errors (`%TEMP%\edmg-vst3-split-msix.log`). Candidate `edmg-rc1-a5356f78e1f4d8800404e5622c2668526720b6ee521ecd919453972b039c49e2`; MSIX `%TEMP%\edmg-vst3-split-msix\ED2F9BCD-A580-4603-8A17-A7AD5FF6D451_1.2.1.0_x64.msix`, SHA-256 `E181B96E226394CE10CCB0D2B4E4C14028ED06470B1C5F40A83805A0B9F5F6D9`. Packaged host SHA-256 `AAFB3AA5C40D7B9641EDB229C0D5159E9B59FAB4F7E65B3072250D963C04F80D` and scanner SHA-256 `E376DF9F394C8221EEC0AE9CBBFE6D23C362957EDAE2675475597C4EB1CF07AE` exactly match candidate provenance.
-- Remaining limits: the MSIX is unsigned, backendless by explicit developer diagnostic allowance, and non-distributable. No installed third-party module was found beyond official AGain. Interactive Settings/Timeline controls, audible AudioGraph/WASAPI playback, sustained underrun/latency behavior, arbitrary plug-in compatibility, ASIO, editor embedding, and hard-realtime safety were not verified and are not claimed.
-- Blockers / next step: implementation, deterministic/package qualification, commit, and default-branch push are complete. Real-device interactive/audio and signed clean-machine/Store qualification require separate operator evidence.
-- Reviewer findings addressed: all five VST3/audio defects remain corrected and regression-covered; the reviewer’s device-audio and realtime caveats remain open and explicit.
+- Updated UTC: 2026-09-23T02:36:43.4007223Z. Task / gate: fix the next WinUI Settings-page navigation crash surfaced through generated `App.g.i.cs`.
+- Branch / base / state: `codex/Unified` at `1c0e95fe5624bfcfa29338415eff954f404974a3`; dirty in owned `SettingsPage.xaml.cs`, prior `SettingsPage.Runtime.cs`, and this section, plus pre-existing untracked paths.
+- Owned paths: `studio/edmg-studio-winui/Pages/SettingsPage.xaml.cs`, prior `studio/edmg-studio-winui/Pages/SettingsPage.Runtime.cs`, and this implementer section only.
+- Completed: the latest crash entry at `%LOCALAPPDATA%\DWCT\EDMG Studio\Logs\winui-crash.log` identifies `InvalidOperationException` from `ApplicationData.Current` in `LoadVst3ScanRoots`, not `App.xaml` or generated code. Package-identity gating now makes unpackaged Debug sessions use standard VST3 roots and skip unavailable LocalSettings persistence; packaged behavior is unchanged.
+- Validation: from repository root, isolated Release x64 `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.csproj --no-restore --configuration Release -p:PlatformTarget=x64` with temporary output/intermediate paths exited 0 with 0 warnings and 0 errors, including XAML compilation; log `%TEMP%\edmg-settings-localsettings-build.log`. `git diff --check` exited 0. Tests were not rerun because this is a WinUI package-context guard and the native compile is the focused available validation.
+- Remaining / blockers / next step: implementation is complete. Restart the currently hung Debug process to load the updated assembly; interactive navigation is not claimed because that existing process was deliberately left untouched.
+- Reviewer findings addressed: none newly applicable; prior runtime-evidence and real-device caveats remain explicit.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 
@@ -51,26 +48,25 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- REVIEWER-UPDATE-START: Codex owns this section. -->
 
-**Observed UTC:** 2026-09-16T09:09:15.155224+00:00. User explicitly assigned implementation of GPU-first defaults after the commit/audit request.
+**Observed UTC:** 2026-09-23T03:26:00Z. The user explicitly reassigned Codex from reviewer-only monitoring to full Studio diagnostics and repair.
 
-**Baseline:** `66dcbe9dffcff36e1a4d92f6eb17ee49f52dfaee` on `codex/Unified` contains the previously pending 71-file workflow/release batch. The following validation applies to that baseline plus the current GPU-policy changes, not a new hardware qualification.
+**Baseline and root causes:** `codex/Unified` at `1c0e95fe5624bfcfa29338415eff954f404974a3`, plus the implementer's saved Settings changes. The 02:26 and 02:29 unhandled navigation failures were traced to XAML `SelectionChanged` running before later controls existed and unpackaged Debug calling `ApplicationData.Current.LocalSettings`. The same unpackaged storage assumption also existed in Reactive Lab recovery and Timeline audio/post-alignment caches. WSL GPU discovery made one attempt and left local Director auto-start failed when that attempt raced WSL initialization.
 
-**Current change:** Automatic GPU preference in source setup/test/launcher paths; CUDA environment preservation; no implicit CPU fallback in internal renderer selection; visible automatic Setup choices; source startup and tests avoid dependency synchronization. CPU-only CI opts in explicitly. See `docs/STUDIO_ACCELERATOR_POLICY.md` for support boundaries.
+**Repairs:** preserve the Settings initialization gate and package-identity guard; add package-aware filesystem roots for unpackaged Reactive Lab and Timeline workflows without changing packaged paths; retry WSL `nvidia-smi` discovery up to three times with bounded cancellation-aware delays. Added focused storage-path and transient-WSL regression tests using red/green verification. Existing untracked `.github/agents/` and `studio/edmg-studio-winui/TextFile1.txt` remain untouched.
 
-**Fresh evidence (all commands from repository root unless stated otherwise):**
+**Fresh evidence (repository root unless stated otherwise; no dependency sync):**
 
-| Command | Result | Local evidence |
+| Gate | Result | Evidence |
 | --- | --- | --- |
-| `dotnet build studio/edmg-studio-winui/EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` | Exit 0; complete XAML build; 0 errors, 17 analyzer warnings | `%TEMP%/gpu-default-build.log` |
-| `dotnet test studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj --no-build --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` | Exit 0; 511 passed | `%TEMP%/gpu-default-core.log` |
-| `studio/edmg-studio/python_backend/.venv/Scripts/python.exe scripts/run_pytest_scopes.py` | Exit 0; selected CUDA, sync disabled; repository 172 passed/4 skipped; backend 1013 passed/4 skipped | `%TEMP%/gpu-default-all-python.log` |
-| Focused profile/installer/launcher/setup tests after final helper changes | Exit 0; 66 passed | `%TEMP%/gpu-default-focused.log` |
-| `node --test main-process/backend-runtime.node-test.mjs` from `studio/edmg-studio` | Exit 0; 18 passed | `%TEMP%/gpu-default-node.log` |
+| Frozen aggregate Python scopes | Exit 0; repository 174 passed/6 skipped; backend 1082 passed/5 skipped | `%TEMP%\edmg-full-diagnostics-20260923-030619\backend-tests.log` |
+| Final WinUI Core suite | Exit 0; 564 passed/3 skipped external native-VST3 cases | `%TEMP%\edmg-full-diagnostics-20260923-030619\winui-core-tests-final.log` |
+| Final WinUI Release x64/XAML build | Exit 0; 0 warnings/0 errors | `%TEMP%\edmg-full-diagnostics-20260923-030619\winui-release-build-final.log` |
+| Frontend typecheck and lint | Both exit 0 | `%TEMP%\edmg-full-diagnostics-20260923-030619\frontend-typecheck.log`, `frontend-lint.log` |
+| Frontend Vitest | Exit 0; 43 files/183 tests passed | `%TEMP%\edmg-full-diagnostics-20260923-030619\frontend-tests.log` |
+| Release-toolchain Node tests | Exit 0; 108 passed/1 platform skip | `%TEMP%\edmg-full-diagnostics-20260923-030619\release-toolchain-tests.log` |
+| Live backend/readiness | `/health` ok; system readiness ready; CUDA active on RTX A6000; TensorRT diagnostic ready; validated VAE and UNet engines present | Live API observation at 2026-09-23T03:05Z |
+| WSL runtime preflight | Ubuntu WSL2 running; three RTX A6000 GPUs visible; llama.cpp 0.4.1-dev present | Direct `wsl.exe` observation at 2026-09-23T03:18Z |
 
-Targeted Ruff checks and whitespace checks pass. The aggregate run used the existing CUDA environment without synchronization; torch/torchaudio remain `2.11.0+cu130`, torchvision `0.26.0+cu130`. This does not claim full-repository lint cleanliness: the earlier audit found pre-existing backend lint issues and a missing `current_correlation` import in the generic exception handler.
-
-**Acceptance limits:** Automatic approval review blocked the attempted unpackaged GUI launch with backend spawning disabled (reason: "blocked by policy"). The updated Setup surface compiled but was not exercised interactively. No real model inference, VST3 hosting, AudioGraph mixer integration, capture, signed installer lifecycle, or Store qualification was performed. Native bounded WAVE alignment is implemented; old statements that it is entirely unavailable have been corrected in the blueprints.
-
-Copilot's Implementer section is preserved. Unrelated local changes are not part of this GPU-policy work.
+**Acceptance limits:** the currently running Debug UI predates the final Reactive/Timeline/WSL-retry build, though it is responsive and the supplied Settings screenshot plus absence of a later unhandled entry show the two saved Settings fixes loaded. Native-app UI automation was unavailable, so page-by-page interactive traversal, real render inference, audible device playback, third-party VST3 compatibility, signed installer lifecycle, Store qualification, and live TensorRT acceleration on a new render remain unclaimed. Historical failed/quarantined TensorRT records remain diagnostics, not current engine failures; current API state reports `accelerating: false` until an actual render receipt proves use.
 
 <!-- REVIEWER-UPDATE-END -->
