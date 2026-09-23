@@ -74,6 +74,9 @@ const requiredBackendSourceFiles = [
   "edmg_studio_backend/__init__.py",
   "edmg_studio_backend/app.py",
   "edmg_studio_backend/integrations/hf_bucket.py",
+  "edmg_studio_backend/runtime/adapters.py",
+  "edmg_studio_backend/runtime/resources.py",
+  "edmg_studio_backend/runtime/unet_builder.py",
   "edmg_studio_backend/services/internal_video.py",
   "edmg_studio_backend/services/internal_video_models.py",
   "edmg_studio_backend/services/model_catalog.py",
@@ -276,9 +279,15 @@ function trackedBackendFiles() {
     ["ls-files", "-z", "--", "studio/edmg-studio/python_backend"],
     { cwd: repoRoot },
   );
-  const paths = stdout.split("\0").filter(Boolean).map((relativePath) => path.join(repoRoot, relativePath));
-  if (!paths.length) throw new Error("No tracked backend source files were found");
-  return paths;
+  const tracked = new Set(stdout.split("\0").filter(Boolean).map((relativePath) => relativePath.replaceAll("\\", "/")));
+  if (!tracked.size) throw new Error("No tracked backend source files were found");
+  const missingRequired = requiredBackendSourceFiles
+    .map((relativePath) => `studio/edmg-studio/python_backend/${relativePath}`)
+    .filter((relativePath) => !tracked.has(relativePath));
+  if (missingRequired.length) {
+    throw new Error(`Required backend release sources are not tracked: ${missingRequired.join(", ")}`);
+  }
+  return [...tracked].map((relativePath) => path.join(repoRoot, relativePath));
 }
 
 async function computeBackendSourceFingerprint() {
@@ -670,7 +679,7 @@ async function stageDirectorBundle() {
 
 async function main() {
   assertNoDynamicDependencyOverrides(process.env);
-  const acceleratorProfile = resolveAcceleratorProfile({ argv: process.argv.slice(2), env: process.env });
+  const acceleratorProfile = resolveAcceleratorProfile({ argv: process.argv.slice(2).filter(arg => arg !== "--backend-only"), env: process.env });
   assertRequiredFiles();
   assertTrackedCleanDependencyInputs();
   const { uvCommand, uvVersion } = resolveUv();
@@ -699,7 +708,7 @@ async function main() {
 
   const existing = await reusableBundle(expected);
   if (existing) {
-    const directorManifest = await stageDirectorBundle();
+    const directorManifest = process.argv.includes("--backend-only") ? null : await stageDirectorBundle();
     const releaseEvidence = await writeReleaseEvidence({
       root,
       phase: "bundle",
@@ -727,7 +736,7 @@ async function main() {
 
   const sourceArtifact = buildBackendBundle(uvCommand, acceleratorProfile, releaseEnv);
   const manifest = await stageBackendBundle(sourceArtifact, expected);
-  const directorManifest = await stageDirectorBundle();
+  const directorManifest = process.argv.includes("--backend-only") ? null : await stageDirectorBundle();
   const releaseEvidence = await writeReleaseEvidence({
     root,
     phase: "bundle",

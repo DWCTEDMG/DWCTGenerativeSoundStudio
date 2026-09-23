@@ -2342,7 +2342,7 @@ public sealed class StudioApiClientTests
                      "state":"ready","installed":true,"available":true,"healthy":true,"compatible":true,"accelerating":false,
                      "tensorrt_version":"10.9","pytorch_cuda_available":true,"supported_component_count":1,"cache_bytes":42,
                      "diagnostics_scope":"last_run_receipt_not_live_health","gpus":[{"index":1}],"engines":[],
-                     "components":[{"model_family":"sd15","component":"vae_decoder","status":"adapter_available","fallback_runtime":"pytorch_cuda","optimization_eligible":true,"validated_engine_count":1,"profile_coverage":[{"input":[1,4,64,64]}],"last_engine_state":"ready"}]}
+                     "components":[{"model_family":"sd15","component":"vae_decoder","status":"adapter_available","adapter_status":"adapter_available","fallback_runtime":"pytorch_cuda","optimization_eligible":true,"validated_engine_count":1,"profile_coverage":[{"input":[1,4,64,64]}],"last_engine_state":"ready","last_engine_id":"engine-1"}]}
                     """),
                 ("POST", "/v1/runtime/settings") => JsonResponse("""{"settings":{"mode":"cpu","enabled":true},"state":"ready","installed":true,"available":true,"healthy":true,"compatible":true,"accelerating":false,"components":[],"engines":[],"gpus":[]}"""),
                 ("POST", "/v1/runtime/jobs") => JsonResponse("""{"job_id":"runtime-1","project_id":"runtime","status":"queued"}"""),
@@ -2363,11 +2363,15 @@ public sealed class StudioApiClientTests
             AllowFallback = false,
             Strict = true,
         });
-        RuntimeJobResponse job = await client.StartRuntimeJobAsync(new RuntimeJobRequest("optimize", 2, "fp16", 768, 512));
+        RuntimeJobResponse job = await client.StartRuntimeJobAsync(
+            new RuntimeJobRequest("rebuild", 2, "fp16", 768, 512, "sd15", "unet"));
         RuntimeCacheClearResponse cleared = await client.ClearRuntimeEngineAsync("engine/one");
 
         Assert.AreEqual("10.9", status.TensorRtVersion);
         Assert.IsTrue(status.Components.Single().OptimizationEligible);
+        Assert.AreEqual("adapter_available", status.Components.Single().AdapterStatus);
+        Assert.AreEqual("ready", status.Components.Single().LastEngineState);
+        Assert.AreEqual("engine-1", status.Components.Single().LastEngineId);
         Assert.HasCount(1, status.Components.Single().ProfileCoverage);
         Assert.AreEqual("cpu", saved.Settings.Mode);
         Assert.AreEqual("runtime-1", job.JobId);
@@ -2376,8 +2380,11 @@ public sealed class StudioApiClientTests
         Assert.IsFalse(settingsBody.RootElement.GetProperty("allow_fallback").GetBoolean());
         Assert.IsTrue(settingsBody.RootElement.GetProperty("strict").GetBoolean());
         using JsonDocument jobBody = JsonDocument.Parse(captured.Single(item => item.Uri.AbsolutePath == "/v1/runtime/jobs").Body);
+        Assert.AreEqual("rebuild", jobBody.RootElement.GetProperty("operation").GetString());
         Assert.AreEqual(2, jobBody.RootElement.GetProperty("device").GetInt32());
         Assert.AreEqual(768, jobBody.RootElement.GetProperty("width").GetInt32());
+        Assert.AreEqual("sd15", jobBody.RootElement.GetProperty("model_family").GetString());
+        Assert.AreEqual("unet", jobBody.RootElement.GetProperty("component").GetString());
         Assert.IsTrue(captured.Any(item => item.Method == HttpMethod.Delete && item.Uri.AbsolutePath == "/v1/runtime/tensorrt/cache/engine%2Fone"));
     }
 

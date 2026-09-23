@@ -17,6 +17,7 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class SettingsPage : Page
 {
     private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
+    private const string Vst3ScanRootsSettingKey = "Vst3.ScanRoots";
     private JsonObject? _renderProviderSettings;
     private bool _initializingAppearance;
     private bool _midiEventsSubscribed;
@@ -30,6 +31,7 @@ public sealed partial class SettingsPage : Page
         Loaded += SettingsPage_Loaded;
         Unloaded += SettingsPage_Unloaded;
         LoadRemoteControlSettings();
+        Vst3ScanRootsTextBox.Text = LoadVst3ScanRoots();
     }
 
     private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
@@ -199,15 +201,26 @@ public sealed partial class SettingsPage : Page
             var store = new Vst3CatalogStore();
             var scanner = new Vst3ScannerClient(scannerPath, store);
             Vst3Catalog catalog = store.Load();
-            Vst3CapabilityText.Text = scanner.CapabilityState == Vst3CapabilityState.ScannerReady
-                ? "Scanner ready. Native hosting and audio processing are not yet available."
-                : "Unavailable: the isolated native VST3 scanner is not installed. Plugin processing is disabled.";
-            Vst3CatalogText.Text = $"Cached modules: {catalog.Cache.Length} · Quarantined modules: {catalog.Quarantine.Length}";
+            Vst3HostCapabilities host = App.Services.Vst3Host.Capabilities;
+            Vst3CapabilityText.Text = scanner.CapabilityState == Vst3CapabilityState.ScannerReady && host.State == Vst3CapabilityState.HostReady
+                ? "Native scanner and crash-isolated VST3 worker are ready for float32 effect processing, parameters, state, and latency."
+                : scanner.CapabilityState == Vst3CapabilityState.ScannerReady
+                    ? $"Scanner ready. Host unavailable: {host.Diagnostic}"
+                    : host.State == Vst3CapabilityState.HostReady
+                        ? "Host ready. Scanner unavailable: EdmgStudio.Vst3Scanner.exe is not installed; discovery is disabled."
+                        : $"VST3 unavailable. Scanner: EdmgStudio.Vst3Scanner.exe is not installed. Host: {host.Diagnostic}";
+            Vst3CatalogText.Text = $"Cached modules: {catalog.Cache.Length} · Quarantined modules: {catalog.Quarantine.Length} · Active worker capability: {host.State}";
+            IEnumerable<string> modules = catalog.Cache.Select(entry =>
+                $"READY · {entry.Fingerprint.ModulePath} · {entry.Plugins.Length} effect class(es)");
+            IEnumerable<string> quarantine = catalog.Quarantine.Select(entry =>
+                $"QUARANTINED · {entry.Fingerprint.ModulePath} · failures {entry.FailureCount} · {entry.Reason}");
+            Vst3CatalogDetailsText.Text = string.Join(Environment.NewLine, modules.Concat(quarantine).DefaultIfEmpty("No modules have been explicitly scanned."));
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             Vst3CapabilityText.Text = "VST3 discovery unavailable.";
             Vst3CatalogText.Text = exception.Message;
+            Vst3CatalogDetailsText.Text = string.Empty;
         }
     }
 
@@ -215,6 +228,79 @@ public sealed partial class SettingsPage : Page
     {
         LoadVst3Status();
         ShowStatus("VST3 capability and catalog status refreshed.", InfoBarSeverity.Success);
+    }
+
+    private async void BrowseVst3RootButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.MainWindowInstance is null) return;
+        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
+        StorageFolder? folder = await picker.PickSingleFolderAsync();
+        if (folder is null) return;
+        string[] roots = ParseVst3ScanRoots().Append(folder.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        Vst3ScanRootsTextBox.Text = string.Join(Environment.NewLine, roots);
+        SaveVst3ScanRoots();
+    }
+
+    private async void ScanVst3Button_Click(object sender, RoutedEventArgs e)
+    {
+        string[] roots = ParseVst3ScanRoots();
+        if (roots.Length == 0)
+        {
+            ShowStatus("Add at least one VST3 folder or module path.", InfoBarSeverity.Warning);
+            return;
+        }
+        SaveVst3ScanRoots();
+        string scannerPath = Path.Combine(AppContext.BaseDirectory, "EdmgStudio.Vst3Scanner.exe");
+        var scanner = new Vst3ScannerClient(scannerPath, new Vst3CatalogStore());
+        ImmutableArray<string> modules = Vst3ModuleDiscovery.EnumerateModules(roots);
+        if (modules.Length == 0)
+        {
+            ShowStatus("No .vst3 modules were found in the requested roots.", InfoBarSeverity.Warning);
+            return;
+        }
+        int succeeded = 0;
+        int unsupported = 0;
+        foreach (string module in modules)
+        {
+            try
+            {
+                Vst3ScanResult result = await scanner.ScanAsync(module, TimeSpan.FromSeconds(20), force: true);
+                if (result.Status == Vst3ScanStatus.Success) succeeded++;
+                else if (result.Status == Vst3ScanStatus.Unsupported) unsupported++;
+            }
+            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException)
+            {
+                ShowStatus($"VST3 scan could not inspect '{module}': {exception.Message}", InfoBarSeverity.Warning);
+            }
+        }
+        LoadVst3Status();
+        int failed = modules.Length - succeeded - unsupported;
+        ShowStatus($"VST3 scan finished: {succeeded} ready, {unsupported} unsupported, {failed} failed. Failures are quarantined with details below.",
+            failed == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+    }
+
+    private string[] ParseVst3ScanRoots() => Vst3ScanRootsTextBox.Text
+        .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(Environment.ExpandEnvironmentVariables)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    private static string LoadVst3ScanRoots()
+    {
+        if (ApplicationData.Current.LocalSettings.Values[Vst3ScanRootsSettingKey] is string saved)
+            return saved;
+        return string.Join(Environment.NewLine, Vst3ModuleDiscovery.StandardWindowsRoots());
+    }
+
+    private void SaveVst3ScanRoots()
+    {
+        try { ApplicationData.Current.LocalSettings.Values[Vst3ScanRootsSettingKey] = string.Join(Environment.NewLine, ParseVst3ScanRoots()); }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            ShowStatus($"VST3 scan roots could not be saved: {exception.Message}", InfoBarSeverity.Warning);
+        }
     }
 
     private async void ClearVst3QuarantineButton_Click(object sender, RoutedEventArgs e)

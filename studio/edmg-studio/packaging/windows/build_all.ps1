@@ -216,7 +216,11 @@ Write-Host "[2/2] Building and finalizing one candidate-bound Windows release...
 Invoke-Checked "prepare locked DirectML release bundle" { & $PnpmExe run prepare:release-bundle:directml }
 Invoke-Checked "release metadata checks" { & $PnpmExe run check:release-metadata }
 $stageScript = Join-Path $StudioDir "packaging\windows\stage_winui_msix.ps1"
-& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stageScript -ReleaseMode production -IncludeProductionBackend -RequireSigning
+$vst3HostPath = [string]$env:EDMG_VST3_HOST_PATH
+if ([string]::IsNullOrWhiteSpace($vst3HostPath)) { throw "EDMG_VST3_HOST_PATH must identify the clean-built Release/x64 native host." }
+$vst3ScannerPath = [string]$env:EDMG_VST3_SCANNER_PATH
+if ([string]::IsNullOrWhiteSpace($vst3ScannerPath)) { throw "EDMG_VST3_SCANNER_PATH must identify the clean-built Release/x64 native scanner." }
+& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stageScript -ReleaseMode production -IncludeProductionBackend -RequireSigning -Vst3HostPath $vst3HostPath -Vst3ScannerPath $vst3ScannerPath
 if ($LASTEXITCODE -ne 0) { throw "Intermediate MSIX staging failed with exit code $LASTEXITCODE" }
 $msixMetadataPath = Join-Path $StudioDir "release\winui-msix\winui-msix.json"
 $msixMetadata = Get-Content -Raw -LiteralPath $msixMetadataPath | ConvertFrom-Json

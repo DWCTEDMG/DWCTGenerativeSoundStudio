@@ -848,6 +848,9 @@ public sealed record RuntimeComponentStatus
     [JsonPropertyName("status")]
     public string Status { get; init; } = string.Empty;
 
+    [JsonPropertyName("adapter_status")]
+    public string AdapterStatus { get; init; } = string.Empty;
+
     [JsonPropertyName("fallback_runtime")]
     public string FallbackRuntime { get; init; } = string.Empty;
 
@@ -935,7 +938,9 @@ public sealed record RuntimeJobRequest(
     [property: JsonPropertyName("device")] int Device = 0,
     [property: JsonPropertyName("precision")] string Precision = "fp16",
     [property: JsonPropertyName("width")] int Width = 512,
-    [property: JsonPropertyName("height")] int Height = 512);
+    [property: JsonPropertyName("height")] int Height = 512,
+    [property: JsonPropertyName("model_family")] string ModelFamily = "sd15",
+    [property: JsonPropertyName("component")] string Component = "vae_decoder");
 
 public sealed record RuntimeJobResponse(
     [property: JsonPropertyName("job_id")] string JobId,

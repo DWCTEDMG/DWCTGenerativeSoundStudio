@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -33,6 +34,9 @@ SOURCE_ROOTS = (
     STUDIO_ROOT / "scripts",
     STUDIO_ROOT / "tools",
     BACKEND_ROOT / "edmg_studio_backend",
+)
+VENDORED_SOURCE_ROOTS = (
+    STUDIO_ROOT / "tools" / "LTX-2-v1.3.0",
 )
 
 # These scripts provision independent, upstream sidecar environments. They do
@@ -66,6 +70,25 @@ DYNAMIC_INDEX_NAMES = {
 }
 
 
+def _ignored_sources(candidates: list[Path]) -> set[Path]:
+    if not candidates:
+        return set()
+    relative = [str(path.relative_to(REPO_ROOT)) for path in candidates]
+    result = subprocess.run(
+        ["git", "check-ignore", "-z", "--stdin"],
+        cwd=REPO_ROOT,
+        input="\0".join(relative).encode(),
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode not in {0, 1}:
+        raise RuntimeError(
+            f"git check-ignore failed: {result.stderr.decode(errors='replace').strip()}"
+        )
+    ignored = result.stdout.decode(errors="surrogateescape").split("\0")
+    return {REPO_ROOT / line for line in ignored if line}
+
+
 def _execution_sources() -> list[Path]:
     paths: set[Path] = {
         REPO_ROOT / "RUN_ME.bat",
@@ -74,11 +97,14 @@ def _execution_sources() -> list[Path]:
         STUDIO_ROOT / "run_me.sh",
         STUDIO_ROOT / "python_backend" / "Dockerfile",
     }
+    discovered: list[Path] = []
     for root in SOURCE_ROOTS:
         if not root.exists():
             continue
         for candidate in root.rglob("*"):
             if not candidate.is_file():
+                continue
+            if any(candidate.is_relative_to(vendor) for vendor in VENDORED_SOURCE_ROOTS):
                 continue
             if "tests" in candidate.parts or candidate.name.endswith(".test.mjs"):
                 continue
@@ -86,7 +112,8 @@ def _execution_sources() -> list[Path]:
                 candidate.suffix.lower() in SOURCE_SUFFIXES
                 or candidate.name == "Dockerfile"
             ):
-                paths.add(candidate)
+                discovered.append(candidate)
+    paths.update(set(discovered) - _ignored_sources(discovered))
     return sorted(paths)
 
 

@@ -49,6 +49,25 @@ public sealed class InternalVideoRenderRequestBuilderTests
     }
 
     [TestMethod]
+    public void MotionRequest_SerializesSharedRuntimeDeviceContract()
+    {
+        JsonElement request = JsonSerializer.SerializeToElement(new RenderMotionRequest
+        {
+            Runtime = new OperationRuntimeOptions
+            {
+                Mode = "performance",
+                Device = 2,
+                AllowFallback = false,
+            },
+        });
+
+        JsonElement runtime = request.GetProperty("runtime");
+        Assert.AreEqual("performance", runtime.GetProperty("mode").GetString());
+        Assert.AreEqual(2, runtime.GetProperty("device").GetInt32());
+        Assert.IsFalse(runtime.GetProperty("allow_fallback").GetBoolean());
+    }
+
+    [TestMethod]
     public void Build_SerializesAdvancedSettingsAndBackendRefinerContract()
     {
         JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings

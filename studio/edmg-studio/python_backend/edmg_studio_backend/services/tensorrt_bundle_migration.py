@@ -237,13 +237,15 @@ class TensorRTBundleMigration:
         path: Path,
         *,
         cancel_check: CancelCheck | None = None,
+        use_cache: bool = True,
     ) -> str:
         size, mtime_ns = self._signature(path)
         key = (os.path.normcase(str(path.resolve())), size, mtime_ns)
-        with self._hash_lock:
-            cached = self._hash_cache.get(key)
-        if cached:
-            return cached
+        if use_cache:
+            with self._hash_lock:
+                cached = self._hash_cache.get(key)
+            if cached:
+                return cached
 
         digest = hashlib.sha256()
         with path.open("rb") as handle:
@@ -479,7 +481,7 @@ class TensorRTBundleMigration:
             if include_hashes and safe_regular and size_matches and _sha256_shape(expected_hash):
                 try:
                     assert path is not None
-                    hash_matches = self._cached_sha256(path) == expected_hash
+                    hash_matches = self._cached_sha256(path, use_cache=False) == expected_hash
                 except (OSError, UserFacingError):
                     hash_matches = False
             if not safe_regular or not size_matches or not mtime_matches or hash_matches is False:
@@ -592,7 +594,15 @@ class TensorRTBundleMigration:
             mtime_matches = bool(
                 _strict_positive_int(expected_mtime_ns) and expected_mtime_ns == mtime_ns
             )
-            if not safe_regular or not size_matches or not mtime_matches:
+            expected_hash = str(record.get("sha256") or "").lower()
+            hash_matches: bool | None = None
+            if include_hashes and safe_regular and size_matches and _sha256_shape(expected_hash):
+                try:
+                    assert path is not None
+                    hash_matches = self._cached_sha256(path, use_cache=False) == expected_hash
+                except (OSError, UserFacingError):
+                    hash_matches = False
+            if not safe_regular or not size_matches or not mtime_matches or hash_matches is False:
                 onnx_files_valid = False
             if path is not None and safe_regular and role:
                 onnx_paths[role] = path
@@ -604,12 +614,20 @@ class TensorRTBundleMigration:
                     "safe_regular_file": safe_regular,
                     "manifest_size_matches": size_matches,
                     "manifest_mtime_matches": mtime_matches,
+                    "hash_matches": hash_matches,
                 }
             )
         declared_onnx_paths = {path.lower() for path in onnx_declared_paths if path}
         if declared_onnx_paths != actual_onnx_paths:
             onnx_files_valid = False
-        onnx_ready = bool(onnx_manifest_valid and onnx_files_valid)
+        onnx_ready = bool(
+            onnx_manifest_valid
+            and onnx_files_valid
+            and (
+                not include_hashes
+                or all(row["hash_matches"] is True for row in onnx_file_rows)
+            )
+        )
 
         manifest_profile = manifest.get("profile") if isinstance(manifest.get("profile"), dict) else {}
         profile_width = manifest_profile.get("width")

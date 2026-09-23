@@ -6,7 +6,8 @@ public enum MixerChannelKind { Track, Group, FxReturn, Master }
 public enum MixerTap { PreFader, PostFader }
 public sealed record MixerInsert(
     string Id, int LatencySamples, bool Enabled = true, bool Bypassed = false,
-    string? PluginId = null, string? PresetName = null, string? StateBase64 = null);
+    string? PluginId = null, string? PresetName = null, string? StateBase64 = null,
+    string? ModulePath = null, string? ModuleSha256 = null);
 public sealed record MixerSend(string Id, string DestinationId, MixerTap Tap, float Gain);
 public sealed record MixerChannel(
     string Id, string Name, MixerChannelKind Kind, string? OutputId,

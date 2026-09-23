@@ -1377,7 +1377,10 @@ public sealed partial class RenderPage : Page
           height: Number(MotionHeightBox, 432),
           steps: Number(MotionStepsBox, 24),
           negativePrompt: MotionNegativeBox.Text.Trim(),
-          device: Selected(MotionDeviceComboBox, "cuda"));
+          device: OperationDevicePreference(Selected(MotionDeviceComboBox, "cuda")))
+    {
+      Runtime = BuildOperationRuntime()
+    };
   }
 
   private async void RenderMotionScenes_Click(object sender, RoutedEventArgs e)
@@ -1411,8 +1414,8 @@ public sealed partial class RenderPage : Page
           modelId: EmptyToNull(TensorModelBox.Text),
           prompt: EmptyToNull(TensorPromptBox.Text),
           seed: NullableLongNumber(TensorSeedBox),
-          width: Number(TensorWidthBox, 1024),
-          height: Number(TensorHeightBox, 1024),
+          width: Number(TensorWidthBox, 512),
+          height: Number(TensorHeightBox, 512),
           steps: Number(TensorStepsBox, 28),
           cfg: Number(TensorCfgBox, 7.0),
           sampler: Selected(TensorSamplerComboBox, "pndm"),

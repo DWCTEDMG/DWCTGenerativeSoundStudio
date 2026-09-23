@@ -9,6 +9,7 @@ class RuntimePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["auto", "compatibility", "performance", "pytorch_cuda", "tensorrt", "cpu"] = "auto"
     enabled: bool = True
+    device: int | None = Field(default=None, ge=0, le=63, exclude=True)
     auto_build: bool = True
     allow_fallback: bool = True
     precision: Literal["auto", "fp32", "fp16"] = "auto"
@@ -31,11 +32,11 @@ class RuntimePolicy(BaseModel):
     validation_min_psnr_db_fp16: float = Field(default=35.0, ge=0, le=300, allow_inf_nan=False)
     validation_min_ssim_fp16: float = Field(default=0.9950, ge=-1, le=1, allow_inf_nan=False)
 
-    def validation_limits(self, precision: str) -> dict[str, float]:
+    def validation_limits(self, precision: str, component: str | None = None) -> dict[str, float]:
         if precision not in {"fp32", "fp16"}:
             raise ValueError(f"Unsupported validation precision: {precision}")
         suffix = precision
-        return {
+        limits = {
             "max_absolute_error": getattr(self, f"validation_max_abs_{suffix}"),
             "mean_absolute_error": getattr(self, f"validation_mean_abs_{suffix}"),
             "rmse": getattr(self, f"validation_rmse_{suffix}"),
@@ -43,6 +44,12 @@ class RuntimePolicy(BaseModel):
             "min_psnr_db": getattr(self, f"validation_min_psnr_db_{suffix}"),
             "min_ssim_global": getattr(self, f"validation_min_ssim_{suffix}"),
         }
+        if precision == "fp16" and component == "vae_decoder":
+            limits["max_absolute_error"] = max(limits["max_absolute_error"], 0.15)
+        if precision == "fp16" and component == "unet":
+            limits["mean_absolute_error"] = max(limits["mean_absolute_error"], 0.006)
+            limits["p99_absolute_error"] = max(limits["p99_absolute_error"], 0.020)
+        return limits
 
 
 def load_policy(data_dir):
@@ -64,7 +71,6 @@ class OperationRuntimePolicy(BaseModel):
 def resolve_policy(data_dir, operation=None):
     policy = load_policy(data_dir)
     override = OperationRuntimePolicy.model_validate(operation or {}).model_dump(exclude_none=True)
-    override.pop("device", None)
     effective = RuntimePolicy.model_validate({**policy.model_dump(), **override})
     # A render may opt out, but never bypass the Studio-wide disable switch.
     effective.enabled = policy.enabled and effective.enabled

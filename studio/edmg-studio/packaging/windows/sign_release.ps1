@@ -296,8 +296,24 @@ $required = [bool]$RequireSigning -or (ConvertTo-BooleanSetting $env:EDMG_REQUIR
 $artifacts = @(Resolve-SignableArtifacts $StudioDir $ArtifactPaths)
 $certificateReference = [string]$env:EDMG_CODE_SIGN_CERT
 $certificate = Resolve-CertificateConfiguration $certificateReference $StudioDir
+$artifactMetadata = [string]$env:EDMG_ARTIFACT_SIGNING_METADATA
+$artifactDlib = [string]$env:EDMG_ARTIFACT_SIGNING_DLIB
+$artifactPublisher = "CN=Driftwoodcraftthing, O=Driftwoodcraftthing, STREET=1815 Sterling Avenue, L=Cincinnati, S=Ohio, C=US, PostalCode=45239"
+if ($artifactMetadata) {
+  if ($certificateReference) { throw "Choose Artifact Signing or a local certificate, not both." }
+  if (-not (Test-Path -LiteralPath $artifactMetadata -PathType Leaf)) { throw "Artifact Signing metadata is missing." }
+  $metadata = Get-Content -Raw -LiteralPath $artifactMetadata | ConvertFrom-Json
+  if ($metadata.Endpoint -ne "https://eus.codesigning.azure.net/" -or
+      $metadata.CodeSigningAccountName -ne "dwctartifactsigning" -or
+      $metadata.CertificateProfileName -ne "DriftwoodcraftthingProductions") { throw "Unexpected Artifact Signing endpoint/account/profile." }
+  if (-not $artifactDlib) { $artifactDlib = Join-Path $env:LOCALAPPDATA "Microsoft\MicrosoftArtifactSigningClientTools\Azure.CodeSigning.Dlib.dll" }
+  if (-not (Test-Path -LiteralPath $artifactDlib -PathType Leaf)) { throw "Artifact Signing Dlib is missing." }
+  $certificate = @{ Mode = "artifact"; Thumbprint = "" }
+}
 $timestampUrl = if ($env:EDMG_CODE_SIGN_TIMESTAMP_URL) {
   [string]$env:EDMG_CODE_SIGN_TIMESTAMP_URL
+} elseif ($artifactMetadata) {
+  "http://timestamp.acs.microsoft.com"
 } else {
   "http://timestamp.digicert.com"
 }
@@ -379,6 +395,7 @@ try {
           [StringComparison]::OrdinalIgnoreCase
         )
       )
+      if ($certificate.Mode -eq "artifact") { $beforeMatchesConfiguredSigner = $before.signerSubject -ceq $artifactPublisher }
 
       if ($before.status -eq "Valid" -and $beforeMatchesConfiguredSigner) {
         if (-not $signTool) { $signTool = Resolve-SignTool $SignToolPath }
@@ -406,7 +423,9 @@ try {
       } else {
         if (-not $signTool) { $signTool = Resolve-SignTool $SignToolPath }
         $signArguments = @("sign", "/fd", "SHA256", "/td", "SHA256", "/tr", $timestampUrl, "/v")
-        if ($certificate.Mode -eq "pfx") {
+        if ($certificate.Mode -eq "artifact") {
+          $signArguments += @("/dlib", $artifactDlib, "/dmdf", $artifactMetadata)
+        } elseif ($certificate.Mode -eq "pfx") {
           $signArguments += @("/a", "/f", $certificate.Path)
           $password = [string]$env:EDMG_CODE_SIGN_PASSWORD
           if ($password) { $signArguments += @("/p", $password) }
@@ -420,7 +439,10 @@ try {
         if ($after.status -ne "Valid") {
           throw "Get-AuthenticodeSignature rejected $relativePath after signing (status: $($after.status))."
         }
-        if (-not [string]::Equals(
+        if ($certificate.Mode -eq "artifact" -and $after.signerSubject -cne $artifactPublisher) {
+          throw "Artifact Signing returned an unexpected publisher."
+        }
+        if ($certificate.Mode -ne "artifact" -and -not [string]::Equals(
           ([string]$after.signerThumbprint).Replace(" ", ""),
           ([string]$certificate.Thumbprint).Replace(" ", ""),
           [StringComparison]::OrdinalIgnoreCase

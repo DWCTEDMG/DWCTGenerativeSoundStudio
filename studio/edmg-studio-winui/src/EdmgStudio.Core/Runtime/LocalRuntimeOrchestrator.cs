@@ -6,7 +6,7 @@ namespace EdmgStudio.Core.Runtime;
 
 public sealed class LocalRuntimeOrchestrator : ILocalRuntimeOrchestrator
 {
-    private readonly IReadOnlyDictionary<LocalRuntimeType, ILocalInferenceRuntime> _runtimes;
+    private readonly Dictionary<LocalRuntimeType, ILocalInferenceRuntime> _runtimes;
     private readonly IWslCommandRunner _runner;
     private readonly IGpuDiscoveryService _gpuDiscovery;
     private readonly IRuntimeHealthService _health;
@@ -81,6 +81,7 @@ public sealed class LocalRuntimeOrchestrator : ILocalRuntimeOrchestrator
     public async Task StartAsync(string? profileId = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        if (!Settings.Enabled) throw new InvalidOperationException("Local Director runtime orchestration is disabled in Studio settings.");
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCancellation.Token);
         await _lifecycleLock.WaitAsync(linkedCancellation.Token).ConfigureAwait(false);
         try

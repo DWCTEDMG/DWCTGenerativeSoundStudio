@@ -7378,7 +7378,18 @@ def _execute_job_body(job):
                 job.result = res
                 job.status = "succeeded"
         elif job.type == "tensorrt_standalone":
-            res = _run_tensorrt_standalone(job.project_id, job.id, job.payload)
+            try:
+                res = _run_tensorrt_standalone(
+                    job.project_id,
+                    job.id,
+                    job.payload,
+                    cancel_check=lambda: not _job_attempt_active(job),
+                )
+            except Exception as exc:
+                from .services.tensorrt_standalone import TensorRTRenderCanceled
+                if isinstance(exc, TensorRTRenderCanceled):
+                    raise JobCanceled(str(exc)) from exc
+                raise
             job.result = res
             job.status = "succeeded"
         elif job.type == "tensorrt_deforum":
@@ -8596,11 +8607,22 @@ def _run_comfyui_motion_scene(project_id: str, job_id: str, payload: dict[str, A
     finally:
         comfy_pool.release(node_url)
 
-def _run_tensorrt_standalone(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _run_tensorrt_standalone(
+    project_id: str,
+    job_id: str,
+    payload: dict[str, Any],
+    *,
+    cancel_check=None,
+) -> dict[str, Any]:
     from .services import tensorrt_standalone as trt_service
 
     execution_payload = _resolved_tensorrt_execution_payload(payload)
-    return trt_service.run_job(project_id, job_id, execution_payload)
+    return trt_service.run_job(
+        project_id,
+        job_id,
+        execution_payload,
+        cancel_check=cancel_check,
+    )
 
 def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     preflight = _internal_render_preflight_data(project_id, payload)

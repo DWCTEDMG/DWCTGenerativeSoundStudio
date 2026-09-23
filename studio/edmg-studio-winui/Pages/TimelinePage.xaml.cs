@@ -116,6 +116,9 @@ public sealed partial class TimelinePage : Page
     private JsonObject? _pendingReconformDocument;
     private bool _creatingAutomationPoint;
     private bool _creatingCompRange;
+    private string? _selectedVst3InsertId;
+    private readonly Dictionary<string, ImmutableArray<Vst3ParameterDescriptor>> _vst3Parameters = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _activeVst3InstanceIds = new(StringComparer.Ordinal);
     private AudioAutomationSnapshot _automationSnapshot = new([]);
     private TimelinePointerTool _pointerTool;
     private readonly List<IDisposable> _commandRegistrations = [];
@@ -189,6 +192,7 @@ public sealed partial class TimelinePage : Page
         _pageCancellation?.Dispose();
         _pageCancellation = null;
         Interlocked.Increment(ref _audioGraphGeneration);
+        _ = RemoveAllVst3WorkersAsync();
     }
 
     private void Session_Changed(object? sender, EventArgs e)
@@ -282,6 +286,7 @@ public sealed partial class TimelinePage : Page
         SetBusy(true);
         StopPlayback();
         CancelPreview();
+        await RemoveAllVst3WorkersAsync();
         ResetAiEditProposal();
         SourceAssetComboBox.ItemsSource = null;
         SourceAssetComboBox.SelectedItem = null;
@@ -1164,6 +1169,7 @@ public sealed partial class TimelinePage : Page
         {
             MixerSurfaceText.Text = "Load a project to inspect the mixer.";
             MixerInsertSendText.Text = "No channel selected.";
+            RefreshVst3InsertEditor(null, false);
             MixerPdcText.Text = "PDC: unavailable";
         }
         else
@@ -1173,9 +1179,9 @@ public sealed partial class TimelinePage : Page
                 $"{channel.Kind} · {channel.Name} · {(channel.Muted ? "MUTE" : channel.Solo ? "SOLO" : "active")} · → {channel.OutputId ?? "device"}"));
             MixerInsertSendText.Text = selectedChannel is null
                 ? "Select an audio channel to inspect its slots."
-                : $"Inserts: {(selectedChannel.Inserts.Length == 0 ? "None" : string.Join(", ", selectedChannel.Inserts.Select(insert => $"{insert.PluginId} ({(insert.Bypassed ? "bypassed" : "enabled")}, {insert.ReportedLatencySamples} samples)")))}\n" +
-                  $"Sends: {(selectedChannel.Sends.Length == 0 ? "None" : string.Join(", ", selectedChannel.Sends.Select(send => $"{send.Tap} → {send.DestinationId} @ {send.Gain:0.##}")))}";
-            MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Preallocated delay buffers are qualified in the Core callback adapter, not connected to AudioGraph file playback.";
+                : $"Inserts execute in listed order. Sends: {(selectedChannel.Sends.Length == 0 ? "None" : string.Join(", ", selectedChannel.Sends.Select(send => $"{send.Tap} → {send.DestinationId} @ {send.Gain:0.##}")))}";
+            RefreshVst3InsertEditor(selectedChannel, canEdit);
+            MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Preallocated delay buffers execute in live AudioGraph playback.";
         }
 
         MixerGainNumberBox.IsEnabled = canEdit;
@@ -1414,6 +1420,215 @@ public sealed partial class TimelinePage : Page
         }
 
         return false;
+    }
+
+    private void RefreshVst3InsertEditor(MixerChannelDocument? channel, bool canEdit)
+    {
+        Vst3Catalog catalog = new Vst3CatalogStore().Load();
+        Vst3CatalogComboBox.ItemsSource = catalog.Cache.SelectMany(entry => entry.Plugins.Select(plugin =>
+            new Vst3CatalogItem(plugin.Name, plugin.PluginId, entry.Fingerprint.ModulePath, entry.Fingerprint.Sha256))).ToArray();
+        Vst3CatalogComboBox.IsEnabled = canEdit && Vst3CatalogComboBox.Items.Count > 0;
+        Vst3InsertListView.ItemsSource = channel?.Inserts.Select(insert => new Vst3InsertItem(
+            insert.Id, insert.PluginId,
+            $"{(insert.Enabled ? insert.Bypassed ? "bypassed" : "enabled" : "disabled")} · {insert.ReportedLatencySamples} samples · {System.IO.Path.GetFileName(insert.ModulePath)}")).ToArray() ?? [];
+        if (_selectedVst3InsertId is null || channel?.Inserts.All(insert => insert.Id != _selectedVst3InsertId) != false)
+            _selectedVst3InsertId = channel?.Inserts.FirstOrDefault()?.Id;
+        Vst3InsertListView.SelectedItem = (Vst3InsertListView.ItemsSource as Vst3InsertItem[])?.FirstOrDefault(item => item.Id == _selectedVst3InsertId);
+        MixerPluginInstanceDocument? selected = channel?.Inserts.FirstOrDefault(insert => insert.Id == _selectedVst3InsertId);
+        Vst3EnabledToggle.IsOn = selected?.Enabled ?? false;
+        Vst3BypassToggle.IsOn = selected?.Bypassed ?? false;
+        Vst3EnabledToggle.IsEnabled = Vst3BypassToggle.IsEnabled = canEdit && selected is not null;
+        Vst3WorkerStatusText.Text = selected is null ? "No VST3 insert selected." : DescribeVst3Worker(selected);
+        Vst3PresetNameTextBox.Text = selected?.PresetName ?? string.Empty;
+        if (selected is not null && App.Services.Vst3Host.TryGetProcessor(selected.Id, out _) &&
+            _vst3Parameters.TryGetValue(selected.Id, out ImmutableArray<Vst3ParameterDescriptor> parameters))
+        {
+            uint? selectedParameterId = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.Id;
+            Vst3ParameterComboBox.ItemsSource = parameters;
+            Vst3ParameterComboBox.SelectedItem = parameters.FirstOrDefault(parameter => parameter.Id == selectedParameterId) ?? parameters.FirstOrDefault();
+            Vst3ParameterValueBox.Value = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.NormalizedValue ?? double.NaN;
+        }
+        else
+        {
+            Vst3ParameterComboBox.ItemsSource = null;
+            Vst3ParameterValueBox.Value = double.NaN;
+        }
+    }
+
+    private string DescribeVst3Worker(MixerPluginInstanceDocument insert)
+    {
+        if (!App.Services.Vst3Host.TryGetProcessor(insert.Id, out IVst3InsertProcessor? processor) || processor is null)
+            return $"Worker not started · module fingerprint {insert.ModuleSha256 ?? "unavailable"}.";
+        return $"Worker {processor.Health} · latency {processor.ReportedLatencySamples} samples · {processor.Diagnostic ?? "no diagnostic"}";
+    }
+
+    private async Task CommitVst3ChannelAsync(MixerChannelDocument updatedChannel, string reason)
+    {
+        JsonObject before = CloneDocument(_timelineDocument!);
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument!, _canonicalProject!);
+        MixerDocument updated = document with { Channels = document.Channels.Replace(document.Channels.Single(channel => channel.Id == updatedChannel.Id), updatedChannel) };
+        await CommitDocumentAsync(before, MixerDocumentCodec.Write(_timelineDocument!, updated), reason, _selectedLaneId, _selectedCameraKeyframeIdentity);
+    }
+
+    private async void AddVst3Insert_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || Vst3CatalogComboBox.SelectedItem is not Vst3CatalogItem plugin) return;
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+        string id = $"vst3-{Guid.NewGuid():N}";
+        _selectedVst3InsertId = id;
+        await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Add(new(id, plugin.PluginId, true, false, 0, null, null, [], plugin.ModulePath, plugin.ModuleSha256)) }, $"VST3 insert {plugin.Label} added");
+    }
+
+    private async void RemoveVst3Insert_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+        string instanceId = _selectedVst3InsertId;
+        await App.Services.Vst3Host.RemoveInstanceAsync(instanceId);
+        _vst3Parameters.Remove(instanceId);
+        _activeVst3InstanceIds.Remove(instanceId);
+        _selectedVst3InsertId = null;
+        await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.RemoveAll(insert => insert.Id == instanceId) }, "VST3 insert removed");
+    }
+
+    private void Vst3InsertListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _selectedVst3InsertId = (Vst3InsertListView.SelectedItem as Vst3InsertItem)?.Id;
+        RefreshMixerEditor();
+    }
+
+    private void MoveVst3InsertUp_Click(object sender, RoutedEventArgs e) => _ = MoveVst3InsertAsync(-1);
+    private void MoveVst3InsertDown_Click(object sender, RoutedEventArgs e) => _ = MoveVst3InsertAsync(1);
+
+    private async Task MoveVst3InsertAsync(int offset)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+        int index = -1;
+        for (int candidate = 0; candidate < channel.Inserts.Length; candidate++)
+            if (channel.Inserts[candidate].Id == _selectedVst3InsertId) { index = candidate; break; }
+        int destination = index + offset;
+        if (index < 0 || destination < 0 || destination >= channel.Inserts.Length) return;
+        MixerPluginInstanceDocument moving = channel.Inserts[index];
+        ImmutableArray<MixerPluginInstanceDocument> reordered = channel.Inserts.RemoveAt(index).Insert(destination, moving);
+        await CommitVst3ChannelAsync(channel with { Inserts = reordered }, "VST3 insert reordered");
+    }
+
+    private async void ApplyVst3InsertSwitches_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+        MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
+        await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with { Enabled = Vst3EnabledToggle.IsOn, Bypassed = Vst3BypassToggle.IsOn }) }, "VST3 insert switches updated");
+    }
+
+    private async void StartVst3Worker_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+        MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
+        if (string.IsNullOrWhiteSpace(insert.ModulePath) || string.IsNullOrWhiteSpace(insert.ModuleSha256)) { ShowInfo("The insert has no persisted module identity.", InfoBarSeverity.Warning); return; }
+        try
+        {
+            Vst3ModuleFingerprint fingerprint = await Vst3ModuleFingerprinting.CreateAsync(insert.ModulePath);
+            if (!string.Equals(fingerprint.Sha256, insert.ModuleSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                ShowInfo("The VST3 module changed after discovery. Rescan it before starting a worker.", InfoBarSeverity.Error);
+                return;
+            }
+            Vst3InstanceStatus status = await App.Services.Vst3Host.CreateInstanceAsync(new(insert.Id, insert.ModulePath, insert.PluginId, 48000, DefaultAudioBufferFrames));
+            if (!status.Active) { ShowInfo(status.Diagnostic ?? "VST3 worker did not become active.", InfoBarSeverity.Warning); return; }
+            _activeVst3InstanceIds.Add(insert.Id);
+            if (!string.IsNullOrWhiteSpace(insert.StateBase64))
+                status = await App.Services.Vst3Host.SetStateAsync(insert.Id, Convert.FromBase64String(insert.StateBase64));
+            _vst3Parameters[insert.Id] = status.Parameters;
+            Vst3ParameterComboBox.ItemsSource = status.Parameters;
+            Vst3ParameterComboBox.SelectedIndex = status.Parameters.Length > 0 ? 0 : -1;
+            Vst3ParameterValueBox.Value = status.Parameters.FirstOrDefault()?.NormalizedValue ?? double.NaN;
+            await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with { ReportedLatencySamples = status.ReportedLatencySamples }) }, "VST3 worker activated");
+        }
+        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+    }
+
+    private void Vst3ParameterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        Vst3ParameterValueBox.Value = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.NormalizedValue ?? double.NaN;
+    }
+
+    private async void ApplyVst3Parameter_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedVst3InsertId is null || Vst3ParameterComboBox.SelectedItem is not Vst3ParameterDescriptor parameter || !TryReadFinite(Vst3ParameterValueBox, out double value)) return;
+        try { await App.Services.Vst3Host.SetParameterAsync(_selectedVst3InsertId, parameter.Id, Math.Clamp(value, 0, 1)); RefreshMixerEditor(); }
+        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+    }
+
+    private async void CaptureVst3State_Click(object sender, RoutedEventArgs e)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
+        try
+        {
+            ReadOnlyMemory<byte> state = await App.Services.Vst3Host.GetStateAsync(_selectedVst3InsertId);
+            MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+            MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+            MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
+            await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with
+            {
+                StateBase64 = Convert.ToBase64String(state.Span),
+                PresetName = string.IsNullOrWhiteSpace(Vst3PresetNameTextBox.Text) ? null : Vst3PresetNameTextBox.Text.Trim()
+            }) }, "VST3 state captured");
+        }
+        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+    }
+
+    private async Task CaptureActiveVst3StatesAsync(CancellationToken cancellationToken)
+    {
+        if (_timelineDocument is null || _canonicalProject is null || _activeVst3InstanceIds.Count == 0) return;
+        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+        var activeInDocument = document.Channels.SelectMany(channel => channel.Inserts)
+            .Select(insert => insert.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (string stale in _activeVst3InstanceIds.Where(id => !activeInDocument.Contains(id)).ToArray())
+        {
+            await App.Services.Vst3Host.RemoveInstanceAsync(stale, cancellationToken);
+            _activeVst3InstanceIds.Remove(stale);
+            _vst3Parameters.Remove(stale);
+        }
+
+        ImmutableArray<MixerChannelDocument>.Builder channels = document.Channels.ToBuilder();
+        bool changed = false;
+        for (int channelIndex = 0; channelIndex < channels.Count; channelIndex++)
+        {
+            MixerChannelDocument channel = channels[channelIndex];
+            ImmutableArray<MixerPluginInstanceDocument>.Builder inserts = channel.Inserts.ToBuilder();
+            for (int insertIndex = 0; insertIndex < inserts.Count; insertIndex++)
+            {
+                MixerPluginInstanceDocument insert = inserts[insertIndex];
+                if (!_activeVst3InstanceIds.Contains(insert.Id)) continue;
+                ReadOnlyMemory<byte> state = await App.Services.Vst3Host.GetStateAsync(insert.Id, cancellationToken);
+                inserts[insertIndex] = insert with { StateBase64 = Convert.ToBase64String(state.Span) };
+                changed = true;
+            }
+            if (changed) channels[channelIndex] = channel with { Inserts = inserts.ToImmutable() };
+        }
+        if (!changed) return;
+        _timelineDocument = MixerDocumentCodec.Write(_timelineDocument, document with { Channels = channels.ToImmutable() });
+        _isDirty = true;
+        RefreshEditor(updateRawText: true);
+    }
+
+    private async Task RemoveAllVst3WorkersAsync()
+    {
+        foreach (string instanceId in _activeVst3InstanceIds.ToArray())
+        {
+            try { await App.Services.Vst3Host.RemoveInstanceAsync(instanceId); }
+            catch (Exception ex) { CrashLogger.Write($"VST3 worker '{instanceId}' could not be removed.", ex); }
+            _activeVst3InstanceIds.Remove(instanceId);
+            _vst3Parameters.Remove(instanceId);
+        }
     }
 
     private async void ApplyMixer_Click(object sender, RoutedEventArgs e)
@@ -2618,6 +2833,7 @@ public sealed partial class TimelinePage : Page
             throw new InvalidOperationException("Load a project Timeline before saving.");
         }
 
+        await CaptureActiveVst3StatesAsync(cancellationToken);
         if (_isDirty)
         {
             await PersistEditorAsync("replace", "Save timeline", cancellationToken);
@@ -3869,7 +4085,12 @@ public sealed partial class TimelinePage : Page
                         string state = mixer.AudibleChannelIds.Contains(route.SourceId) ? "audible" : "inaudible";
                         return $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · {state} · compensation {route.DelaySamples} samples";
                     }));
-                AudioEngineConfiguration playbackConfiguration = graph.Configuration.ForDirectMasterPlayback();
+                MixerDocument mixerDocument = MixerDocumentCodec.ReadOrMigrate(_timelineDocument ?? project.Timeline, project);
+                AudioEngineConfiguration playbackConfiguration = graph.Configuration with
+                {
+                    MixerChannels = MixerDocumentCodec.ToMixerChannels(mixerDocument),
+                    Automation = _automationSnapshot
+                };
                 await App.Services.AudioEngine.ConfigureAsync(playbackConfiguration, cancellationToken);
                 await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
                 if (generation != Volatile.Read(ref _audioGraphGeneration) ||
@@ -3968,6 +4189,7 @@ public sealed partial class TimelinePage : Page
                 value.Append('|').Append(asset.Id).Append(':').Append(asset.Path).Append(':')
                     .Append(ReadAssetContentHash(asset));
             }
+            value.Append('|').Append(project.Timeline.ToJsonString());
             return CreateStableHash(value.ToString());
         }
 
@@ -5991,6 +6213,8 @@ public sealed partial class TimelinePage : Page
     }
 
     private sealed record ClipMenuAction(string Action, string StableId);
+    private sealed record Vst3CatalogItem(string Label, string PluginId, string ModulePath, string ModuleSha256);
+    private sealed record Vst3InsertItem(string Id, string Label, string Detail);
     private sealed record ProfessionalListItem(string Id, string Label, string Detail = "");
 }
 

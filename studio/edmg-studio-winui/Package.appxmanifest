@@ -9,8 +9,8 @@
 
   <Identity
     Name="ED2F9BCD-A580-4603-8A17-A7AD5FF6D451"
-    Publisher="CN=AppPublisher"
-    Version="1.2.0.0" />
+    Publisher="CN=Driftwoodcraftthing, O=Driftwoodcraftthing, STREET=1815 Sterling Avenue, L=Cincinnati, S=Ohio, C=US, PostalCode=45239"
+    Version="1.2.1.0" />
 
   <mp:PhoneIdentity PhoneProductId="ED2F9BCD-A580-4603-8A17-A7AD5FF6D451" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 

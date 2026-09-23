@@ -6,7 +6,7 @@ import os
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image
 
@@ -18,6 +18,16 @@ from .tensorrt_bundle_migration import (
 )
 
 DEFAULT_SD15_BASE_MODEL = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+CancelCheck = Callable[[], bool]
+
+
+class TensorRTRenderCanceled(RuntimeError):
+    """Raised when a queued standalone TensorRT render is no longer active."""
+
+
+def _raise_if_canceled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise TensorRTRenderCanceled("TensorRT render canceled")
 
 
 def _runtime_store():
@@ -421,7 +431,14 @@ def _decode_latents(
     return Image.fromarray(image)
 
 
-def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str, Any]) -> dict[str, Any]:
+def _render_sd15_tensorrt(
+    project_id: str,
+    job_id: str | None,
+    payload: dict[str, Any],
+    *,
+    cancel_check: CancelCheck | None = None,
+) -> dict[str, Any]:
+    _raise_if_canceled(cancel_check)
     try:
         import torch
     except Exception as exc:
@@ -475,6 +492,7 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
         message=f"Loading SD1.5 text encoder for TensorRT render ({Path(base_model_ref).name or base_model_ref})",
     )
 
+    _raise_if_canceled(cancel_check)
     prompt_embeds, negative_embeds = _encode_prompt(
         base_model_ref=base_model_ref,
         base_model_revision=base_model_revision,
@@ -511,6 +529,7 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
     runner = _TRTUnetRunner(engine_path, device)
     try:
         for index, timestep in enumerate(scheduler.timesteps):
+            _raise_if_canceled(cancel_check)
             latent_model_input = scheduler.scale_model_input(latents, timestep)
             timestep_tensor = timestep
             if not torch.is_tensor(timestep_tensor):
@@ -560,6 +579,7 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
         total=total,
         message="Decoding TensorRT latents with SD1.5 VAE",
     )
+    _raise_if_canceled(cancel_check)
     image = _decode_latents(
         base_model_ref,
         base_model_revision,
@@ -571,6 +591,7 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
     out_dir = _runtime_store().project_dir(project_id) / "renders" / "tensorrt"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"trt_sd15_{int(time.time())}_{seed_value}.png"
+    _raise_if_canceled(cancel_check)
     image.save(out_file)
 
     _update_progress(
@@ -597,14 +618,20 @@ def _render_sd15_tensorrt(project_id: str, job_id: str | None, payload: dict[str
     }
 
 
-def run_job(project_id: str, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def run_job(
+    project_id: str,
+    job_id: str,
+    payload: dict[str, Any],
+    *,
+    cancel_check: CancelCheck | None = None,
+) -> dict[str, Any]:
     """Execute a standalone SD1.5 TensorRT image generation job."""
     proj = _runtime_store().get(project_id)
     if not proj:
         raise UserFacingError("Project not found")
     if not payload.get("model_id") and not payload.get("model_path"):
         raise UserFacingError("No model_id specified for TensorRT render")
-    return _render_sd15_tensorrt(project_id, job_id, payload)
+    return _render_sd15_tensorrt(project_id, job_id, payload, cancel_check=cancel_check)
 
 
 def run_preview(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:

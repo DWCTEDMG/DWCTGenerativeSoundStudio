@@ -8,6 +8,7 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class SettingsPage
 {
     private RuntimeSettings _runtimePolicy = new();
+    private RuntimeStatusResponse? _runtimeStatus;
 
     private async Task RefreshRuntimeAsync()
     {
@@ -23,6 +24,7 @@ public sealed partial class SettingsPage
 
     private void ApplyRuntimeStatus(RuntimeStatusResponse status)
     {
+        _runtimeStatus = status;
         RuntimeStateText.Text = $"Installed: {YesNo(status.Installed)}   Available: {YesNo(status.Available)}   Healthy: {YesNo(status.Healthy)}   Compatible: {YesNo(status.Compatible)}   Accelerating now: {YesNo(status.Accelerating)}";
         RuntimeEvidenceText.Text = $"State: {status.State}; TensorRT: {status.TensorRtVersion ?? "not reported"}; PyTorch CUDA: {YesNo(status.PytorchCudaAvailable)}; GPUs in last receipt: {status.Gpus.Count}; validated cache: {FormatBytes(status.CacheBytes)}; supported components: {status.SupportedComponentCount}. Diagnostics are a prior test receipt, not live inference proof.";
         RuntimeComponentsText.Text = string.Join(Environment.NewLine, status.Components.Select(component =>
@@ -37,7 +39,29 @@ public sealed partial class SettingsPage
         RuntimePrecision.SelectedItem = _runtimePolicy.Precision;
         RuntimeCacheLimit.Value = _runtimePolicy.CacheLimitGb;
         RuntimePackage.Text = _runtimePolicy.PackagePath;
+        UpdateRuntimeActionState();
     }
+
+    private void UpdateRuntimeActionState()
+    {
+        string selected = (RuntimeComponent.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "unet";
+        RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
+            value.ModelFamily == "sd15" && value.Component == selected);
+        bool runtimeReady = _runtimeStatus is { Available: true, Compatible: true, Settings.Enabled: true };
+        bool canOptimize = runtimeReady && component?.OptimizationEligible == true;
+        bool hasEngineRecord = !string.IsNullOrWhiteSpace(component?.LastEngineId)
+            && !string.Equals(component.LastEngineState, "missing", StringComparison.OrdinalIgnoreCase);
+        RuntimeOptimizeButton.IsEnabled = canOptimize;
+        RuntimeOptimizeAllButton.IsEnabled = runtimeReady
+            && _runtimeStatus?.Components.Any(value => value.ModelFamily == "sd15" && value.OptimizationEligible) == true;
+        RuntimeRebuildButton.IsEnabled = canOptimize && hasEngineRecord;
+        RuntimeValidateButton.IsEnabled = canOptimize
+            && component?.ValidatedEngineCount > 0
+            && string.Equals(component.LastEngineState, "ready", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RuntimeComponent_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateRuntimeActionState();
 
     private static string YesNo(bool value) => value ? "Yes" : "No";
 
@@ -74,7 +98,8 @@ public sealed partial class SettingsPage
             var request = new RuntimeJobRequest(
                 operation,
                 double.IsFinite(RuntimeDevice.Value) ? (int)RuntimeDevice.Value : 0,
-                RuntimePrecision.SelectedItem?.ToString() == "fp32" ? "fp32" : "fp16");
+                RuntimePrecision.SelectedItem?.ToString() == "fp32" ? "fp32" : "fp16",
+                Component: (RuntimeComponent.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "unet");
             RuntimeJobResponse result = await _apiClient.StartRuntimeJobAsync(request);
             await App.Services.JobsActivity.RefreshAsync();
             ShowStatus($"Runtime job queued: {result.JobId}. Follow progress in the job queue.", InfoBarSeverity.Success);
@@ -84,6 +109,9 @@ public sealed partial class SettingsPage
 
     private async void DiagnoseRuntime_Click(object sender, RoutedEventArgs e) => await StartRuntimeJobAsync("diagnose");
     private async void OptimizeRuntime_Click(object sender, RoutedEventArgs e) => await StartRuntimeJobAsync("optimize");
+    private async void OptimizeAllRuntime_Click(object sender, RoutedEventArgs e) => await StartRuntimeJobAsync("optimize_all");
+    private async void RebuildRuntime_Click(object sender, RoutedEventArgs e) => await StartRuntimeJobAsync("rebuild");
+    private async void ValidateRuntime_Click(object sender, RoutedEventArgs e) => await StartRuntimeJobAsync("validate");
 
     private async void ClearRuntimeEngine_Click(object sender, RoutedEventArgs e)
     {

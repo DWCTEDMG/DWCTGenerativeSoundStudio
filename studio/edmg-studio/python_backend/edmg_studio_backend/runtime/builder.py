@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .cache import EngineCache, digest_file, engine_key
 from .executor import TensorExecutor
+from .resources import require_build_memory, workspace_bytes
 from .validation import (
     VALIDATION_SCHEMA,
     aggregate_validation_metrics,
@@ -16,10 +17,17 @@ from .validation import (
     tensor_validation_metrics,
 )
 
-ADAPTER_VERSION = 2
+ADAPTER_VERSION = 3
 
 
-def component_identity(model_dir: Path, shape: list[int], precision: str, device: int, compiler: str) -> dict:
+def component_identity(
+    model_dir: Path,
+    shape: list[int],
+    precision: str,
+    device: int,
+    compiler: str,
+    selected_workspace_bytes: int,
+) -> dict:
     import torch
     import tensorrt as trt
     root = model_dir / "vae"
@@ -33,13 +41,19 @@ def component_identity(model_dir: Path, shape: list[int], precision: str, device
     if len(shape) != 4 or shape[0] != 1 or shape[1] != 4 or not all(8 <= v <= 128 for v in shape[2:]):
         raise RuntimeError("Supported VAE profiles: batch 1, four channels, 64 to 1024 output pixels per axis")
     props = torch.cuda.get_device_properties(device)
-    return {"model": "sd15", "component": "vae_decoder", "weights": {p.name: digest_file(p) for p in weights},
+    return {"model": "sd15", "model_id": model_dir.name,
+            "component": "vae_decoder", "weights": {p.name: digest_file(p) for p in weights},
             "config_sha256": digest_file(config), "tensorrt": trt.__version__, "cuda": torch.version.cuda,
             "torch": torch.__version__, "gpu_arch": f"sm{props.major}{props.minor}",
             "gpu_name": props.name, "gpu_uuid": str(getattr(props, "uuid", device)),
             "precision": precision, "profile": {"input": shape}, "compiler": compiler,
-            "compiler_settings": {"workspace_bytes": 2 * 1024**3, "tf32": False},
-            "diffusers": importlib.metadata.version("diffusers"),
+            "compiler_settings": {
+                "workspace_bytes": selected_workspace_bytes,
+                "tf32": False,
+                **({"onnx": importlib.metadata.version("onnx")} if compiler == "onnx" else {}),
+            },
+            "diffusers": importlib.metadata.version("diffusers"), "plugins": {},
+            "mutations": {"lora": [], "controlnet": [], "ip_adapter": [], "refit": False},
             "adapter_version": ADAPTER_VERSION}
 
 
@@ -57,7 +71,8 @@ def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precisi
             compiler = "torch_tensorrt:" + version
     except importlib.metadata.PackageNotFoundError:
         pass
-    identity = component_identity(model_dir, shape, precision, device, compiler)
+    selected_workspace_bytes = workspace_bytes(torch, device)
+    identity = component_identity(model_dir, shape, precision, device, compiler, selected_workspace_bytes)
     cache = EngineCache(data_dir)
     key = engine_key(identity)
     with cache.lock(key, timeout_s=1800):
@@ -75,6 +90,7 @@ def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precisi
             raise RuntimeError("Engine is disabled after a previous failure; clear it to retry")
         if not allow_build:
             raise RuntimeError("No validated engine for this profile; compilation is disabled by policy")
+        require_build_memory(torch, device, selected_workspace_bytes)
         cache.state(key, identity, "building")
         try:
             from diffusers import AutoencoderKL
@@ -103,8 +119,9 @@ def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precisi
                     exported = torch.export.export(module, (sample,))
                     progress("building")
                     engine = torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine(
-                        exported, arg_inputs=[sample], enabled_precisions={dtype}, device=f"cuda:{device}",
-                        workspace_size=2 * 1024**3, disable_tf32=True)
+                        exported, arg_inputs=[sample], device=f"cuda:{device}",
+                        workspace_size=selected_workspace_bytes, disable_tf32=True,
+                        use_explicit_typing=True)
                 else:
                     graph = cache.directory(key) / "decoder.onnx"
                     try:
@@ -118,7 +135,7 @@ def prepare_component(data_dir: Path, model_dir: Path, shape: list[int], precisi
                         if not parser.parse_from_file(str(graph)):
                             raise RuntimeError("TensorRT ONNX parse failed: " + str(parser.get_error(0)))
                         config = builder.create_builder_config()
-                        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 2 * 1024**3)
+                        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, selected_workspace_bytes)
                         progress("building")
                         serialized = builder.build_serialized_network(network, config)
                         engine = bytes(serialized) if serialized is not None else None

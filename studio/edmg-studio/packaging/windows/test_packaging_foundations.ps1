@@ -13,6 +13,8 @@ if ($manager -notmatch 'Add-AppxPackage -Register') { $errors.Add("repair regist
 if ($manager -notmatch 'ForceUpdateFromAnyVersion') { $errors.Add("rollback downgrade") }
 if ($lifecycle -notmatch 'PlanOnly' -or $lifecycle -notmatch 'Invoke-InstallerUninstall' -or $lifecycle -notmatch 'candidate\.artifacts\.msix' -or $lifecycle -notmatch 'Get-CandidateOwnedProcesses') { $errors.Add("installer lifecycle qualification") }
 if ($stage -match 'candidateScript attach' -or $installer -match 'sign_release\.ps1') { $errors.Add("intermediate stages must not finalize") }
+if ($stage -notmatch 'EdmgStudio\.Vst3Host\.exe' -or $stage -notmatch 'nativeVst3Host\.sha256' -or $finalizer -notmatch 'EDMG_VST3_HOST_PATH' -or
+    $stage -notmatch 'EdmgStudio\.Vst3Scanner\.exe' -or $stage -notmatch 'nativeVst3Scanner\.sha256' -or $finalizer -notmatch 'EDMG_VST3_SCANNER_PATH') { $errors.Add("native VST3 package provenance") }
 if ($finalizer -notmatch 'windows-timestamps\.json' -or $finalizer -notmatch 'ArtifactPaths @\(\$msixPath, \$installerPath\)' -or $finalizer -notmatch '\-\-production') { $errors.Add("joint production finalization") }
 if ($verifier -notmatch 'Get-AuthenticodeSignature' -or $verifier -notmatch '/tw' -or $verifier -notmatch 'X509Chain' -or $verifier -notmatch 'ExpectedSignerSubject') { $errors.Add("independent signature verifier") }
 if ($capabilities.ciDefault -ne "capability-check-only" -or $capabilities.resultStates -notcontains "not-run-capability-missing") { $errors.Add("UI automation gating") }

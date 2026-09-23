@@ -127,5 +127,31 @@ def runtime_status(
         package_validation=package_validation,
         hardware=hardware,
     )
-    status["engine"] = PROFILES[model_id][0]
+    engine, _role, minimum_vram_gb, minimum_ram_gb, _dependencies = PROFILES[model_id]
+    status["engine"] = engine
+
+    if hardware:
+        backend = str(hardware.get("backend") or "").lower()
+        vram_gb = float(hardware.get("vram_gb") or 0)
+        ram_gb = float(hardware.get("installed_ram_gb") or hardware.get("ram_gb") or 0)
+        admission_issues: list[str] = []
+        if minimum_vram_gb and (backend != "cuda" or vram_gb < minimum_vram_gb):
+            admission_issues.append(
+                f"Requires CUDA with at least {minimum_vram_gb:g} GB VRAM on one GPU."
+            )
+        if minimum_ram_gb and ram_gb < minimum_ram_gb:
+            admission_issues.append(f"Requires at least {minimum_ram_gb:g} GB installed system RAM.")
+        if admission_issues:
+            status["hardware_compatible"] = False
+            status["execution_ready"] = False
+            status["runtime_ready"] = False
+            status["runtime_state"] = "installed_runtime_unavailable" if status["installed"] else "not_installed"
+            status["blockers"] = list(dict.fromkeys([*status["blockers"], *admission_issues]))
+            status["error"] = status["blockers"][0]
+
+    if status["execution_ready"] and not status["runtime_ready"]:
+        status["blockers"] = list(dict.fromkeys([
+            *status["blockers"],
+            "Run the runtime smoke qualification to verify real execution on this hardware.",
+        ]))
     return status

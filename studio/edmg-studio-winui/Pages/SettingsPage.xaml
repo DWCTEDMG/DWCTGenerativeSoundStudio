@@ -20,7 +20,7 @@
             <StackPanel Spacing="16">
                 <Expander Header="AI runtime / NVIDIA acceleration" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <StackPanel Spacing="12">
-                        <TextBlock Text="Automatic uses validated cached engines when beneficial. Performance may compile on first use. The first supported component is the SD1.5 VAE decoder." TextWrapping="Wrap" />
+                        <TextBlock Text="Automatic uses validated cached engines when beneficial. SD1.5 UNet and VAE decoder can be optimized independently while text encoding and scheduling remain on the existing runtime." TextWrapping="Wrap" />
                         <TextBlock x:Name="RuntimeStateText" AutomationProperties.AutomationId="SettingsRuntimeEvidenceStates" FontWeight="SemiBold" Text="Refresh to inspect runtime evidence." TextWrapping="Wrap" />
                         <TextBlock x:Name="RuntimeEvidenceText" AutomationProperties.AutomationId="SettingsRuntimeEvidenceSummary" Opacity="0.72" TextWrapping="Wrap" />
                         <ComboBox x:Name="RuntimeMode" AutomationProperties.AutomationId="SettingsRuntimeMode" AutomationProperties.Name="Studio runtime mode" Header="Runtime mode" SelectedIndex="0">
@@ -34,11 +34,15 @@
                         <NumberBox x:Name="RuntimeCacheLimit" Header="Maximum cache (GB)" Minimum="1" Maximum="1000" Value="100" />
                         <TextBox x:Name="RuntimePackage" Header="Optional TensorRT SDK folder" PlaceholderText="Empty uses the installed runtime" />
                         <NumberBox x:Name="RuntimeDevice" Header="GPU index for diagnostics / optimization" Minimum="0" Maximum="63" Value="0" />
-                        <TextBlock Text="Optimize builds a 512 × 512 SD1.5 decoder profile. Jobs and cancellation are available in the Studio job queue. Diagnostics are timestamped receipts, not proof that a render used TensorRT." TextWrapping="Wrap" />
+                        <ComboBox x:Name="RuntimeComponent" Header="SD1.5 component" SelectedIndex="0" SelectionChanged="RuntimeComponent_SelectionChanged"><ComboBoxItem Content="UNet" Tag="unet" /><ComboBoxItem Content="VAE decoder" Tag="vae_decoder" /></ComboBox>
+                        <TextBlock Text="Optimize builds and validates a 512 x 512 profile for the selected component. Jobs and cancellation are available in the Studio job queue. Diagnostics are timestamped receipts, not proof that a render used TensorRT." TextWrapping="Wrap" />
                         <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
                             <AppBarButton Label="Save" Icon="Save" Click="SaveRuntime_Click" />
                             <AppBarButton Label="Diagnostics" Icon="Repair" Click="DiagnoseRuntime_Click" />
-                            <AppBarButton Label="Optimize SD1.5" Icon="Play" Click="OptimizeRuntime_Click" />
+                            <AppBarButton x:Name="RuntimeOptimizeButton" Label="Optimize selected" Icon="Play" Click="OptimizeRuntime_Click" IsEnabled="False" />
+                            <AppBarButton x:Name="RuntimeOptimizeAllButton" Label="Optimize all compatible" Icon="Download" Click="OptimizeAllRuntime_Click" IsEnabled="False" />
+                            <AppBarButton x:Name="RuntimeRebuildButton" Label="Rebuild selected" Icon="Sync" Click="RebuildRuntime_Click" IsEnabled="False" />
+                            <AppBarButton x:Name="RuntimeValidateButton" Label="Validate selected" Icon="Accept" Click="ValidateRuntime_Click" IsEnabled="False" />
                             <AppBarButton Label="Refresh" Icon="Refresh" Click="RefreshRuntime_Click" />
                         </CommandBar>
                         <TextBlock x:Name="RuntimeComponentsText" AutomationProperties.AutomationId="SettingsRuntimeComponents" Text="Refresh to see component conversion status." TextWrapping="Wrap" />
@@ -299,14 +303,20 @@
                                    Text="Checking scanner capability..."
                                    TextWrapping="Wrap" />
                         <TextBlock x:Name="Vst3CatalogText" Opacity="0.72" TextWrapping="Wrap" />
+                        <TextBox x:Name="Vst3ScanRootsTextBox" AutomationProperties.AutomationId="SettingsVst3ScanRootsTextBox" Header="Scan roots (one folder or .vst3 module per line)"
+                                 AcceptsReturn="True" MinHeight="72" TextWrapping="Wrap" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button AutomationProperties.AutomationId="SettingsAddVst3RootButton" Click="BrowseVst3RootButton_Click" Content="Add folder" />
+                            <Button AutomationProperties.AutomationId="SettingsScanVst3Button"
+                                    Click="ScanVst3Button_Click" Content="Scan / rescan" />
                             <Button AutomationProperties.AutomationId="SettingsRefreshVst3Button"
-                                    Click="RefreshVst3Button_Click" Content="Refresh plugin status" />
+                                    Click="RefreshVst3Button_Click" Content="Refresh status" />
                             <Button AutomationProperties.AutomationId="SettingsClearVst3QuarantineButton"
                                     Click="ClearVst3QuarantineButton_Click" Content="Clear quarantine" />
                         </StackPanel>
+                        <TextBlock x:Name="Vst3CatalogDetailsText" Opacity="0.68" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                         <TextBlock Opacity="0.68"
-                                   Text="Discovery runs only in the external native scanner. Scanner readiness does not mean plugins can process audio."
+                                   Text="Discovery and processing run outside Studio. Scans occur only when requested. Each active effect uses an isolated worker and deterministically bypasses after a crash or timeout; live AudioGraph playback executes the Core mixer and publishes processed meters."
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>

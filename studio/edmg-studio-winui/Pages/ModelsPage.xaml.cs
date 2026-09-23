@@ -990,27 +990,84 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
 
     private void UpdateComponentAcceleration()
     {
+        string selectedComponent = SelectedTensorRtComponent();
         RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
-            value.ModelFamily == "sd15" && value.Component == "vae_decoder");
-        ComponentOptimizeButton.IsEnabled = !_isCommandRunning && component?.OptimizationEligible == true;
+            value.ModelFamily == "sd15" && value.Component == selectedComponent);
+        bool canOptimize = !_isCommandRunning && component?.OptimizationEligible == true;
+        bool hasEngineRecord = !string.IsNullOrWhiteSpace(component?.LastEngineId)
+            && !string.Equals(component.LastEngineState, "missing", StringComparison.OrdinalIgnoreCase);
+        ComponentOptimizeButton.IsEnabled = canOptimize;
+        ComponentOptimizeAllButton.IsEnabled = !_isCommandRunning
+            && _runtimeStatus?.Components.Any(value => value.ModelFamily == "sd15" && value.OptimizationEligible) == true;
+        ComponentRebuildButton.IsEnabled = canOptimize && hasEngineRecord;
+        ComponentValidateButton.IsEnabled = canOptimize
+            && component?.ValidatedEngineCount > 0
+            && string.Equals(component.LastEngineState, "ready", StringComparison.OrdinalIgnoreCase);
+        ComponentDeleteButton.IsEnabled = !_isCommandRunning && hasEngineRecord;
         ComponentAccelerationText.Text = component is null
             ? "Component acceleration status is unavailable."
-            : $"SD1.5 VAE decoder: {component.Status}; {component.ValidatedEngineCount} validated engine(s); "
+            : $"SD1.5 {component.Component}: {component.Status}; {component.ValidatedEngineCount} validated engine(s); "
               + $"{component.ProfileCoverage.Count} profile(s); fallback {component.FallbackRuntime}.";
         ComponentAccelerationReasonText.Text = component?.OptimizationEligible == true
             ? "Eligible for an explicit 512 x 512 optimization job. Rendering remains usable through fallback."
             : $"Optimize unavailable: {FormatBlockedReason(component?.OptimizationReason)}.";
     }
 
+    private string SelectedTensorRtComponent() =>
+        (ComponentSelector.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "unet";
+
+    private void ComponentSelector_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateComponentAcceleration();
+
     private async void ComponentOptimize_Click(object sender, RoutedEventArgs e)
+    {
+        await QueueComponentJobAsync("optimize", "Component optimization queued in Render Queue.");
+    }
+
+    private async void ComponentOptimizeAll_Click(object sender, RoutedEventArgs e)
+    {
+        await QueueComponentJobAsync("optimize_all", "Compatible component optimization queued in Render Queue.");
+    }
+
+    private async void ComponentRebuild_Click(object sender, RoutedEventArgs e)
+    {
+        await QueueComponentJobAsync("rebuild", "Component rebuild queued in Render Queue.");
+    }
+
+    private async void ComponentValidate_Click(object sender, RoutedEventArgs e)
+    {
+        await QueueComponentJobAsync("validate", "Cached component validation queued in Render Queue.");
+    }
+
+    private async void ComponentDelete_Click(object sender, RoutedEventArgs e)
+    {
+        RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
+            value.ModelFamily == "sd15" && value.Component == SelectedTensorRtComponent());
+        if (string.IsNullOrWhiteSpace(component?.LastEngineId))
+        {
+            return;
+        }
+        await RunCommandAsync(
+            async token =>
+            {
+                await _apiClient.ClearRuntimeEngineAsync(component.LastEngineId, token);
+                await RefreshAsync(token);
+            },
+            "Selected component engine deleted.");
+    }
+
+    private async Task QueueComponentJobAsync(string operation, string message)
     {
         await RunCommandAsync(
             async token =>
             {
-                await _apiClient.StartRuntimeJobAsync(new RuntimeJobRequest("optimize"), token);
+                int device = double.IsFinite(ComponentDevice.Value) ? (int)ComponentDevice.Value : 0;
+                string precision = ComponentPrecision.SelectedItem?.ToString() == "fp32" ? "fp32" : "fp16";
+                await _apiClient.StartRuntimeJobAsync(
+                    new RuntimeJobRequest(operation, device, precision, Component: SelectedTensorRtComponent()), token);
                 await App.Services.JobsActivity.RefreshAsync(token);
             },
-            "Component optimization queued in Render Queue.");
+            message);
     }
 
     private void UpdateStorage(ModelCatalogueResponse response)

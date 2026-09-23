@@ -22,10 +22,15 @@ public sealed class BackendLaunchSpecFactory
     {
         var candidates = new List<string>
         {
-            Path.Combine(AppContext.BaseDirectory, "backend"),
-            Path.Combine(AppContext.BaseDirectory, "resources", "backend"),
-            Path.Combine(AppContext.BaseDirectory, "electron-resources", "backend")
+            Path.Combine(_configuration.ApplicationDirectory, "backend"),
+            Path.Combine(_configuration.ApplicationDirectory, "resources", "backend"),
+            Path.Combine(_configuration.ApplicationDirectory, "electron-resources", "backend")
         };
+
+        if (_configuration.RequirePackagedBackend)
+        {
+            return IsValidPackagedBackendDirectory(candidates[0]) ? candidates[0] : null;
+        }
 
         var installedBackend = BackendInstallationLocator.TryResolveBackendDirectory(_installationLocatorPath);
         if (!string.IsNullOrWhiteSpace(installedBackend))
@@ -38,6 +43,7 @@ public sealed class BackendLaunchSpecFactory
 
     public string? FindSourceBackendDirectory()
     {
+        if (_configuration.RequirePackagedBackend) return null;
         if (!string.IsNullOrWhiteSpace(_configuration.SourceDirectory) &&
             File.Exists(Path.Combine(_configuration.SourceDirectory, "pyproject.toml")))
         {
@@ -183,9 +189,9 @@ public sealed class BackendLaunchSpecFactory
 
         if (includeSourceSettings)
         {
-            environment["EDMG_BACKEND_ACCELERATOR_PROFILE"] = profile;
             environment["NVIDIA_TENSORRT_DISABLE_INTERNAL_PIP"] = "1";
         }
+        environment["EDMG_BACKEND_ACCELERATOR_PROFILE"] = profile;
 
         var backendLogDirectory = Path.Combine(_configuration.Paths.LogsDirectory, "backend");
         Directory.CreateDirectory(backendLogDirectory);

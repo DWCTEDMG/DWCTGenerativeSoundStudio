@@ -726,9 +726,50 @@
                                     <TextBlock x:Name="MixerSurfaceText" Text="Load a project to inspect the mixer."
                                                TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                                 </Expander>
-                                <Expander Header="Inserts and sends">
-                                    <TextBlock x:Name="MixerInsertSendText" Text="No channel selected."
-                                               TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                <Expander Header="VST3 inserts and sends" IsExpanded="True">
+                                    <StackPanel Spacing="8" Padding="0,8,0,0">
+                                        <TextBlock x:Name="MixerInsertSendText" Text="No channel selected."
+                                                   TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        <ComboBox x:Name="Vst3CatalogComboBox" Header="Scanned effect"
+                                                  DisplayMemberPath="Label"
+                                                  AutomationProperties.AutomationId="Timeline.Mixer.Vst3Catalog" />
+                                        <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="8">
+                                            <Button Grid.Column="0" Content="Add" Click="AddVst3Insert_Click"
+                                                    AutomationProperties.AutomationId="Timeline.Mixer.AddVst3Insert" />
+                                            <Button Grid.Column="1" Content="Remove" Click="RemoveVst3Insert_Click"
+                                                    AutomationProperties.AutomationId="Timeline.Mixer.RemoveVst3Insert" />
+                                            <Button Grid.Column="2" Content="Up" Click="MoveVst3InsertUp_Click" />
+                                            <Button Grid.Column="3" Content="Down" Click="MoveVst3InsertDown_Click" />
+                                        </Grid>
+                                        <ListView x:Name="Vst3InsertListView" MaxHeight="160" SelectionMode="Single"
+                                                  SelectionChanged="Vst3InsertListView_SelectionChanged"
+                                                  AutomationProperties.AutomationId="Timeline.Mixer.Vst3Inserts">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Padding="2" Spacing="2">
+                                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding Detail}" Style="{StaticResource StudioCaptionTextStyle}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                            <ToggleSwitch x:Name="Vst3EnabledToggle" Grid.Column="0" Header="Enabled" />
+                                            <ToggleSwitch x:Name="Vst3BypassToggle" Grid.Column="1" Header="Bypass" />
+                                        </Grid>
+                                        <Button Content="Apply insert switches" Click="ApplyVst3InsertSwitches_Click" />
+                                        <Button Content="Start isolated worker" Click="StartVst3Worker_Click"
+                                                AutomationProperties.AutomationId="Timeline.Mixer.StartVst3Worker" />
+                                        <ComboBox x:Name="Vst3ParameterComboBox" Header="Parameter" DisplayMemberPath="Name"
+                                                  SelectionChanged="Vst3ParameterComboBox_SelectionChanged" />
+                                        <NumberBox x:Name="Vst3ParameterValueBox" Header="Normalized value" Minimum="0" Maximum="1" SmallChange="0.01" />
+                                        <Button Content="Apply parameter" Click="ApplyVst3Parameter_Click" />
+                                        <TextBox x:Name="Vst3PresetNameTextBox" Header="Preset / snapshot name" />
+                                        <Button Content="Capture named plugin state" Click="CaptureVst3State_Click" />
+                                        <TextBlock x:Name="Vst3WorkerStatusText" Text="No VST3 worker selected."
+                                                   TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                                   Style="{StaticResource StudioCaptionTextStyle}" />
+                                    </StackPanel>
                                 </Expander>
                                 <TextBlock x:Name="MixerPdcText" Text="PDC: unavailable"
                                            TextWrapping="Wrap" Style="{StaticResource StudioCaptionTextStyle}" />

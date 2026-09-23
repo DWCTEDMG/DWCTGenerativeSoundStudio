@@ -6,7 +6,8 @@ namespace EdmgStudio.Core.Audio;
 
 public sealed record MixerPluginInstanceDocument(
     string Id, string PluginId, bool Enabled, bool Bypassed, int ReportedLatencySamples,
-    string? PresetName, string? StateBase64, JsonObject Extensions);
+    string? PresetName, string? StateBase64, JsonObject Extensions,
+    string? ModulePath = null, string? ModuleSha256 = null);
 public sealed record MixerSendDocument(
     string Id, string DestinationId, MixerTap Tap, float Gain, bool Enabled, JsonObject Extensions);
 public sealed record MixerChannelDocument(
@@ -74,7 +75,7 @@ public static class MixerDocumentCodec
     public static ImmutableArray<MixerChannel> ToMixerChannels(MixerDocument document) => document.Channels.Select(channel =>
         new MixerChannel(channel.Id, channel.Name, channel.Kind, channel.OutputId,
             channel.Inserts.Select(insert => new MixerInsert(insert.Id, insert.ReportedLatencySamples, insert.Enabled, insert.Bypassed,
-                insert.PluginId, insert.PresetName, insert.StateBase64)).ToImmutableArray(),
+                insert.PluginId, insert.PresetName, insert.StateBase64, insert.ModulePath, insert.ModuleSha256)).ToImmutableArray(),
             channel.Sends.Where(send => send.Enabled).Select(send => new MixerSend(send.Id, send.DestinationId, send.Tap, send.Gain)).ToImmutableArray(),
             channel.Gain, channel.Pan, channel.Muted, channel.Solo, channel.RecordArmed, channel.InputMonitoring,
             channel.Color, channel.Visible)).ToImmutableArray();
@@ -128,7 +129,8 @@ public static class MixerDocumentCodec
         JsonObject value = node as JsonObject ?? throw new InvalidDataException("A mixer insert is malformed.");
         return new(ReadRequired(value, "id"), ReadRequired(value, "plugin_id"), ReadBool(value["enabled"], true),
             ReadBool(value["bypassed"]), ReadInt(value["latency_samples"], 0), ReadString(value["preset_name"]),
-            ReadString(value["state_base64"]), CopyUnknown(value, "id", "plugin_id", "enabled", "bypassed", "latency_samples", "preset_name", "state_base64"));
+            ReadString(value["state_base64"]), CopyUnknown(value, "id", "plugin_id", "enabled", "bypassed", "latency_samples", "preset_name", "state_base64", "module_path", "module_sha256"),
+            ReadString(value["module_path"]), ReadString(value["module_sha256"]));
     }
 
     private static MixerSendDocument ReadSend(JsonNode? node)
@@ -154,6 +156,7 @@ public static class MixerDocumentCodec
             JsonObject item = insert.Extensions.DeepClone().AsObject();
             item["id"] = insert.Id; item["plugin_id"] = insert.PluginId; item["enabled"] = insert.Enabled; item["bypassed"] = insert.Bypassed;
             item["latency_samples"] = insert.ReportedLatencySamples; item["preset_name"] = insert.PresetName; item["state_base64"] = insert.StateBase64;
+            item["module_path"] = insert.ModulePath; item["module_sha256"] = insert.ModuleSha256;
             inserts.Add(item);
         }
         var sends = new JsonArray();

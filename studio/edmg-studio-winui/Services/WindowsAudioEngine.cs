@@ -1,9 +1,13 @@
 using EdmgStudio.Core.Audio;
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using Windows.Devices.Enumeration;
+using Windows.Foundation;
+using Windows.Media;
 using Windows.Media.Audio;
 using Windows.Media.Devices;
+using Windows.Media.MediaProperties;
 using Windows.Storage;
 
 namespace EdmgStudio.WinUI.Services;
@@ -19,39 +23,61 @@ public sealed class WindowsAudioEngine : IAudioEngine
         FullMode = BoundedChannelFullMode.Wait
       });
   private readonly Func<long> _timestamp;
+  private readonly IVst3HostSession _vst3Host;
   private Exception? _failure;
   private DeviceSnapshot _devices = new([]);
   private AudioEngineConfiguration? _configuration;
   private int _disposeState;
 
-  public WindowsAudioEngine() : this(() => Environment.TickCount64)
+  public WindowsAudioEngine() : this(new UnavailableVst3HostSession(), () => Environment.TickCount64)
   {
   }
 
-  internal WindowsAudioEngine(Func<long> timestamp)
+  public WindowsAudioEngine(IVst3HostSession vst3Host) : this(vst3Host, () => Environment.TickCount64)
   {
+  }
+
+  internal WindowsAudioEngine(Func<long> timestamp) : this(new UnavailableVst3HostSession(), timestamp)
+  {
+  }
+
+  internal WindowsAudioEngine(IVst3HostSession vst3Host, Func<long> timestamp)
+  {
+    _vst3Host = vst3Host ?? throw new ArgumentNullException(nameof(vst3Host));
     _timestamp = timestamp;
     WorkerCompletion = Task.Run(ProcessOperationsAsync);
   }
 
   internal Task WorkerCompletion { get; }
 
-#pragma warning disable CS0067 // Meter delivery is unavailable until AudioGraph playback executes the Core mixer.
-  public event EventHandler<IReadOnlyList<AudioMeterSnapshot>>? MetersAvailable;
-#pragma warning restore CS0067
+public event EventHandler<IReadOnlyList<AudioMeterSnapshot>>? MetersAvailable;
 
-  public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _devices).Items;
+public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _devices).Items;
 
   public AudioEngineConfiguration? Configuration => Volatile.Read(ref _configuration);
   public string? FailureMessage => Volatile.Read(ref _failure) is null ? null :
       "Audio playback stopped after an engine failure. Restart Studio to reopen the audio device.";
   public string MixerProcessingCapability =>
-      "Core live callback adapter is ready, but Windows AudioGraph file nodes do not expose decoded per-track quantum buffers; playback remains direct-route and does not execute bus/send/PDC/automation DSP or publish processed meters.";
+      "AudioGraph captures decoded per-track float quanta, executes the Core mixer with ordered isolated VST3 inserts, sends and PDC, then submits the processed stereo master to WASAPI shared output.";
 
-  internal static MixerProcessor CreateCoreProcessor(AudioEngineConfiguration configuration)
+  internal static MixerProcessor CreateCoreProcessor(AudioEngineConfiguration configuration,
+      IEnumerable<MixerInsertBinding>? insertBindings = null,
+      int? maximumFrames = null)
   {
-    return new(MixerGraphBuilder.FromAudioRoutes(configuration), configuration.BufferFrames);
+    MixerGraphPlan plan = configuration.MixerChannels.IsDefaultOrEmpty
+        ? MixerGraphBuilder.FromAudioRoutes(configuration)
+        : MixerGraphBuilder.Build(configuration.MixerChannels);
+    return new MixerProcessor(plan, maximumFrames ?? configuration.BufferFrames, insertBindings);
   }
+
+  internal static bool IsProcessorCompatible(IVst3InsertProcessor processor, MixerInsert insert,
+      int sampleRate, int requiredFrames) =>
+      !string.IsNullOrWhiteSpace(insert.ModulePath) &&
+      !string.IsNullOrWhiteSpace(insert.PluginId) &&
+      string.Equals(Path.GetFullPath(processor.ModulePath), Path.GetFullPath(insert.ModulePath), StringComparison.OrdinalIgnoreCase) &&
+      string.Equals(processor.PluginId, insert.PluginId, StringComparison.OrdinalIgnoreCase) &&
+      processor.SampleRate == sampleRate &&
+      processor.MaximumFrames >= requiredFrames;
 
   public async Task RefreshDevicesAsync(CancellationToken cancellationToken = default)
   {
@@ -102,15 +128,9 @@ public sealed class WindowsAudioEngine : IAudioEngine
       throw new InvalidOperationException(FailureMessage, failure);
     }
     _ = new AudioRenderGraph(configuration);
-    _ = MixerGraphBuilder.FromAudioRoutes(configuration);
-    AudioTrackRoute? unsupportedRoute = configuration.Tracks.FirstOrDefault(
-        route => Math.Abs(route.Pan) > float.Epsilon ||
-                 !string.Equals(route.OutputBusId, "master", StringComparison.OrdinalIgnoreCase));
-    if (unsupportedRoute is not null)
-    {
-      throw new NotSupportedException(
-          $"Track '{unsupportedRoute.TrackId}' uses pan or output-bus routing that WASAPI shared playback does not support yet.");
-    }
+    _ = configuration.MixerChannels.IsDefaultOrEmpty
+        ? MixerGraphBuilder.FromAudioRoutes(configuration)
+        : MixerGraphBuilder.Build(configuration.MixerChannels);
 
     PreparedGraph prepared = await PrepareGraphAsync(configuration, cancellationToken).ConfigureAwait(false);
     TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -228,6 +248,8 @@ public sealed class WindowsAudioEngine : IAudioEngine
 
     AudioGraph graph = graphResult.Graph;
     List<PreparedClip> clips = new();
+    List<PreparedTrack> tracks = new();
+    AudioFrameInputNode? masterInput = null;
     try
     {
       CreateAudioDeviceOutputNodeResult outputResult = await graph.CreateDeviceOutputNodeAsync()
@@ -253,12 +275,23 @@ public sealed class WindowsAudioEngine : IAudioEngine
         }
       }
 
+      int graphQuantumFrames = checked((int)graph.SamplesPerQuantum);
+      if (graphQuantumFrames <= 0)
+        throw new InvalidOperationException("Windows reported an invalid AudioGraph quantum size.");
+      AudioEncodingProperties floatStereo = AudioEncodingProperties.CreatePcm(
+          (uint)configuration.SampleRate, 2, 32);
+      floatStereo.Subtype = MediaEncodingSubtypes.Float;
+      masterInput = graph.CreateFrameInputNode(floatStereo);
+      masterInput.AddOutgoingConnection(outputResult.DeviceOutputNode);
+      masterInput.Stop();
+
       foreach (AudioTrackRoute route in configuration.Tracks)
       {
-        if (route.Muted || (configuration.Tracks.Any(candidate => candidate.Solo) && !route.Solo))
-        {
-          continue;
-        }
+        AudioFrameOutputNode trackOutput = graph.CreateFrameOutputNode(floatStereo);
+        trackOutput.Stop();
+        var preparedTrack = new PreparedTrack(route.TrackId, trackOutput,
+            new float[checked(graphQuantumFrames * 2)]);
+        tracks.Add(preparedTrack);
 
         foreach (AudioClipSource clip in route.Clips)
         {
@@ -283,21 +316,64 @@ public sealed class WindowsAudioEngine : IAudioEngine
           }
 
           AudioFileInputNode node = inputResult.FileInputNode;
-          node.OutgoingGain = route.Gain;
-          node.AddOutgoingConnection(outputResult.DeviceOutputNode);
+          node.OutgoingGain = 1;
+          node.AddOutgoingConnection(trackOutput);
           node.Stop();
           clips.Add(new PreparedClip(clip, node));
         }
       }
 
-      return new PreparedGraph(configuration, graph, outputResult.DeviceOutputNode, clips);
+      List<MixerInsertBinding> bindings = new();
+      if (!configuration.MixerChannels.IsDefaultOrEmpty)
+      {
+        foreach (MixerChannel channel in configuration.MixerChannels)
+          foreach (MixerInsert insert in channel.Inserts.Where(item => item.Enabled))
+          {
+            if (insert.Bypassed) continue;
+            bool foundProcessor = _vst3Host.TryGetProcessor(insert.Id, out IVst3InsertProcessor? processor) && processor is not null;
+            if (foundProcessor && !IsProcessorCompatible(processor!, insert, configuration.SampleRate, graphQuantumFrames))
+            {
+              await _vst3Host.RemoveInstanceAsync(insert.Id, cancellationToken).ConfigureAwait(false);
+              processor = null;
+              foundProcessor = false;
+            }
+            if (!foundProcessor)
+            {
+              if (string.IsNullOrWhiteSpace(insert.PluginId) || string.IsNullOrWhiteSpace(insert.ModulePath) || string.IsNullOrWhiteSpace(insert.ModuleSha256))
+                throw new InvalidOperationException($"Enabled VST3 insert '{insert.Id}' has no verified module identity.");
+              Vst3ModuleFingerprint fingerprint = await Vst3ModuleFingerprinting.CreateAsync(insert.ModulePath, cancellationToken).ConfigureAwait(false);
+              if (!string.Equals(fingerprint.Sha256, insert.ModuleSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"VST3 module for insert '{insert.Id}' changed after discovery. Rescan it before playback.");
+              Vst3InstanceStatus status = await _vst3Host.CreateInstanceAsync(new(
+                  insert.Id, insert.ModulePath, insert.PluginId, configuration.SampleRate, graphQuantumFrames), cancellationToken).ConfigureAwait(false);
+              if (!status.Active)
+                throw new InvalidOperationException(status.Diagnostic ?? $"VST3 insert '{insert.Id}' did not become active.");
+              if (!string.IsNullOrWhiteSpace(insert.StateBase64))
+              {
+                byte[] state;
+                try { state = Convert.FromBase64String(insert.StateBase64); }
+                catch (FormatException exception) { throw new InvalidDataException($"VST3 state for insert '{insert.Id}' is malformed.", exception); }
+                status = await _vst3Host.SetStateAsync(insert.Id, state, cancellationToken).ConfigureAwait(false);
+                if (!status.Active) throw new InvalidOperationException(status.Diagnostic ?? $"VST3 state for insert '{insert.Id}' could not be restored.");
+              }
+              if (!_vst3Host.TryGetProcessor(insert.Id, out processor) || processor is null)
+                throw new InvalidOperationException($"VST3 insert '{insert.Id}' has no active audio processor after startup.");
+            }
+            bindings.Add(new MixerInsertBinding(channel.Id, insert.Id, processor!));
+          }
+      }
+
+      var prepared = new PreparedGraph(configuration, graph, outputResult.DeviceOutputNode,
+          masterInput, tracks, clips, CreateCoreProcessor(configuration, bindings, graphQuantumFrames),
+          graphQuantumFrames, this);
+      masterInput.QuantumStarted += prepared.OnQuantumStarted;
+      return prepared;
     }
     catch
     {
-      foreach (PreparedClip clip in clips)
-      {
-        clip.Node.Dispose();
-      }
+      foreach (PreparedClip clip in clips) clip.Node.Dispose();
+      foreach (PreparedTrack track in tracks) track.Output.Dispose();
+      masterInput?.Dispose();
       graph.Dispose();
       throw;
     }
@@ -407,10 +483,21 @@ public sealed class WindowsAudioEngine : IAudioEngine
       return;
     }
 
-    AudioPlaybackPosition playback = active.Cursor.Advance(
+     AudioPlaybackPosition playback = active.Cursor.Advance(
         state, stateTimestamp, _timestamp(), transportChanged);
     long position = playback.Samples;
     bool running = state.Mode is TransportMode.Playing or TransportMode.Recording;
+    if (playback.RequiresSeek || transportChanged) active.SetSamplePosition(position);
+    if (running)
+    {
+      active.MasterInput.Start();
+      foreach (PreparedTrack track in active.Tracks) track.Output.Start();
+    }
+    else
+    {
+      active.MasterInput.Stop();
+      foreach (PreparedTrack track in active.Tracks) track.Output.Stop();
+    }
     foreach (PreparedClip clip in active.Clips)
     {
       bool shouldPlay = running && position >= clip.Source.TimelineStartSample &&
@@ -455,31 +542,98 @@ public sealed class WindowsAudioEngine : IAudioEngine
 
   private sealed class PreparedGraph : IDisposable
   {
+    private readonly WindowsAudioEngine _owner;
+    private readonly MixerProcessor _mixer;
+    private readonly MixerInputBlock[] _inputs;
+    private readonly float[] _output;
+    private readonly MixerMeterSnapshot[] _meterBuffer;
+    private readonly AudioAutomationSnapshot _automation;
+    private long _samplePosition;
     private int _disposed;
+
     public PreparedGraph(
         AudioEngineConfiguration configuration,
         AudioGraph graph,
         AudioDeviceOutputNode output,
-        List<PreparedClip> clips)
+        AudioFrameInputNode masterInput,
+        List<PreparedTrack> tracks,
+        List<PreparedClip> clips,
+        MixerProcessor mixer,
+        int maximumFrames,
+        WindowsAudioEngine owner)
     {
       Configuration = configuration;
       Graph = graph;
       Output = output;
+      MasterInput = masterInput;
+      Tracks = tracks;
       Clips = clips;
+      _mixer = mixer;
+      _owner = owner;
+      _inputs = tracks.Select(track => new MixerInputBlock(track.ChannelId, track.Buffer)).ToArray();
+      _output = new float[checked(maximumFrames * 2)];
+      _meterBuffer = new MixerMeterSnapshot[mixer.ChannelIds.Length];
+      _automation = configuration.Automation ?? AudioAutomationSnapshot.Empty;
     }
 
     public AudioEngineConfiguration Configuration { get; }
     public AudioPlaybackCursor Cursor { get; } = new();
     public AudioGraph Graph { get; }
     public AudioDeviceOutputNode Output { get; }
+    public AudioFrameInputNode MasterInput { get; }
+    public List<PreparedTrack> Tracks { get; }
     public List<PreparedClip> Clips { get; }
+
+    public void OnQuantumStarted(AudioFrameInputNode sender, FrameInputNodeQuantumStartedEventArgs args)
+    {
+      int frames = args.RequiredSamples;
+      if (frames <= 0 || Volatile.Read(ref _disposed) != 0) return;
+      if (frames > _mixer.MaximumFrames)
+        throw new InvalidOperationException($"AudioGraph requested {frames} frames, exceeding the negotiated capacity {_mixer.MaximumFrames}.");
+      int sampleCount = checked(frames * 2);
+      try
+      {
+        foreach (PreparedTrack track in Tracks)
+        {
+          Array.Clear(track.Buffer, 0, sampleCount);
+          using AudioFrame frame = track.Output.GetFrame();
+          CopyFrameToStereo(frame, track.Buffer, sampleCount);
+        }
+
+        _mixer.ProcessBlock(_inputs, _output, frames, Math.Max(0, _samplePosition), _automation);
+        var outputFrame = new AudioFrame((uint)(sampleCount * sizeof(float)));
+        CopyStereoToFrame(_output, outputFrame, sampleCount);
+        sender.AddFrame(outputFrame);
+
+        int meterCount = _mixer.CopyMeterSnapshots(_meterBuffer);
+        if (_owner.MetersAvailable is EventHandler<IReadOnlyList<AudioMeterSnapshot>> handler)
+        {
+          var snapshots = new AudioMeterSnapshot[meterCount];
+          for (int index = 0; index < meterCount; index++)
+          {
+            MixerMeterSnapshot meter = _meterBuffer[index];
+            snapshots[index] = new AudioMeterSnapshot(meter.ChannelId, meter.PeakLeft, meter.PeakRight,
+                meter.RmsLeft, meter.RmsRight, _samplePosition);
+          }
+          handler(_owner, snapshots);
+        }
+        _samplePosition = checked(_samplePosition + frames);
+      }
+      catch (Exception exception)
+      {
+        System.Diagnostics.Trace.TraceError($"Audio mixer quantum failed: {exception}");
+        sender.AddFrame(new AudioFrame((uint)(sampleCount * sizeof(float))));
+      }
+    }
+
+    public void SetSamplePosition(long samplePosition)
+    {
+      _samplePosition = Math.Max(0, samplePosition);
+    }
 
     public void Dispose()
     {
-      if (Interlocked.Exchange(ref _disposed, 1) != 0)
-      {
-        return;
-      }
+      if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
       List<Exception>? failures = null;
       void Release(Action action)
       {
@@ -487,17 +641,48 @@ public sealed class WindowsAudioEngine : IAudioEngine
         catch (Exception exception) { (failures ??= []).Add(exception); }
       }
       Release(Graph.Stop);
-      foreach (PreparedClip clip in Clips)
-      {
-        Release(clip.Node.Dispose);
-      }
+      MasterInput.QuantumStarted -= OnQuantumStarted;
+      foreach (PreparedClip clip in Clips) Release(clip.Node.Dispose);
+      foreach (PreparedTrack track in Tracks) Release(track.Output.Dispose);
+      Release(MasterInput.Dispose);
       Release(Output.Dispose);
       Release(Graph.Dispose);
       if (failures is not null)
-      {
         throw new AggregateException("Audio graph resources could not all be released cleanly.", failures);
-      }
     }
+  }
+
+  private static unsafe void CopyFrameToStereo(AudioFrame frame, float[] destination, int sampleCount)
+  {
+    using AudioBuffer buffer = frame.LockBuffer(AudioBufferAccessMode.Read);
+    using IMemoryBufferReference reference = buffer.CreateReference();
+    ((IMemoryBufferByteAccess)reference).GetBuffer(out byte* bytes, out uint capacity);
+    int available = Math.Min(sampleCount, checked((int)capacity / sizeof(float)));
+    new ReadOnlySpan<float>(bytes, available).CopyTo(destination);
+  }
+
+  private static unsafe void CopyStereoToFrame(float[] source, AudioFrame frame, int sampleCount)
+  {
+    using AudioBuffer buffer = frame.LockBuffer(AudioBufferAccessMode.Write);
+    using IMemoryBufferReference reference = buffer.CreateReference();
+    ((IMemoryBufferByteAccess)reference).GetBuffer(out byte* bytes, out uint capacity);
+    int available = Math.Min(sampleCount, checked((int)capacity / sizeof(float)));
+    source.AsSpan(0, available).CopyTo(new Span<float>(bytes, available));
+  }
+
+  [ComImport]
+  [Guid("5B0D3235-4DBA-4D44-8659-1BCAD79B9C4F")]
+  [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private unsafe interface IMemoryBufferByteAccess
+  {
+    void GetBuffer(out byte* buffer, out uint capacity);
+  }
+
+  private sealed class PreparedTrack(string channelId, AudioFrameOutputNode output, float[] buffer)
+  {
+    public string ChannelId { get; } = channelId;
+    public AudioFrameOutputNode Output { get; } = output;
+    public float[] Buffer { get; } = buffer;
   }
 
   private sealed class PreparedClip(AudioClipSource source, AudioFileInputNode node)

@@ -57,7 +57,7 @@ long render, signing, Store submission, or a clean-machine release.
 | Workflow fixture and review-contract tests | Focused renderer/workflow coverage preserves explicit media fixtures, source-hash invalidation, reviewed-before-apply behavior, and temporary-store publication boundaries | Preserve these contracts; broader release and native UI gates remain separate. |
 | Aggregate Python qualification | The canonical isolated runner passes: repository scope 164 passed/4 skipped and backend-package scope 987 passed/4 skipped | Keep `scripts/run_pytest_scopes.py` as the required frozen-environment regression gate. |
 | Hunyuan/LTX runtime availability | Integration and fail-closed controls are documented; real runtime evidence remains environment-dependent | Keep unavailable until matching Level-5 smoke receipts exist. |
-| Native audio, VST3, ADR, waveform, and multichannel output | Contracts/UI boundaries exist, but several capabilities remain unavailable or stereo-only | Advance only through Gates C and D; never infer capability from simulation. |
+| Native audio, VST3, ADR, waveform, and multichannel output | Separate x64 VST3 scanner and host executables plus the AudioGraph-to-Core mixer bridge are implemented and qualified with Steinberg AGain; ADR/device playback and multichannel output remain unavailable or unqualified | Preserve the dual-binary VST3 evidence while advancing the remaining Gates C and D items; never infer audible or realtime capability from process-block tests. |
 | Microsoft Store and signed release | Packaging/signing path is documented and code-signing is available; Store identity/certification is external | Complete Gate F with fresh x64 artifacts and Partner Center evidence. |
 
 Accepted phase history is evidence of completed increments, not permission to erase current limitations. The current worktree and this blueprint are the starting point for the next acceptance review.
@@ -80,8 +80,9 @@ open; the heading must not be read as evidence that earlier accepted phases were
 
 ### Explicit capability boundaries
 
-- Windows playback currently uses the supported WASAPI shared path; Core mixer/PDC processing and native device qualification are separate gates.
-- Native VST3 discovery may be scanner-only or unavailable. Do not claim plugin processing until instantiate, bus negotiation, processing, state, latency, and crash-isolation evidence exists.
+- Windows playback uses WASAPI shared AudioGraph and now routes exact negotiated per-track float32 quanta through Core mixer/PDC/VST3 processing; audible device playback, timing continuity, and underrun resistance remain separate gates.
+- The dedicated scanner reports supported, unsupported, failed, timed-out, malformed, and quarantined outcomes without exposing worker mode. The separate host performs qualification and persistent processing but rejects scan mode.
+- Native VST3 scanning, instantiate/audio-and-event-bus negotiation, float32 processing, MIDI note input, parameter metadata/editing, state round-trip, latency reporting, compatible-worker recreation, sticky crash/timeout isolation, and exact dual-binary MSIX identity passed with Steinberg AGain. This proves the supported effect path, not arbitrary third-party compatibility or hard-realtime safety.
 - Automation editing and immutable callback snapshots do not prove live callback consumption.
 - Native ADR recording is unavailable unless a real capture device and qualification receipt pass; deterministic capture is test support only.
 - Native bounded WAVE extraction and clap/transient/waveform alignment are implemented in Timeline Post with authorized project media, matching sample rates, cancellation, and explicit preview/apply. Running-app media qualification remains open; timecode alignment and imported canonical post data remain supported.
@@ -107,9 +108,9 @@ open; the heading must not be read as evidence that earlier accepted phases were
 
 ### Gate C — Finish native audio and editing qualification
 
-- Prove actual device playback, transport continuity, loop/seek behavior, and failure recovery.
-- Connect qualified mixer, bus/send, PDC, meter, and automation processing to the supported playback path.
-- Keep scanner-only/unavailable VST3 states honest; qualify a real host separately.
+- Prove actual device playback, transport continuity, loop/seek behavior, failure recovery, and sustained underrun-free operation.
+- Qualify the connected mixer, bus/send, PDC, meter, automation, and VST3 path on a real output device.
+- Preserve honest unavailable/scanner-only/host-ready/worker-failed states and expand compatibility evidence beyond the qualified Steinberg AGain module.
 - Qualify recording/monitoring only with a real device; retain unavailable states otherwise.
 
 ### Gate D — Finish WinUI post-production workflow
@@ -145,6 +146,12 @@ open; the heading must not be read as evidence that earlier accepted phases were
 - Old Electron, Gradio, standalone-engine, proxy-render, CPU-only, or development-identity instructions remain only when explicitly labeled compatibility, research, or local development.
 - Every user-visible feature added to shared services must have a WinUI control, status, or diagnostic.
 - Every release document must say whether a statement is current source behavior, a qualification requirement, historical evidence, or a blocked external gate.
+
+### TensorRT component-runtime checkpoint (2026-09-22)
+
+- Current source implements independently validated, content-addressed SD1.5 UNet and VAE decoder adapters with hybrid Diffusers fallback; native Models and Settings expose selected/all optimization, rebuild, cached-engine execution validation, deletion, refresh, and diagnostics.
+- SDXL, SD3, Flux, SVD, AnimateDiff, LTX 2.5, WAN, and HunyuanVideo 1.5 are not declared TensorRT-capable until model-specific export, execution, numerical validation, and render dispatch exist. Qwen remains on llama.cpp and Whisper on CTranslate2.
+- Fresh current-identity managed SD1.5 FP16 VAE and UNet engines were built and numerically validated on GPU 0, then loaded with `allow_build=False` and executed from the content-addressed cache in a new process. Synthetic TensorRT build/serialize/deserialize/execute passed independently on each of the three RTX A6000 GPUs; this is not multi-GPU inference. Current evidence is 48 component/runtime tests, 14 Director tests, 1,060 complete backend tests with 2 skipped, 12 repository packaging/static tests with 2 skipped, 39 packaging/signing Node tests with 1 skipped, 552 Core tests, a zero-warning Debug x64 WinUI build, and 2 frozen-backend startup tests. The native app stayed alive while supervising a healthy source backend, but Settings/Models/Render were not interactively exercised because no UI automation driver was available. Production sign/install, clean-machine, Store, and packaged Torch-TensorRT compilation remain separate gates.
 
 ### Source records reconciled by this blueprint
 

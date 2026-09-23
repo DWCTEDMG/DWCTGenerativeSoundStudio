@@ -138,6 +138,11 @@ public sealed class BackendSupervisor : IBackendEndpointProvider, IAsyncDisposab
                 return await StartPackagedAsync(packagedDirectory, startupToken).ConfigureAwait(false);
             }
 
+            if (_configuration.RequirePackagedBackend)
+            {
+                return PublishFailure("PACKAGED_BACKEND_MISSING", "The installed Studio backend is missing or invalid.", "Repair or update the Studio package.");
+            }
+
             Publish(Status with
             {
                 State = BackendLifecycleState.CheckingExisting,

@@ -37,6 +37,10 @@ async function writeCandidate(candidate) {
 if (command === "create") {
   const mode = value("--mode", "developer");
   const backendManifestPath = value("--backend-manifest");
+  const vst3HostPath = value("--vst3-host");
+  const vst3ScannerPath = value("--vst3-scanner");
+  if (!vst3HostPath) throw new Error("create requires --vst3-host <EdmgStudio.Vst3Host.exe>.");
+  if (!vst3ScannerPath) throw new Error("create requires --vst3-scanner <EdmgStudio.Vst3Scanner.exe>.");
   const storePath = value("--store-metadata");
   const storeMetadata = storePath ? JSON.parse(await fsp.readFile(path.resolve(storePath), "utf8")) : null;
   const candidate = await createCandidate({
@@ -46,6 +50,8 @@ if (command === "create") {
       version: value("--package-version"), applicationId: value("--application-id"),
     },
     backendManifestPath: backendManifestPath ? path.resolve(backendManifestPath) : "",
+    vst3HostPath: path.resolve(vst3HostPath),
+    vst3ScannerPath: path.resolve(vst3ScannerPath),
     sourceDateEpoch: value("--source-date-epoch"),
   });
   await writeCandidate(candidate);

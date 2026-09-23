@@ -974,6 +974,7 @@ cpu = [
 cuda = [
     { name = "cuda-python" },
     { name = "nvidia-cublas-cu12", marker = "sys_platform == 'win32'" },
+    { name = "onnx" },
     { name = "tensorrt" },
     { name = "tensorrt-cu13" },
     { name = "tensorrt-cu13-bindings" },
@@ -1059,6 +1060,7 @@ requires-dist = [
     { name = "nltk", marker = "extra == 'core'", specifier = ">=3.8,<4" },
     { name = "numpy", marker = "extra == 'core'", specifier = ">=1.26,<2" },
     { name = "nvidia-cublas-cu12", marker = "sys_platform == 'win32' and extra == 'cuda'", specifier = ">=12,<13" },
+    { name = "onnx", marker = "extra == 'cuda'", specifier = ">=1.16,<2" },
     { name = "onnxruntime-directml", marker = "sys_platform == 'win32' and extra == 'directml'", specifier = ">=1.18.0,<2" },
     { name = "openai-codex", marker = "extra == 'codex'" },
     { name = "openai-whisper", marker = "extra == 'asr'", specifier = ">=20240930" },

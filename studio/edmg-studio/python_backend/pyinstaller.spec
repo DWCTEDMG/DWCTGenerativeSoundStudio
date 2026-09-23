@@ -84,7 +84,7 @@ hidden += collect_submodules("core")
 hidden += collect_submodules("config")
 hidden += collect_submodules("integrations")
 
-datas = []
+datas = collect_data_files("edmg_studio_backend")
 datas += safe_collect(collect_data_files, "matplotlib")
 datas += safe_collect(collect_data_files, "nltk")
 datas += safe_collect(collect_data_files, "tensorboard")
@@ -138,7 +138,8 @@ a = Analysis(
     hookspath=[str(hooks_dir)],
     hooksconfig={},
     runtime_hooks=[str(here / "pyinstaller_runtime_hook.py")],
-    excludes=[],
+    excludes=["tkinter", "_tkinter"],
+    module_collection_mode={"scipy.stats._distn_infrastructure": "py"},
     noarchive=False,
 )
 

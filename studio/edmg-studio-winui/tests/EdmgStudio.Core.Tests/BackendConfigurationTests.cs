@@ -165,6 +165,38 @@ public sealed class BackendConfigurationTests
         }
     }
 
+    [TestMethod]
+    public void InstalledPackage_UsesAdjacentBackendAndWritableUserStorage()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var appDirectory = Path.Combine(root, "WindowsApps", "Studio");
+            var staged = CreatePackagedBackend(root, validManifest: true);
+            Directory.CreateDirectory(appDirectory);
+            var backend = Path.Combine(appDirectory, "backend");
+            Directory.Move(staged, backend);
+            var configuration = CreateConfiguration(root) with
+            {
+                ApplicationDirectory = appDirectory,
+                RequirePackagedBackend = true
+            };
+            var factory = new BackendLaunchSpecFactory(configuration);
+            Assert.AreEqual(backend, factory.FindPackagedBackendDirectory());
+            Assert.IsNull(factory.FindSourceBackendDirectory());
+            var spec = factory.CreatePackagedSpec(backend, "127.0.0.1", 17863);
+            Assert.AreEqual(Path.Combine(backend, "edmg-studio-backend.exe"), spec.FileName);
+            Assert.AreEqual(BackendMode.ManagedPackaged, spec.Mode);
+            CollectionAssert.AreEqual(new[] { "serve", "--host", "127.0.0.1", "--port", "17863" }, spec.Arguments.ToArray());
+            Assert.AreEqual(configuration.Paths.DataDirectory, spec.Environment["EDMG_STUDIO_DATA_DIR"]);
+            Assert.AreEqual("cuda", spec.Environment["EDMG_BACKEND_ACCELERATOR_PROFILE"]);
+            Assert.IsFalse(spec.CreateProcessStartInfo().UseShellExecute);
+            Directory.Delete(Path.Combine(backend, "_internal"));
+            Assert.IsNull(factory.FindPackagedBackendDirectory());
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
     private static BackendConfiguration CreateConfiguration(string root) => new(
         RequestedBackendMode.Managed,
         "127.0.0.1",

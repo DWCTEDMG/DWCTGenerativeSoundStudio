@@ -50,10 +50,30 @@ Every relevant phase must preserve and test:
 
 ## 4. Repository and Branch State
 
+### 2026-09-22 TensorRT component-runtime implementation checkpoint
+
+The component runtime admits managed SD1.5 UNet and VAE decoder engines only after real
+TensorRT execution and numerical reference validation. Fresh current-identity FP16
+components were built from the managed SD1.5 model on GPU 0, serialized into
+content-addressed engines, loaded with `allow_build=False` in a new process, and executed
+from cache. Synthetic engine build/serialize/deserialize/execute also passed independently
+on GPU 0, GPU 1, and GPU 2; no single inference spans GPUs. Per-render disable/device
+selection is covered by typed Python and C# contracts. Native Models and Settings controls
+can optimize selected/all compatible components, rebuild, execute-validate an exact cached
+engine without rebuilding, delete, refresh, and diagnose; Render exposes per-operation
+runtime and GPU selection. Other model families remain explicitly unsupported pending
+family-specific qualification. Current evidence is 48 component/runtime tests, 14 Director
+tests, 1,060 complete backend tests with 2 skipped, 12 repository packaging/static tests
+with 2 skipped, 39 packaging/signing Node tests with 1 skipped, 552 native Core tests, a
+zero-warning Debug x64 WinUI build, and 2 frozen-backend startup tests. The native app stayed
+alive while supervising a healthy source backend; interactive page operation, production
+sign/install, clean-machine/Store lifecycle, and packaged Torch-TensorRT compilation remain
+separate gates.
+
 - Repository: `DWCTEDMG/DWCTGenerativeSoundStudio`
 - Default working branch: `codex/Unified`
 - Phase 5 acceptance closure is the commit containing this record; its exact pushed hash is recorded in the delivery ledger after publication.
-- Native VST3 discovery and processing remain capability-gated as unavailable because no qualified native SDK host/scanner is present.
+- Native VST3 scanning and process-block execution are now implemented in the uncommitted candidate and qualified with Steinberg AGain through the clean helper and the byte-identical helper extracted from the developer MSIX. Live audible device playback and hard-realtime safety remain unqualified.
 
 Relevant pushed commits:
 
@@ -224,7 +244,18 @@ Remaining advanced audio work belongs to Phase 5 and later phases: complete bus 
 
 ### Phase 5 - Mixer / VST3
 
-**Status:** Accepted for the managed mixer, persistence, discovery-safety, and Studio UI scope. Native VST3 scanning/hosting and live Windows AudioGraph mixer execution remain explicitly unavailable rather than being reported as ready.
+**Status:** The historical managed-mixer acceptance remains valid. The current uncommitted candidate adds native x64 VST3 scanning/hosting, persistent crash-isolated workers, and an AudioGraph-to-Core mixer bridge. Real AGain process-block and package evidence passes; audible device and hard-realtime qualification remain open.
+
+#### Native VST3 implementation qualification — 2026-09-23
+
+- Separate C++17 `EdmgStudio.Vst3Scanner.exe` and `EdmgStudio.Vst3Host.exe` targets use official Steinberg VST3 SDK 3.8.1 at commit `3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96` and keep third-party plug-in code outside the WinUI process. Compile-time gates prevent the scanner from starting workers and prevent the host from scanning.
+- The scanner returns explicit supported or unsupported module outcomes; unsupported modules are cached without quarantine, while crash, timeout, and malformed responses retain fingerprint-scoped quarantine. One persistent host worker per active insert negotiates audio/event buses and supports float32 stereo processing, MIDI note input, normalized parameter metadata/updates, component/controller state round-trip, latency reporting, and sticky crash/timeout isolation with deterministic delayed bypass.
+- File and bundle fingerprints, explicit reparse-point rejection, cache invalidation, saved module identity/state/preset/latency/bypass, and Timeline worker retirement protect project and process boundaries.
+- Settings resolves scanner and host independently and exposes explicit roots, scan/rescan, ready/unsupported/failed counts, cache, and quarantine diagnostics. Timeline exposes add/remove/reorder, enable/bypass, parameters, state snapshots, worker health, and latency. AudioGraph feeds decoded track quanta through `MixerProcessor` before WASAPI output.
+- Split-helper evidence: the clean and extracted scanners each found two AGain classes; clean and extracted hosts each processed 2-in/2-out audio with one event-input bus, three parameters, finite checksum `0.375`, 12 component-state bytes, and 257 controller-state bytes. Both clean and extracted hosts passed all three managed lifecycle/state/crash/timeout tests. Core passed 560 tests with the three environment-dependent native tests skipped in the aggregate run and passing separately with real paths; focused contracts passed 27 with the same three skips; Debug x64 and packaged Release x64 builds passed with 0 warnings/errors.
+- Candidate `edmg-rc1-a5356f78e1f4d8800404e5622c2668526720b6ee521ecd919453972b039c49e2` binds byte-exact scanner and host hashes. Its developer MSIX SHA-256 is `E181B96E226394CE10CCB0D2B4E4C14028ED06470B1C5F40A83805A0B9F5F6D9`; extracted scanner and host execution passed.
+- Review corrections enforce worker module/class/sample-rate/frame-capacity compatibility, negotiated AudioGraph quantum sizing, exact required-frame processing, actual event-bus MIDI routing, fatal control-timeout transport teardown, and checked processing activation.
+- The developer MSIX is unsigned and backendless by explicit diagnostic allowance, so it is non-distributable. No audible device session, interactive Settings/Timeline exercise, arbitrary third-party plug-in matrix, sustained underrun measurement, ASIO path, editor embedding, or hard-realtime guarantee is claimed.
 
 #### Acceptance closure — 2026-09-15
 

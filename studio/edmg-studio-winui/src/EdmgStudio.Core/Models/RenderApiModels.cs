@@ -361,6 +361,9 @@ public sealed record RenderScenesRequest
 
 public sealed record RenderMotionRequest
 {
+    [JsonPropertyName("runtime")]
+    public OperationRuntimeOptions? Runtime { get; init; }
+
     public RenderMotionRequest(
         int variantIndex = 0,
         string? modelId = null,
@@ -485,8 +488,8 @@ public sealed record TensorRtStandaloneRenderRequest
         string? modelId = null,
         string? prompt = null,
         long? seed = null,
-        int width = 1024,
-        int height = 1024,
+        int width = 512,
+        int height = 512,
         int steps = 28,
         double cfg = 7.0,
         string sampler = "pndm",

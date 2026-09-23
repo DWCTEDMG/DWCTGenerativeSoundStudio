@@ -497,10 +497,31 @@
                         CornerRadius="8">
                         <StackPanel Spacing="12">
                             <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Component acceleration" />
+                            <ComboBox x:Name="ComponentSelector" AutomationProperties.AutomationId="ModelsTensorRtComponent" Header="SD1.5 component" SelectionChanged="ComponentSelector_SelectionChanged" SelectedIndex="0">
+                                <ComboBoxItem Content="UNet" Tag="unet" />
+                                <ComboBoxItem Content="VAE decoder" Tag="vae_decoder" />
+                            </ComboBox>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <NumberBox x:Name="ComponentDevice" AutomationProperties.AutomationId="ModelsTensorRtDevice" Header="GPU index" Minimum="0" Maximum="63" Value="0" />
+                                <ComboBox x:Name="ComponentPrecision" Grid.Column="1" AutomationProperties.AutomationId="ModelsTensorRtPrecision" Header="Precision" SelectedIndex="0">
+                                    <x:String>fp16</x:String>
+                                    <x:String>fp32</x:String>
+                                </ComboBox>
+                            </Grid>
                             <TextBlock x:Name="ComponentAccelerationText" AutomationProperties.AutomationId="ModelsComponentAccelerationStatus" Text="Checking component acceleration status..." TextWrapping="Wrap" />
                             <TextBlock x:Name="ComponentAccelerationReasonText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                            <Button x:Name="ComponentOptimizeButton" AutomationProperties.AutomationId="ModelsOptimizeSd15Vae" AutomationProperties.Name="Optimize SD1.5 VAE decoder" Click="ComponentOptimize_Click" Content="Optimize SD1.5 decoder" IsEnabled="False" HorizontalAlignment="Left" Style="{StaticResource AccentButtonStyle}" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Optimization compiles and validates one backend-managed profile. It is separate from model download and legacy bundle migration." TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="ComponentOptimizeButton" AutomationProperties.AutomationId="ModelsOptimizeSelectedTensorRt" Click="ComponentOptimize_Click" Content="Optimize selected" IsEnabled="False" Style="{StaticResource AccentButtonStyle}" />
+                                <Button x:Name="ComponentOptimizeAllButton" AutomationProperties.AutomationId="ModelsOptimizeAllTensorRt" Click="ComponentOptimizeAll_Click" Content="Optimize all compatible" IsEnabled="False" />
+                                <Button x:Name="ComponentRebuildButton" AutomationProperties.AutomationId="ModelsRebuildSelectedTensorRt" Click="ComponentRebuild_Click" Content="Rebuild selected" IsEnabled="False" />
+                                <Button x:Name="ComponentValidateButton" AutomationProperties.AutomationId="ModelsValidateSelectedTensorRt" Click="ComponentValidate_Click" Content="Validate selected" IsEnabled="False" />
+                                <Button x:Name="ComponentDeleteButton" AutomationProperties.AutomationId="ModelsDeleteSelectedTensorRt" Click="ComponentDelete_Click" Content="Delete selected engine" IsEnabled="False" />
+                            </StackPanel>
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Optimization builds and numerically validates backend-managed profiles. Validate selected reloads and executes the exact cached engine without rebuilding. Unsupported components remain on their existing runtime." TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 

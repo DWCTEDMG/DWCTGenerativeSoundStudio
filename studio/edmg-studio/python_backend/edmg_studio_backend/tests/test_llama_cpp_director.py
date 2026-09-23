@@ -88,6 +88,7 @@ def test_discovery_requires_one_matching_model_and_projector(tmp_path):
 def test_start_isolates_requested_cuda_device_and_loads_projector(tmp_path, monkeypatch):
     model, projector, runtime = _package(tmp_path)
     monkeypatch.setenv("EDMG_LLAMA_SERVER", str(runtime))
+    monkeypatch.delenv("EDMG_QWEN_GPUS", raising=False)
     commands = []
 
     class Process:
@@ -115,7 +116,7 @@ def test_start_isolates_requested_cuda_device_and_loads_projector(tmp_path, monk
     command, kwargs = commands[0]
     assert command[command.index("-m") + 1] == str(model)
     assert command[command.index("--mmproj") + 1] == str(projector)
-    assert command[command.index("--device") + 1] == "CUDA0,CUDA1,CUDA2"
+    assert command[command.index("--device") + 1] == "CUDA0"
     assert command[command.index("--parallel") + 1] == "1"
     assert command[command.index("--batch-size") + 1] == "64"
     assert command[command.index("--ubatch-size") + 1] == "16"
@@ -123,11 +124,43 @@ def test_start_isolates_requested_cuda_device_and_loads_projector(tmp_path, monk
     assert command[command.index("--cache-ram") + 1] == "0"
     assert "--no-mmproj-offload" in command
     assert command[command.index("--split-mode") + 1] == "layer"
-    assert command[command.index("--device") + 1] == "CUDA0,CUDA1,CUDA2"
-    assert command[command.index("--tensor-split") + 1] == "1,1,1"
-    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "0,1,2"
+    assert command[command.index("--tensor-split") + 1] == "1"
+    assert command[command.index("--main-gpu") + 1] == "0"
+    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "1"
     assert kwargs["env"]["GGML_CUDA_DISABLE_GRAPHS"] == "1"
     backend.close()
+
+
+def test_explicit_multi_gpu_configuration_maps_requested_main_gpu(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+    monkeypatch.setenv("EDMG_QWEN_GPUS", "0,2")
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stdout="CUDA0: NVIDIA RTX A6000\nCUDA1: NVIDIA RTX A6000\nCUDA2: NVIDIA RTX A6000",
+        stderr="",
+    ))
+    backend = LlamaCppDirectorBackend(tmp_path, executable=runtime, device="cuda:2")
+    environment = backend._cuda_environment()
+    assert environment["CUDA_VISIBLE_DEVICES"] == "0,2"
+
+
+def test_explicit_multi_gpu_configuration_rejects_invalid_or_missing_requested_device(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stdout="CUDA0: NVIDIA RTX A6000\nCUDA1: NVIDIA RTX A6000\nCUDA2: NVIDIA RTX A6000",
+        stderr="",
+    ))
+    backend = LlamaCppDirectorBackend(tmp_path, executable=runtime, device="cuda:2")
+    monkeypatch.setenv("EDMG_QWEN_GPUS", "0,1")
+    with pytest.raises(RuntimeError, match="must include requested device"):
+        backend._cuda_environment()
+    monkeypatch.setenv("EDMG_QWEN_GPUS", "0,8")
+    with pytest.raises(RuntimeError, match="does not expose"):
+        backend._cuda_environment()
+    monkeypatch.setenv("EDMG_QWEN_GPUS", "0,zero")
+    with pytest.raises(RuntimeError, match="non-negative CUDA indexes"):
+        backend._cuda_environment()
 
 
 def test_auto_gpu_layers_are_partial_on_six_gib_and_manual_override_wins():

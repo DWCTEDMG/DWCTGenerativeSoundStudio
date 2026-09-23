@@ -88,7 +88,7 @@ export function backendPayloadIdentity(manifest) {
   };
 }
 
-export async function createCandidate({ repoRoot, studioRoot, backendManifestPath = "", mode = "developer", storeMetadata = null, packageIdentity = null, sourceDateEpoch = "" }) {
+export async function createCandidate({ repoRoot, studioRoot, backendManifestPath = "", vst3HostPath = "", vst3ScannerPath = "", mode = "developer", storeMetadata = null, packageIdentity = null, sourceDateEpoch = "" }) {
   if (!["developer", "production", "store"].includes(mode)) throw new Error(`Unsupported candidate mode: ${mode}`);
   const gitState = await collectGitProvenance(repoRoot);
   if (mode !== "developer" && gitState.dirty) throw new Error("Production/Store candidates require a clean Git tree.");
@@ -97,12 +97,47 @@ export async function createCandidate({ repoRoot, studioRoot, backendManifestPat
     "studio/edmg-studio/python_backend/pyproject.toml", "studio/edmg-studio/python_backend/uv.lock",
     "studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock",
     "studio/edmg-studio-winui/EdmgStudio.WinUI.csproj", "studio/edmg-studio-winui/Package.appxmanifest",
+    "studio/edmg-studio-winui/native/vst3-host/CMakeLists.txt",
+    "studio/edmg-studio-winui/native/vst3-host/src/main.cpp",
+    "studio/edmg-studio-winui/native/vst3-host/THIRD-PARTY-NOTICES.txt",
     "studio/edmg-studio/packaging/media-tools-assets.json",
   ];
   const inputs = await hashExisting(repoRoot, inputPaths);
   let backend = null;
   if (backendManifestPath) backend = backendPayloadIdentity(JSON.parse(await fsp.readFile(backendManifestPath, "utf8")));
   if (mode !== "developer" && !backend) throw new Error("Production/Store candidates require the validated production backend payload.");
+  let nativeVst3Host = null;
+  if (vst3HostPath) {
+    const resolvedHostPath = path.resolve(vst3HostPath);
+    const stat = await fsp.stat(resolvedHostPath);
+    if (!stat.isFile()) throw new Error("VST3 host candidate input must be a regular file.");
+    nativeVst3Host = {
+      fileName: path.basename(resolvedHostPath),
+      bytes: stat.size,
+      sha256: await sha256File(resolvedHostPath),
+      architecture: "x64",
+      configuration: "Release",
+      sdkVersion: "3.8.1",
+      sdkCommit: "3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96",
+    };
+  }
+  if (!nativeVst3Host) throw new Error("Candidates require the exact EdmgStudio.Vst3Host.exe payload.");
+  let nativeVst3Scanner = null;
+  if (vst3ScannerPath) {
+    const resolvedScannerPath = path.resolve(vst3ScannerPath);
+    const stat = await fsp.stat(resolvedScannerPath);
+    if (!stat.isFile()) throw new Error("VST3 scanner candidate input must be a regular file.");
+    nativeVst3Scanner = {
+      fileName: path.basename(resolvedScannerPath),
+      bytes: stat.size,
+      sha256: await sha256File(resolvedScannerPath),
+      architecture: "x64",
+      configuration: "Release",
+      sdkVersion: "3.8.1",
+      sdkCommit: "3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96",
+    };
+  }
+  if (!nativeVst3Scanner) throw new Error("Candidates require the exact EdmgStudio.Vst3Scanner.exe payload.");
   const packageJson = JSON.parse(await fsp.readFile(path.join(studioRoot, "package.json"), "utf8"));
   const epoch = sourceDateEpoch || process.env.SOURCE_DATE_EPOCH || git(repoRoot, ["show", "-s", "--format=%ct", gitState.commitSha]).trim();
   if (!/^\d+$/.test(String(epoch))) throw new Error("SOURCE_DATE_EPOCH must be an integer Unix timestamp.");
@@ -133,6 +168,8 @@ export async function createCandidate({ repoRoot, studioRoot, backendManifestPat
     },
     inputs,
     backend,
+    nativeVst3Host,
+    nativeVst3Scanner,
   };
   const candidateId = `edmg-rc1-${sha256Bytes(stableJson(core))}`;
   return {
@@ -186,6 +223,12 @@ export function validatePackageContract({ candidate, msixMetadata, installerMeta
   assertCandidate(candidate, { requireBackend: true });
   assertArtifact(candidate, "msix", msixMetadata?.candidateId, msixMetadata?.package?.sha256);
   if (stableJson(msixMetadata.backend) !== stableJson(candidate.candidateCore.backend)) throw new Error("MSIX backend payload identity mismatch.");
+  if (candidate.candidateCore.nativeVst3Host && stableJson(msixMetadata.nativeVst3Host) !== stableJson(candidate.candidateCore.nativeVst3Host)) {
+    throw new Error("MSIX native VST3 host identity mismatch.");
+  }
+  if (candidate.candidateCore.nativeVst3Scanner && stableJson(msixMetadata.nativeVst3Scanner) !== stableJson(candidate.candidateCore.nativeVst3Scanner)) {
+    throw new Error("MSIX native VST3 scanner identity mismatch.");
+  }
   const identity = candidate.candidateCore.product.identity;
   for (const key of ["name", "publisher", "version"]) {
     if (msixMetadata.package?.[key] !== identity[key]) throw new Error(`MSIX ${key} identity mismatch.`);

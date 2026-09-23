@@ -855,6 +855,8 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
     from ..runtime.policy import resolve_policy
     from ..config import Settings
     policy = resolve_policy(Settings().data_dir, runtime)
+    if device.startswith("cuda") and policy.device is not None:
+        device = f"cuda:{policy.device}"
     policy_key = policy.model_dump_json()
     cache_key = (str(model_dir), device, str(role or "video") + policy_key)
     cached = _PipelineCache.get(cache_key)
@@ -865,8 +867,9 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
     # in app.py, so we don't need to re-apply them here on every pipeline load.
     family = _model_family_from_dir(model_dir)
     torch, txt_pipeline_class, img_pipeline_class, inpaint_pipeline_class = _load_diffusers_runtime(family)
-
-    torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
+    is_cuda = device.startswith("cuda")
+    cuda_index = int(device.split(":", 1)[1]) if ":" in device and is_cuda else 0
+    torch_dtype = torch.float16 if is_cuda or device == "rocm" else torch.float32
 
     if family == "flux":
         if device == "directml":
@@ -877,7 +880,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
                 status_code=400,
             )
         flux_dtype = torch.float16
-        if hasattr(torch, "bfloat16") and device in {"cuda", "cpu"}:
+        if hasattr(torch, "bfloat16") and (is_cuda or device == "cpu"):
             flux_dtype = torch.bfloat16
         txt = txt_pipeline_class.from_pretrained(
             str(model_dir),
@@ -888,9 +891,9 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
             ),
         )
         backend = "diffusers"
-        if device == "cuda":
+        if is_cuda:
             try:
-                vram_gb = float(torch.cuda.get_device_properties(0).total_memory) / (1024 ** 3)
+                vram_gb = float(torch.cuda.get_device_properties(cuda_index).total_memory) / (1024 ** 3)
             except Exception:
                 vram_gb = 0.0
             if vram_gb < 16.0:
@@ -901,7 +904,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
                         code="FLUX_OFFLOAD_UNAVAILABLE",
                         status_code=400,
                     )
-                txt.enable_sequential_cpu_offload()
+                txt.enable_sequential_cpu_offload(gpu_id=cuda_index)
                 backend = "diffusers_sequential_offload"
             else:
                 txt = txt.to(device)
@@ -915,7 +918,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
-        if device == "cuda" and hasattr(txt, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(txt, "enable_xformers_memory_efficient_attention"):
             try:
                 txt.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -925,7 +928,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         img = img_pipeline_class(**txt.components)
         if hasattr(img, "enable_attention_slicing"):
             img.enable_attention_slicing()
-        if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(img, "enable_xformers_memory_efficient_attention"):
             try:
                 img.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -935,7 +938,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         inpaint = inpaint_pipeline_class(**txt.components)
         if hasattr(inpaint, "enable_attention_slicing"):
             inpaint.enable_attention_slicing()
-        if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
             try:
                 inpaint.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -958,7 +961,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
-        if device == "cuda" and hasattr(txt, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(txt, "enable_xformers_memory_efficient_attention"):
             try:
                 txt.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -968,7 +971,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         img = img_pipeline_class(**txt.components)
         if hasattr(img, "enable_attention_slicing"):
             img.enable_attention_slicing()
-        if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(img, "enable_xformers_memory_efficient_attention"):
             try:
                 img.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -978,7 +981,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         inpaint = inpaint_pipeline_class(**txt.components)
         if hasattr(inpaint, "enable_attention_slicing"):
             inpaint.enable_attention_slicing()
-        if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
             try:
                 inpaint.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -1001,7 +1004,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         )
         if hasattr(txt, "enable_attention_slicing"):
             txt.enable_attention_slicing()
-        if device == "cuda" and hasattr(txt, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(txt, "enable_xformers_memory_efficient_attention"):
             try:
                 txt.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -1011,7 +1014,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         img = img_pipeline_class(**txt.components)
         if hasattr(img, "enable_attention_slicing"):
             img.enable_attention_slicing()
-        if device == "cuda" and hasattr(img, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(img, "enable_xformers_memory_efficient_attention"):
             try:
                 img.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -1021,7 +1024,7 @@ def _try_load_diffusers(model_dir: Path, device: str, *, role: str = "video", ru
         inpaint = inpaint_pipeline_class(**txt.components)
         if hasattr(inpaint, "enable_attention_slicing"):
             inpaint.enable_attention_slicing()
-        if device == "cuda" and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
+        if is_cuda and hasattr(inpaint, "enable_xformers_memory_efficient_attention"):
             try:
                 inpaint.enable_xformers_memory_efficient_attention()
             except Exception:
@@ -1632,7 +1635,7 @@ def _load_controlnet_model(model_dir: Path, family: str, device: str) -> Any:
             status_code=500,
         ) from e
 
-    torch_dtype = torch.float16 if device in ("cuda", "rocm") else torch.float32
+    torch_dtype = torch.float16 if device.startswith("cuda") or device == "rocm" else torch.float32
     controlnet = ControlNetModel.from_pretrained(
         str(model_dir),
         **_diffusers_model_load_kwargs(model_dir, device, extra={"torch_dtype": torch_dtype}),
@@ -1687,7 +1690,7 @@ def _build_controlnet_pipeline(
         pipeline = StableDiffusionControlNetPipeline(controlnet=controlnet, **base_components)
     if hasattr(pipeline, "enable_attention_slicing"):
         pipeline.enable_attention_slicing()
-    if pipes.device == "cuda" and hasattr(pipeline, "enable_xformers_memory_efficient_attention"):
+    if pipes.device.startswith("cuda") and hasattr(pipeline, "enable_xformers_memory_efficient_attention"):
         try:
             pipeline.enable_xformers_memory_efficient_attention()
         except Exception:

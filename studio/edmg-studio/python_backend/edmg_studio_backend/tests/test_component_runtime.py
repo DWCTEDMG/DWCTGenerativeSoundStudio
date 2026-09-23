@@ -1,14 +1,18 @@
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from edmg_studio_backend.runtime.cache import EngineCache, engine_key
+from edmg_studio_backend.runtime.resources import require_build_memory, workspace_bytes
 from edmg_studio_backend.runtime.manager import (
     RuntimeManager,
     RuntimePlan,
     RuntimeRegistry,
     RuntimeSelector,
+    UnetRuntimeManager,
+    install_pipeline_runtime,
     pipeline_runtime_metadata,
 )
 from edmg_studio_backend.runtime.policy import RuntimePolicy, load_policy
@@ -36,6 +40,10 @@ def test_request_override_is_isolated_and_global_disable_wins(tmp_path):
     assert first.precision == "fp16"
     assert first.model_dump_json() != second.model_dump_json()
     assert store.get() == before
+    indexed = resolve_policy(tmp_path, {"device": 2})
+    assert indexed.device == 2
+    assert "device" not in indexed.model_dump()
+    assert store.get() == before
     store.update({"runtime": {"enabled": False}})
     assert not resolve_policy(tmp_path, {"enabled": True, "mode": "tensorrt"}).enabled
 
@@ -48,21 +56,54 @@ def test_operation_policy_cannot_change_worker_or_cache_configuration(tmp_path):
 
 
 def test_generation_and_layer_contracts_preserve_operation_policy():
-    from edmg_studio_backend.schemas import GenerationRequest, LayeredAnimateRequest, RenderScenesRequest
-    override = {"enabled": False, "precision": "fp32", "allow_fallback": True}
+    from edmg_studio_backend.schemas import GenerationRequest, LayeredAnimateRequest, RenderMotionRequest, RenderScenesRequest
+    override = {"enabled": False, "precision": "fp32", "allow_fallback": True, "device": 2}
     request = GenerationRequest.model_validate({"operation": "video", "parameters": {"runtime": override}})
     assert request.model_dump()["parameters"]["runtime"]["enabled"] is False
     assert RenderScenesRequest(runtime=override).model_dump()["runtime"]["enabled"] is False
+    assert RenderMotionRequest(runtime=override).model_dump()["runtime"]["device"] == 2
     request = LayeredAnimateRequest(source_asset="frame.png", runtime=override)
     assert request.model_dump()["runtime"]["precision"] == "fp32"
 
 
-def test_registry_does_not_admit_unconverted_components():
+def test_registry_admits_only_implemented_sd15_components():
+    from edmg_studio_backend.runtime.adapters import ComponentAdapterRegistry
     from edmg_studio_backend.runtime.manager import RuntimeRegistry
     components = RuntimeRegistry().component_status()
     admitted = [(c["model_family"], c["component"]) for c in components if c["status"] == "adapter_available"]
-    assert admitted == [("sd15", "vae_decoder")]
+    assert admitted == [("sd15", "vae_decoder"), ("sd15", "unet")]
+    registry = ComponentAdapterRegistry()
+    assert registry.require("sd15", "vae_decoder").builder_function == "prepare_component"
+    assert registry.require("sd15", "unet").builder_function == "prepare_unet"
+    with pytest.raises(RuntimeError, match="No buildable"):
+        registry.require("sdxl", "unet")
     assert {c["model_family"] for c in components} >= {"ltx_25", "wan", "hunyuan_video15", "qwen", "whisper"}
+
+
+@pytest.mark.parametrize(
+    ("total_gib", "expected_mib"),
+    [(6, 512), (12, 1024), (48, 2048)],
+)
+def test_workspace_selection_uses_stable_gpu_capacity_tiers(total_gib, expected_mib):
+    from edmg_studio_backend.runtime.resources import workspace_bytes
+
+    cuda = SimpleNamespace(
+        get_device_properties=lambda device: SimpleNamespace(total_memory=total_gib * 1024**3),
+        mem_get_info=lambda device: (8 * 1024**3, total_gib * 1024**3),
+    )
+    assert workspace_bytes(SimpleNamespace(cuda=cuda), 0) == expected_mib * 1024**2
+
+
+def test_build_memory_guard_rejects_insufficient_free_vram_without_changing_workspace():
+    cuda = SimpleNamespace(
+        get_device_properties=lambda device: SimpleNamespace(total_memory=6 * 1024**3),
+        mem_get_info=lambda device: (900 * 1024**2, 6 * 1024**3),
+    )
+    torch = SimpleNamespace(cuda=cuda)
+    selected = workspace_bytes(torch, 0)
+    assert selected == 512 * 1024**2
+    with pytest.raises(RuntimeError, match="Insufficient free VRAM"):
+        require_build_memory(torch, 0, selected)
 
 
 def test_request_off_never_starts_worker(tmp_path, monkeypatch):
@@ -84,8 +125,10 @@ def test_cached_pipeline_is_partitioned_by_effective_request_policy(tmp_path, mo
     assert video._try_load_diffusers(tmp_path, "cuda", runtime={"enabled": False}) is sentinel
     assert video._try_load_diffusers(tmp_path, "cuda", runtime={"mode": "tensorrt"}) is sentinel
     assert video._try_load_diffusers(tmp_path, "cuda", runtime={"enabled": False}) is sentinel
+    assert video._try_load_diffusers(tmp_path, "cuda", runtime={"enabled": False, "device": 2}) is sentinel
     assert keys[0] != keys[1]
     assert keys[0] == keys[2]
+    assert keys[3][1] == "cuda:2"
 
 
 def test_internal_settings_payload_keeps_render_override():
@@ -115,7 +158,7 @@ def test_policy_can_disable_acceleration(change):
     assert not RuntimeSelector.permits_tensorrt(RuntimePolicy(**change), "sd15", "vae_decoder", "cuda:1")
 
 
-@pytest.mark.parametrize("model,component,device", [("hunyuan", "transformer", "cuda:0"), ("sd15", "unet", "cuda"), ("sd15", "vae_decoder", "cpu")])
+@pytest.mark.parametrize("model,component,device", [("hunyuan", "transformer", "cuda:0"), ("sdxl", "unet", "cuda"), ("sd15", "vae_decoder", "cpu")])
 def test_no_guessed_model_or_cpu_support(model, component, device):
     assert not RuntimeSelector.permits_tensorrt(RuntimePolicy(), model, component, device)
 
@@ -157,6 +200,23 @@ def test_unvalidated_engine_cannot_publish(tmp_path):
         EngineCache(tmp_path).publish({}, b"bad", {"passed": False}, {})
 
 
+def test_workspace_identity_does_not_require_build_memory():
+    class Cuda:
+        @staticmethod
+        def get_device_properties(_device):
+            return type("Properties", (), {"total_memory": 8 * 1024**3})()
+
+        @staticmethod
+        def mem_get_info(_device):
+            return (1, 8 * 1024**3)
+
+    torch = type("Torch", (), {"cuda": Cuda})()
+    selected = workspace_bytes(torch, 0)
+    assert selected == 1024**3
+    with pytest.raises(RuntimeError, match="Insufficient free VRAM"):
+        require_build_memory(torch, 0, selected)
+
+
 def test_failed_worker_falls_back_once_without_changing_latent(tmp_path, monkeypatch):
     import torch
     import edmg_studio_backend.runtime.manager as module
@@ -176,12 +236,117 @@ def test_failed_worker_falls_back_once_without_changing_latent(tmp_path, monkeyp
     assert len(manager.plan.fallback_history) == 1
 
 
+def test_vae_generator_does_not_bypass_tensorrt(tmp_path, monkeypatch):
+    import torch
+    import edmg_studio_backend.runtime.manager as module
+
+    def reached_worker(*args, **kwargs):
+        raise RuntimeError("worker reached")
+
+    monkeypatch.setattr(module, "RuntimeProcess", reached_worker)
+    value = SimpleNamespace(device=torch.device("cuda:0"), dtype=torch.float16, shape=(1, 4, 64, 64))
+    manager = RuntimeManager(RuntimePolicy(strict=True), tmp_path, tmp_path, lambda *args, **kwargs: pytest.fail("fallback"))
+    with pytest.raises(RuntimeError, match="worker reached"):
+        manager.decode(value, return_dict=False, generator=object())
+
+
 def test_strict_failure_does_not_fallback(tmp_path):
     manager = RuntimeManager(RuntimePolicy(strict=True), tmp_path, tmp_path, lambda *a: pytest.fail("fallback"))
     with pytest.raises(RuntimeError, match="strict"):
         manager._fallback(RuntimeError("broken"))
     with pytest.raises(RuntimeError, match="fallback is disabled"):
         manager.decode(SimpleNamespace(device="cuda:0"))
+
+
+def test_strict_pipeline_install_rejects_unsupported_or_non_cuda_pipeline(tmp_path):
+    policy = RuntimePolicy(strict=True)
+    with pytest.raises(RuntimeError, match="supported SD1.5 CUDA pipeline"):
+        install_pipeline_runtime(SimpleNamespace(family="sdxl", device="cuda"), tmp_path, policy=policy)
+    with pytest.raises(RuntimeError, match="supported SD1.5 CUDA pipeline"):
+        install_pipeline_runtime(SimpleNamespace(family="sd15", device="cpu"), tmp_path, policy=policy)
+
+
+def test_unet_prepare_uses_component_specific_validation_limits(tmp_path, monkeypatch):
+    import torch
+    import edmg_studio_backend.runtime.manager as module
+
+    requests = []
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, operation, **kwargs):
+            requests.append((operation, kwargs))
+            raise RuntimeError("stop after prepare capture")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(module, "RuntimeProcess", FakeProcess)
+    policy = RuntimePolicy(strict=True, precision="fp16")
+    manager = UnetRuntimeManager(policy, tmp_path, tmp_path, lambda *args, **kwargs: pytest.fail("fallback"))
+    sample = SimpleNamespace(device=torch.device("cuda:0"), dtype=torch.float16, shape=(1, 4, 64, 64), ndim=4)
+    timestep = SimpleNamespace(detach=lambda: None)
+    conditioning = SimpleNamespace(shape=(1, 77, 768), ndim=3)
+    with pytest.raises(RuntimeError, match="stop after prepare capture"):
+        manager.forward(sample, timestep, conditioning)
+    assert requests[0][0] == "prepare"
+    assert requests[0][1]["validation_limits"] == policy.validation_limits("fp16", "unet")
+    assert requests[0][1]["validation_limits"] != policy.validation_limits("fp16", "vae_decoder")
+
+
+def test_tensor_executor_executes_all_named_inputs_and_outputs():
+    from edmg_studio_backend.runtime.executor import TensorExecutor
+
+    class Tensor:
+        def __init__(self, shape=(1,), pointer=1):
+            self.shape = shape
+            self.pointer = pointer
+
+        def to(self, **kwargs):
+            return self
+
+        def contiguous(self):
+            return self
+
+        def data_ptr(self):
+            return self.pointer
+
+    class Context:
+        def __init__(self):
+            self.addresses = {}
+
+        def set_input_shape(self, name, shape):
+            return True
+
+        def set_tensor_address(self, name, pointer):
+            self.addresses[name] = pointer
+            return True
+
+        def get_tensor_shape(self, name):
+            return (1, 4) if name == "noise_pred" else (1,)
+
+        def execute_async_v3(self, stream):
+            return True
+
+    stream = SimpleNamespace(cuda_stream=7, synchronize=lambda: None)
+    torch = SimpleNamespace(
+        Tensor=Tensor,
+        empty=lambda shape, **kwargs: Tensor(shape, 10 + len(shape)),
+        cuda=SimpleNamespace(current_stream=lambda device: stream),
+    )
+    executor = TensorExecutor.__new__(TensorExecutor)
+    executor.torch = torch
+    executor.device = 2
+    executor.inputs = ["sample", "timestep", "encoder_hidden_states"]
+    executor.outputs = ["noise_pred", "diagnostic"]
+    executor.context = Context()
+    executor._torch_dtype = lambda name: "float32"
+
+    outputs = executor.execute({name: Tensor(pointer=index + 1) for index, name in enumerate(executor.inputs)})
+    assert set(outputs) == {"noise_pred", "diagnostic"}
+    assert set(executor.context.addresses) == set(executor.inputs + executor.outputs)
 
 
 def test_runtime_api_validates_policy_and_reuses_job_store(tmp_path, monkeypatch):
@@ -271,7 +436,7 @@ def test_runtime_status_reports_qualified_component_evidence(tmp_path, monkeypat
     assert disabled["state"] == "disabled" and disabled["available"]
     assert not next(value for value in disabled["components"] if value["component"] == "vae_decoder")["optimization_eligible"]
     assert status["pytorch_cuda_available"]
-    assert status["supported_component_count"] == 1
+    assert status["supported_component_count"] == 2
     component = next(value for value in status["components"] if value["model_family"] == "sd15" and value["component"] == "vae_decoder")
     assert component["optimization_eligible"]
     assert component["validated_engine_count"] == 1
@@ -302,9 +467,9 @@ def test_runtime_metadata_reports_actual_tensorrt_selection():
     assert metadata["engine_id"] == "a" * 64
 
 
-def test_component_runtime_does_not_claim_unet_but_standalone_does():
+def test_component_runtime_and_standalone_both_admit_sd15_unet():
     capabilities = RuntimeRegistry().capabilities
-    assert "unet" not in capabilities["tensorrt"]["sd15"]
+    assert "unet" in capabilities["tensorrt"]["sd15"]
     assert capabilities["tensorrt_standalone"]["sd15"] == ["unet"]
 
 
@@ -314,3 +479,244 @@ def test_validation_policy_has_separate_fp32_and_fp16_limits():
     fp16 = policy.validation_limits("fp16")
     assert fp32["max_absolute_error"] < fp16["max_absolute_error"]
     assert fp32["min_psnr_db"] > fp16["min_psnr_db"]
+
+
+def test_runtime_process_transports_named_arrays(tmp_path, monkeypatch):
+    import edmg_studio_backend.runtime.process as runtime_process
+
+    class FakeInput:
+        def __init__(self):
+            self.command = None
+            self.closed = False
+
+        def write(self, value):
+            self.command = json.loads(value)
+
+        def flush(self):
+            sequence = self.command["sequence"]
+            root = process.root
+            first = np.load(root / f"{sequence}-input-0.npy", allow_pickle=False)
+            second = np.load(root / f"{sequence}-input-1.npy", allow_pickle=False)
+            np.save(root / f"{sequence}-output-0.npy", first + second, allow_pickle=False)
+            (root / f"{sequence}.json").write_text(json.dumps({
+                "ok": True,
+                "result": {"output_names": ["noise_pred"]},
+            }))
+
+        def close(self):
+            self.closed = True
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self):
+            self.stdin = FakeInput()
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(runtime_process.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    process = runtime_process.RuntimeProcess(tmp_path)
+    original_read_text = runtime_process.Path.read_text
+    response_reads = 0
+
+    def read_after_transient_sharing_violation(path, *args, **kwargs):
+        nonlocal response_reads
+        if path.name == "1.json":
+            response_reads += 1
+            if response_reads == 1:
+                raise PermissionError("simulated Windows sharing violation")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_process.Path, "read_text", read_after_transient_sharing_violation)
+    try:
+        result = process.request(
+            "execute",
+            arrays={
+                "sample": np.array([1.0, 2.0], dtype=np.float32),
+                "conditioning": np.array([3.0, 4.0], dtype=np.float32),
+            },
+        )
+        assert result["outputs"]["noise_pred"].tolist() == [4.0, 6.0]
+        assert process.process.stdin.command["input_names"] == ["sample", "conditioning"]
+        assert response_reads == 2
+        assert not list(process.root.glob("1-*.npy"))
+    finally:
+        process.close()
+
+
+def test_runtime_process_rejects_ambiguous_tensor_payload(tmp_path, monkeypatch):
+    import edmg_studio_backend.runtime.process as runtime_process
+
+    fake = SimpleNamespace(
+        stdin=SimpleNamespace(closed=False, close=lambda: None),
+        poll=lambda: 0,
+    )
+    monkeypatch.setattr(runtime_process.subprocess, "Popen", lambda *args, **kwargs: fake)
+    process = runtime_process.RuntimeProcess(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="either array or named arrays"):
+            process.request("execute", array=np.zeros(1), arrays={"input": np.zeros(1)})
+    finally:
+        process.close()
+
+
+def test_runtime_job_targets_selected_component_and_preserves_payload(tmp_path, monkeypatch):
+    import edmg_studio_backend.runtime.service as runtime_service
+
+    model_dir = tmp_path / "models" / "internal" / "diffusers" / "hf_sd15_internal"
+    model_dir.mkdir(parents=True)
+    requests = []
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def request(self, operation, **kwargs):
+            requests.append((operation, kwargs))
+            if operation == "diagnose":
+                return {"healthy": True, "status": "ready"}
+            component = kwargs["component"]
+            identity = {"model": "sd15", "component": component}
+            return {"manifest": EngineCache(tmp_path).publish(
+                identity, component.encode(), {"passed": True}, {"beneficial": True},
+            )}
+
+    monkeypatch.setattr(runtime_service, "RuntimeProcess", FakeProcess)
+    job = SimpleNamespace(payload={
+        "operation": "optimize", "model_family": "sd15", "component": "unet",
+        "device": 2, "precision": "fp16", "width": 768, "height": 512,
+    })
+    result = runtime_service.run_runtime_job(
+        job, tmp_path, tmp_path / "models", lambda: False, lambda *args: None,
+    )
+    prepare = requests[-1]
+    assert prepare[0] == "prepare"
+    assert prepare[1]["model_family"] == "sd15" and prepare[1]["component"] == "unet"
+    assert prepare[1]["device"] == 2 and prepare[1]["shape"] == [1, 4, 64, 96]
+    assert result["component"] == "unet" and result["operation"] == "optimize"
+
+
+def test_runtime_job_validates_cached_component_without_building(tmp_path, monkeypatch):
+    import edmg_studio_backend.runtime.service as runtime_service
+
+    model_dir = tmp_path / "models" / "internal" / "diffusers" / "hf_sd15_internal"
+    model_dir.mkdir(parents=True)
+    requests = []
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def request(self, operation, **kwargs):
+            requests.append((operation, kwargs))
+            if operation == "diagnose":
+                return {"healthy": True, "status": "ready"}
+            if operation == "execute":
+                return {"inference_s": 0.01}
+            identity = {"model": "sd15", "component": kwargs["component"]}
+            return {"manifest": EngineCache(tmp_path).publish(
+                identity, b"cached-engine", {"passed": True}, {"beneficial": True},
+            )}
+
+    monkeypatch.setattr(runtime_service, "RuntimeProcess", FakeProcess)
+    result = runtime_service.run_runtime_job(
+        SimpleNamespace(payload={
+            "operation": "validate", "model_family": "sd15", "component": "unet",
+            "device": 0, "precision": "fp16", "width": 512, "height": 512,
+        }),
+        tmp_path, tmp_path / "models", lambda: False, lambda *args: None,
+    )
+    prepare = next(request for request in requests if request[0] == "prepare")
+    execute = next(request for request in requests if request[0] == "execute")
+    assert prepare[1]["allow_build"] is False
+    assert set(execute[1]["arrays"]) == {"sample", "timestep", "encoder_hidden_states"}
+    assert result["validation_execution"] == {
+        "passed": True,
+        "inference_s": 0.01,
+        "scope": "cached_engine_deserialize_and_execute",
+    }
+
+
+def test_runtime_job_rejects_unsupported_component_before_fallback(tmp_path, monkeypatch):
+    import edmg_studio_backend.runtime.service as runtime_service
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def request(self, operation, **kwargs):
+            return {"healthy": True, "status": "ready"}
+
+    monkeypatch.setattr(runtime_service, "RuntimeProcess", FakeProcess)
+    with pytest.raises(RuntimeError, match="No buildable TensorRT adapter for sdxl/unet"):
+        runtime_service.run_runtime_job(
+            SimpleNamespace(payload={
+                "operation": "optimize", "model_family": "sdxl", "component": "unet",
+                "device": 0, "precision": "fp16", "width": 512, "height": 512,
+            }),
+            tmp_path, tmp_path / "models", lambda: False, lambda *args: None,
+        )
+
+
+def test_runtime_job_optimizes_all_supported_components(tmp_path, monkeypatch):
+    import edmg_studio_backend.runtime.service as runtime_service
+
+    model_dir = tmp_path / "models" / "internal" / "diffusers" / "hf_sd15_internal"
+    model_dir.mkdir(parents=True)
+    prepared = []
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def request(self, operation, **kwargs):
+            if operation == "diagnose":
+                return {"healthy": True, "status": "ready"}
+            component = kwargs["component"]
+            prepared.append(component)
+            identity = {"model": "sd15", "component": component}
+            return {"manifest": EngineCache(tmp_path).publish(
+                identity, component.encode(), {"passed": True}, {"beneficial": True},
+            )}
+
+    monkeypatch.setattr(runtime_service, "RuntimeProcess", FakeProcess)
+    result = runtime_service.run_runtime_job(
+        SimpleNamespace(payload={
+            "operation": "optimize_all", "model_family": "sd15", "component": "unet",
+            "device": 0, "precision": "fp16", "width": 512, "height": 512,
+        }),
+        tmp_path, tmp_path / "models", lambda: False, lambda *args: None,
+    )
+    assert prepared == ["vae_decoder", "unet"]
+    assert [item["component"] for item in result["components"]] == prepared

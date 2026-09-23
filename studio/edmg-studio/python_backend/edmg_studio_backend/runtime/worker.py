@@ -58,8 +58,12 @@ def serve(root: Path) -> None:
             if command["operation"] == "diagnose":
                 result = diagnose(int(command.get("device", 0)))
             elif command["operation"] == "prepare":
-                from .builder import prepare_component
-                executor, manifest, cache_status = prepare_component(
+                from .adapters import ComponentAdapterRegistry
+                adapter = ComponentAdapterRegistry().require(
+                    str(command.get("model_family", "sd15")),
+                    str(command.get("component", "vae_decoder")),
+                )
+                executor, manifest, cache_status = adapter.prepare(
                     Path(configuration["data_dir"]), Path(command["model_dir"]), command["shape"],
                     command["precision"], int(command["device"]), bool(command["allow_build"]),
                     validation_limits=command.get("validation_limits"),
@@ -69,14 +73,30 @@ def serve(root: Path) -> None:
                 import torch
                 if executor is None:
                     raise RuntimeError("No component has been prepared")
-                latent = torch.from_numpy(np.load(root / f"{sequence}-input.npy", allow_pickle=False))
+                input_names = command.get("input_names")
+                if input_names:
+                    values = {
+                        name: torch.from_numpy(
+                            np.load(root / f"{sequence}-input-{index}.npy", allow_pickle=False)
+                        )
+                        for index, name in enumerate(input_names)
+                    }
+                else:
+                    values = torch.from_numpy(np.load(root / f"{sequence}-input.npy", allow_pickle=False))
                 started = time.perf_counter()
                 with torch.inference_mode():
-                    output = executor(latent)
-                if not torch.isfinite(output).all():
-                    raise RuntimeError("TensorRT returned nonfinite component output")
-                np.save(root / f"{sequence}-output.npy", output.cpu().numpy(), allow_pickle=False)
+                    output = executor(values)
                 result = {"inference_s": time.perf_counter() - started}
+                if isinstance(output, dict):
+                    result["output_names"] = list(output)
+                    for index, (name, value) in enumerate(output.items()):
+                        if not torch.isfinite(value).all():
+                            raise RuntimeError(f"TensorRT returned nonfinite output for {name!r}")
+                        np.save(root / f"{sequence}-output-{index}.npy", value.cpu().numpy(), allow_pickle=False)
+                else:
+                    if not torch.isfinite(output).all():
+                        raise RuntimeError("TensorRT returned nonfinite component output")
+                    np.save(root / f"{sequence}-output.npy", output.cpu().numpy(), allow_pickle=False)
             else:
                 raise ValueError("Unknown runtime operation")
             atomic_write(response_path, json.dumps({"ok": True, "result": result}, allow_nan=False).encode())

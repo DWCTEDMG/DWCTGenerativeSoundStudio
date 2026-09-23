@@ -113,6 +113,10 @@ test("PowerShell signing lane performs real signing, dual verification, and evid
   assert.match(signScript, /"verify", "\/pa", "\/all", "\/tw", "\/v"/);
   assert.match(signScript, /windows-signatures\.json/);
   assert.match(signScript, /Windows Kits\\10\\bin/);
+  assert.doesNotMatch(signScript, /10\.0\.22621\.0/);
+  assert.match(signScript, /EDMG_ARTIFACT_SIGNING_METADATA/);
+  assert.match(signScript, /EDMG_ARTIFACT_SIGNING_DLIB/);
+  assert.match(signScript, /"\/dlib", \$artifactDlib, "\/dmdf", \$artifactMetadata/);
   assert.match(signScript, /EDMG_REQUIRE_CODE_SIGNING/);
   assert.match(signScript, /expectedSignerThumbprint/);
   assert.match(signScript, /beforeMatchesConfiguredSigner/);

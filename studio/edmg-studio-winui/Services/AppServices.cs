@@ -33,7 +33,8 @@ public sealed class AppServices : IAsyncDisposable
         StudioCommandDispatcher commands,
         StudioRemoteControlService remoteControl,
         WindowsMidiInputService midiInput,
-        ILocalRuntimeOrchestrator localRuntime)
+        ILocalRuntimeOrchestrator localRuntime,
+        IVst3HostSession vst3Host)
     {
         Configuration = configuration;
         BackendSupervisor = backendSupervisor;
@@ -48,6 +49,7 @@ public sealed class AppServices : IAsyncDisposable
         RemoteControl = remoteControl;
         MidiInput = midiInput;
         LocalRuntime = localRuntime;
+        Vst3Host = vst3Host;
         Transport.StateChanged += OnTransportStateChanged;
     }
 
@@ -63,6 +65,7 @@ public sealed class AppServices : IAsyncDisposable
     public StudioRemoteControlService RemoteControl { get; }
     public WindowsMidiInputService MidiInput { get; }
     public ILocalRuntimeOrchestrator LocalRuntime { get; }
+    public IVst3HostSession Vst3Host { get; }
 
     public async Task<BackendStatus> SwitchBackendAsync(
         RequestedBackendMode mode,
@@ -83,7 +86,7 @@ public sealed class AppServices : IAsyncDisposable
             BackendSettingsStore.ResetToManaged();
         }
 
-        var configuration = BackendConfiguration.Load();
+        var configuration = BackendConfiguration.Load(requirePackagedBackend: WindowsPackageIdentity.IsPackaged);
         var tokenProvider = new WindowsBackendTokenProvider(new EnvironmentBackendTokenProvider());
         var launchToken = await tokenProvider.GetTokenAsync(cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(launchToken))
@@ -145,7 +148,7 @@ public sealed class AppServices : IAsyncDisposable
 
     public static async Task<AppServices> CreateAsync(CancellationToken cancellationToken = default)
     {
-        var configuration = BackendConfiguration.Load();
+        var configuration = BackendConfiguration.Load(requirePackagedBackend: WindowsPackageIdentity.IsPackaged);
         var tokenProvider = new WindowsBackendTokenProvider(new EnvironmentBackendTokenProvider());
         var launchToken = await tokenProvider.GetTokenAsync(cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(launchToken))
@@ -173,7 +176,11 @@ public sealed class AppServices : IAsyncDisposable
         var jobsActivity = new StudioJobsActivityService(apiClient);
 
         var transport = new TransportService();
-        var audioEngine = new WindowsAudioEngine();
+        string vst3HostPath = Path.Combine(AppContext.BaseDirectory, "EdmgStudio.Vst3Host.exe");
+        IVst3HostSession vst3Host = File.Exists(vst3HostPath)
+            ? new NativeVst3HostSession(vst3HostPath)
+            : new UnavailableVst3HostSession();
+        var audioEngine = new WindowsAudioEngine(vst3Host);
         var commands = new StudioCommandDispatcher();
         string mappingsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -206,7 +213,8 @@ public sealed class AppServices : IAsyncDisposable
             commands,
             remoteControl,
             midiInput,
-            localRuntime);
+            localRuntime,
+            vst3Host);
     }
 
     public async ValueTask DisposeAsync()
@@ -253,6 +261,15 @@ public sealed class AppServices : IAsyncDisposable
         }
 
         Transport.StateChanged -= OnTransportStateChanged;
+        try
+        {
+            await Vst3Host.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
         try
         {
             await LocalRuntime.DisposeAsync();

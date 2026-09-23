@@ -6,6 +6,18 @@ namespace EdmgStudio.Core.Tests;
 public sealed class LocalRuntimeOrchestratorTests
 {
     [TestMethod]
+    public async Task StartAsync_WhenDisabledRejectsWithoutProbingOrLaunching()
+    {
+        using var fixture = new RuntimeFixture(autoStart: false, enabled: false);
+
+        InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fixture.Orchestrator.StartAsync());
+
+        StringAssert.Contains(exception.Message, "disabled");
+        Assert.AreEqual(0, fixture.Health.ProbeCount);
+        Assert.AreEqual(0, fixture.Runtime.StartCount);
+    }
+
+    [TestMethod]
     public async Task StartAsync_ReusesHealthyExternalRuntimeAndNeverStopsIt()
     {
         using var fixture = new RuntimeFixture(autoStart: false);
@@ -127,11 +139,11 @@ public sealed class LocalRuntimeOrchestratorTests
     {
         private readonly string _root;
 
-        public RuntimeFixture(bool autoStart, TimeSpan? startupTimeout = null)
+        public RuntimeFixture(bool autoStart, TimeSpan? startupTimeout = null, bool enabled = true)
         {
             _root = BackendConfigurationTests.CreateTemporaryRoot();
             var store = new LocalRuntimeSettingsStore(Path.Combine(_root, "bootstrap.json"));
-            store.Save(new LocalRuntimeSettings { AutoStart = autoStart, StartupTimeout = startupTimeout ?? TimeSpan.FromSeconds(1) });
+            store.Save(new LocalRuntimeSettings { Enabled = enabled, AutoStart = autoStart, StartupTimeout = startupTimeout ?? TimeSpan.FromSeconds(1) });
             Runtime = new FakeRuntime();
             Health = new FakeHealth();
             Orchestrator = new LocalRuntimeOrchestrator(
@@ -187,9 +199,11 @@ public sealed class LocalRuntimeOrchestratorTests
         public Queue<RuntimeHealthResult> Results { get; } = new();
         public RuntimeHealthResult DefaultResult { get; set; } = new(false, false, null, null, "offline");
         public bool BlockUntilCanceled { get; set; }
+        public int ProbeCount { get; private set; }
 
         public async Task<RuntimeHealthResult> ProbeAsync(Uri endpoint, LocalRuntimeType runtime, CancellationToken cancellationToken = default)
         {
+            ProbeCount++;
             if (Results.Count > 0) return Results.Dequeue();
             if (BlockUntilCanceled) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return DefaultResult;

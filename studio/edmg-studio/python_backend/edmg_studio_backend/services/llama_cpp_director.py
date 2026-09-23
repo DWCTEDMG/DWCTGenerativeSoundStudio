@@ -245,10 +245,16 @@ class LlamaCppDirectorBackend:
         names = [line.split(":", 1)[0].strip() for line in lines if line.lower().startswith("cuda") and ":" in line]
         if index >= len(names):
             raise RuntimeError(f"llama.cpp CUDA backend does not expose requested device {self.device}.")
-        configured = os.getenv("EDMG_QWEN_GPUS", "0,1,2")
-        gpu_ids = [part.strip() for part in configured.split(",") if part.strip()]
-        if not gpu_ids:
-            gpu_ids = [str(index)]
+        configured = os.getenv("EDMG_QWEN_GPUS", "").strip()
+        gpu_ids = [part.strip() for part in configured.split(",") if part.strip()] if configured else [str(index)]
+        if any(not value.isdigit() for value in gpu_ids):
+            raise RuntimeError("EDMG_QWEN_GPUS must contain comma-separated non-negative CUDA indexes.")
+        if len(set(gpu_ids)) != len(gpu_ids):
+            raise RuntimeError("EDMG_QWEN_GPUS must not contain duplicate CUDA indexes.")
+        if any(int(value) >= len(names) for value in gpu_ids):
+            raise RuntimeError("EDMG_QWEN_GPUS includes a CUDA device that llama.cpp does not expose.")
+        if str(index) not in gpu_ids:
+            raise RuntimeError(f"EDMG_QWEN_GPUS must include requested device {self.device}.")
         environment = os.environ.copy()
         environment["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_ids)
         return environment
@@ -308,8 +314,10 @@ class LlamaCppDirectorBackend:
             visible = self._process_env["CUDA_VISIBLE_DEVICES"].split(",")
             devices = ",".join(f"CUDA{index}" for index in range(len(visible)))
             splits = ",".join("1" for _ in visible)
+            requested = self.device.split(":", 1)[1]
+            main_gpu = visible.index(requested)
             command[command.index("--tensor-split") + 1] = splits
-            command.extend(["--device", devices, "--main-gpu", "0", "--no-mmproj-offload"])
+            command.extend(["--device", devices, "--main-gpu", str(main_gpu), "--no-mmproj-offload"])
         else:
             self._process_env = os.environ.copy()
             command.append("--no-mmproj-offload")

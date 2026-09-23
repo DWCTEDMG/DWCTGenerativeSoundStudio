@@ -1,0 +1,5 @@
+Steinberg VST 3 SDK
+Version: 3.8.1
+Source: https://github.com/steinbergmedia/vst3sdk
+Pinned commit: 3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96
+License: MIT; the SDK LICENSE is installed as licenses/VST3-SDK-LICENSE.txt by CMake.

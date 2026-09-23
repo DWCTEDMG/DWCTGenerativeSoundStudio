@@ -13,7 +13,15 @@ from ..services.model_load_coordinator import ModelLoadTimeout, model_load_lock
 
 
 class RuntimeJobRequest(BaseModel):
-    operation: Literal["diagnose", "optimize"] = "diagnose"
+    operation: Literal["diagnose", "optimize", "optimize_all", "rebuild", "validate"] = "diagnose"
+    model_family: Literal[
+        "sd15", "sdxl", "sd3", "flux", "svd", "animatediff",
+        "ltx_25", "wan", "hunyuan_video15", "qwen", "whisper",
+    ] = "sd15"
+    component: Literal[
+        "vae_decoder", "text_encoder", "vision_encoder", "unet",
+        "transformer", "language_model", "audio_encoder", "decoder",
+    ] = "vae_decoder"
     device: int = Field(default=0, ge=0, le=63)
     width: int = Field(default=512, ge=64, le=1024, multiple_of=8)
     height: int = Field(default=512, ge=64, le=1024, multiple_of=8)

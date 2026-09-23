@@ -38,6 +38,10 @@ BundleArtifacts/
 *.appxbundle
 *.appxupload
 StoreIdentity.json
+Studio-Local-Signing-*/
+*.pfx
+*.p12
+*_TemporaryKey.*
 
 # Publish output
 publish/
@@ -52,4 +56,5 @@ _ReSharper*/
 
 # Generated files
 Generated\ Files/
+native/vst3-host/build/
 *_wpftmp.csproj

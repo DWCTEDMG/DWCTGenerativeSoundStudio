@@ -73,6 +73,28 @@ public sealed class BackendSupervisorTests
         }
     }
 
+    [TestMethod]
+    public async Task InstalledPackage_MissingRuntimeNeverAttachesToForeignBackendOrSource()
+    {
+        var root = BackendConfigurationTests.CreateTemporaryRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "pyproject.toml"), "[project]");
+            var requests = new List<Uri>();
+            using var handler = new HealthHandler(requests, ok: true);
+            var configuration = new BackendConfiguration(RequestedBackendMode.Managed, "127.0.0.1", 7863,
+                new Uri("http://127.0.0.1:7863/"), "cuda", root,
+                BackendConfigurationTests.CreatePaths(root), "test")
+            { RequirePackagedBackend = true, ApplicationDirectory = root };
+            await using var supervisor = new BackendSupervisor(configuration, handler);
+            var status = await supervisor.StartAsync();
+            Assert.AreEqual("PACKAGED_BACKEND_MISSING", status.FailureCode);
+            Assert.IsFalse(status.OwnsProcess);
+            Assert.IsEmpty(requests);
+        }
+        finally { BackendConfigurationTests.DeleteTemporaryRoot(root); }
+    }
+
     private sealed class HealthHandler(List<Uri> requests, bool ok) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

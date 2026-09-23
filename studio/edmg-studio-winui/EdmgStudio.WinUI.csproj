@@ -18,9 +18,13 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType Condition="'$(EdmgPackageManifestPath)' == ''">None</WindowsPackageType>
     <WindowsPackageType Condition="'$(EdmgPackageManifestPath)' != ''">MSIX</WindowsPackageType>
+    <RequireEdmgPackagedBackend Condition="'$(EdmgPackageManifestPath)' != '' And '$(EdmgAllowBackendlessPackage)' != 'true'">true</RequireEdmgPackagedBackend>
+    <RequireEdmgVst3Host Condition="'$(EdmgPackageManifestPath)' != '' And '$(EdmgAllowVst3HostlessPackage)' != 'true'">true</RequireEdmgVst3Host>
+    <RequireEdmgVst3Scanner Condition="'$(EdmgPackageManifestPath)' != '' And '$(EdmgAllowVst3HostlessPackage)' != 'true'">true</RequireEdmgVst3Scanner>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <DefaultItemExcludes>$(DefaultItemExcludes);src\**;tests\**</DefaultItemExcludes>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefaultItemExcludes>$(DefaultItemExcludes);src\**;tests\**;Studio-Local-Signing-*\**;**\*.pfx;**\*.p12;**\*_TemporaryKey.*</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -45,8 +49,12 @@
     <Content Include="Assets\Brand\WorkspaceFlair.jpg" />
     <Content Include="..\edmg-studio\electron-resources\bin\ffmpeg.exe" Condition="Exists('..\edmg-studio\electron-resources\bin\ffmpeg.exe')" Link="bin\ffmpeg.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\edmg-studio\electron-resources\bin\ffprobe.exe" Condition="Exists('..\edmg-studio\electron-resources\bin\ffprobe.exe')" Link="bin\ffprobe.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\edmg-studio\electron-resources\bin\FFmpeg-*.txt" Link="bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(EdmgPackagedBackendPath)\**\*" Condition="'$(EdmgPackagedBackendPath)' != ''" Exclude="$(EdmgPackagedBackendPath)\_internal\tcl86t.dll;$(EdmgPackagedBackendPath)\_internal\tk86t.dll" Link="backend\%(RecursiveDir)%(Filename)%(Extension)" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(EdmgReleaseCandidatePath)" Condition="'$(EdmgReleaseCandidatePath)' != ''" Link="release-candidate.json" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(EdmgVst3HostPath)" Condition="'$(EdmgVst3HostPath)' != '' And Exists('$(EdmgVst3HostPath)')" Link="EdmgStudio.Vst3Host.exe" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(EdmgVst3ScannerPath)" Condition="'$(EdmgVst3ScannerPath)' != '' And Exists('$(EdmgVst3ScannerPath)')" Link="EdmgStudio.Vst3Scanner.exe" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="native\vst3-host\THIRD-PARTY-NOTICES.txt" Link="EdmgStudio.Vst3Host.THIRD-PARTY-NOTICES.txt" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="ValidateEdmgReleaseCandidate" BeforeTargets="PrepareForBuild" Condition="'$(EdmgPackageManifestPath)' != ''">
@@ -58,6 +66,14 @@
     <Error Condition="!Exists('$(EdmgPackagedBackendPath)\backend-bundle-manifest.json')" Text="The packaged backend release manifest is missing." />
     <Error Condition="!Exists('$(EdmgPackagedBackendPath)\edmg-studio-backend.exe')" Text="The packaged backend executable is missing." />
     <Error Condition="!Exists('$(EdmgPackagedBackendPath)\_internal')" Text="The packaged backend onedir runtime directory is missing." />
+  </Target>
+
+  <Target Name="ValidateEdmgVst3Host" BeforeTargets="PrepareForBuild" Condition="'$(RequireEdmgVst3Host)' == 'true'">
+    <Error Condition="'$(EdmgVst3HostPath)' == '' Or !Exists('$(EdmgVst3HostPath)')" Text="Packaged builds require EdmgVst3HostPath pointing to EdmgStudio.Vst3Host.exe." />
+  </Target>
+
+  <Target Name="ValidateEdmgVst3Scanner" BeforeTargets="PrepareForBuild" Condition="'$(RequireEdmgVst3Scanner)' == 'true'">
+    <Error Condition="'$(EdmgVst3ScannerPath)' == '' Or !Exists('$(EdmgVst3ScannerPath)')" Text="Packaged builds require EdmgVst3ScannerPath pointing to EdmgStudio.Vst3Scanner.exe." />
   </Target>
 
   <ItemGroup>

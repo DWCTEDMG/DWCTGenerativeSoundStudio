@@ -41,14 +41,16 @@ public sealed record BackendConfiguration(
     public string? ConfiguredBackendUrl { get; init; }
     public bool HasPendingMigration { get; init; }
     public string? PendingMigrationDetail { get; init; }
+    public bool RequirePackagedBackend { get; init; }
+    public string ApplicationDirectory { get; init; } = AppContext.BaseDirectory;
     public TimeSpan SourceReadyTimeout { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan PackagedReadyTimeout { get; init; } = TimeSpan.FromSeconds(120);
 
-    public static BackendConfiguration Load()
+    public static BackendConfiguration Load(bool requirePackagedBackend = false)
     {
         var values = new MutableConfiguration();
         var sources = new List<string>();
-        var studioRoot = FindSourceStudioRoot();
+        var studioRoot = requirePackagedBackend ? null : FindSourceStudioRoot();
 
         if (TryReadRuntimeDefaults(studioRoot, values))
         {
@@ -79,7 +81,7 @@ public sealed record BackendConfiguration(
             sources.Add("command-line");
         }
 
-        return CreateConfiguration(values, sources);
+        return CreateConfiguration(values, sources, requirePackagedBackend);
     }
 
     public static BackendConfiguration LoadFromBootstrap(string bootstrapPath)
@@ -92,12 +94,13 @@ public sealed record BackendConfiguration(
             sources.Add("bootstrap");
         }
 
-        return CreateConfiguration(values, sources);
+        return CreateConfiguration(values, sources, requirePackagedBackend: false);
     }
 
     private static BackendConfiguration CreateConfiguration(
         MutableConfiguration values,
-        IReadOnlyCollection<string> sources)
+        IReadOnlyCollection<string> sources,
+        bool requirePackagedBackend)
     {
         var validationErrors = new List<string>();
         string acceleratorProfile;
@@ -140,6 +143,7 @@ public sealed record BackendConfiguration(
             paths,
             sources.Count == 0 ? "defaults" : string.Join(" → ", sources))
         {
+            RequirePackagedBackend = requirePackagedBackend,
             ManagedEnvironment = new Dictionary<string, string>(values.ManagedEnvironment, StringComparer.OrdinalIgnoreCase),
             ValidationErrors = validationErrors,
             BackendModeSource = values.ModeSource,

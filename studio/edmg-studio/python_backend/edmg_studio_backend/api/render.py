@@ -1383,6 +1383,8 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
         pending_jobs = []
         resolved_loras = _normalize_render_loras(getattr(req, "loras", []))
         vae_name = _resolve_optional_comfy_asset_name(req.vae, folder="vae", allowed_kinds={"vae"})
+        runtime = req.runtime.model_dump(exclude_none=True) if req.runtime is not None else None
+        required_tags = [f"gpu:{req.runtime.device}"] if req.runtime is not None and req.runtime.device is not None else []
         motion_selection = _resolve_comfy_motion_selection(
             model_id=req.model_id,
             checkpoint=req.checkpoint,
@@ -1440,6 +1442,8 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
                 "svd_cond_aug": req.svd_cond_aug,
                 "svd_decoding_t": req.svd_decoding_t,
                 "device": req.device,
+                "runtime": runtime,
+                "required_tags": required_tags,
             }
             if generation_metadata:
                 p["_generation"] = dict(generation_metadata)

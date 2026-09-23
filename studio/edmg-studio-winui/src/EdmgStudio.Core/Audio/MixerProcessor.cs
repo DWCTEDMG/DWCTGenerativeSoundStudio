@@ -4,6 +4,7 @@ namespace EdmgStudio.Core.Audio;
 
 public readonly record struct MixerInputBlock(string ChannelId, float[] InterleavedStereo);
 public readonly record struct MixerMeterSnapshot(string ChannelId, float PeakLeft, float PeakRight, float RmsLeft, float RmsRight);
+public readonly record struct MixerInsertBinding(string ChannelId, string InsertId, IVst3InsertProcessor Processor);
 
 /// <summary>A preallocated stereo DSP boundary. Construct and replace instances on the control thread.</summary>
 public sealed class MixerProcessor
@@ -12,13 +13,13 @@ public sealed class MixerProcessor
     private readonly int _maximumFrames;
     private readonly Dictionary<string, int> _channelIndexes;
     private readonly float[][] _buffers;
-    private readonly DelayState[] _insertDelays;
+    private readonly InsertState[][] _inserts;
     private readonly RouteState[][] _outgoing;
     private readonly MixerMeterSnapshot[] _meters;
     private readonly bool[] _audible;
     private readonly int _masterIndex;
 
-    public MixerProcessor(MixerGraphPlan plan, int maximumFrames)
+    public MixerProcessor(MixerGraphPlan plan, int maximumFrames, IEnumerable<MixerInsertBinding>? insertBindings = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (maximumFrames <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFrames));
@@ -26,9 +27,14 @@ public sealed class MixerProcessor
         _maximumFrames = maximumFrames;
         _channelIndexes = plan.ProcessingOrder.Select((channel, index) => (channel.Id, index))
             .ToDictionary(item => item.Id, item => item.index, StringComparer.Ordinal);
+        var bindings = (insertBindings ?? []).ToDictionary(
+            binding => (binding.ChannelId, binding.InsertId), binding => binding.Processor);
         _buffers = plan.ProcessingOrder.Select(_ => new float[checked(maximumFrames * 2)]).ToArray();
-        _insertDelays = plan.ProcessingOrder.Select(channel =>
-            new DelayState(channel.Inserts.Where(insert => insert.Enabled).Sum(insert => insert.LatencySamples))).ToArray();
+        _inserts = plan.ProcessingOrder.Select(channel => channel.Inserts
+            .Where(insert => insert.Enabled)
+            .Select(insert => new InsertState(insert,
+                bindings.GetValueOrDefault((channel.Id, insert.Id))))
+            .ToArray()).ToArray();
         _meters = new MixerMeterSnapshot[plan.ProcessingOrder.Length];
         _audible = plan.ProcessingOrder.Select(channel => plan.AudibleChannelIds.Contains(channel.Id)).ToArray();
         _masterIndex = Array.FindIndex(plan.ProcessingOrder.ToArray(), channel => channel.Kind == MixerChannelKind.Master);
@@ -49,7 +55,8 @@ public sealed class MixerProcessor
     public void Reset()
     {
         foreach (float[] buffer in _buffers) Array.Clear(buffer);
-        foreach (DelayState delay in _insertDelays) delay.Reset();
+        foreach (InsertState[] inserts in _inserts)
+            foreach (InsertState insert in inserts) insert.Reset();
         foreach (RouteState[] routes in _outgoing)
             foreach (RouteState route in routes) route.Reset();
         Array.Clear(_meters);
@@ -102,7 +109,7 @@ public sealed class MixerProcessor
             return;
         }
 
-        _insertDelays[index].ProcessInPlace(buffer, frames * 2);
+        foreach (InsertState insert in _inserts[index]) insert.ProcessInPlace(buffer, frames);
         foreach (RouteState route in _outgoing[index])
             if (route.Plan.Tap == MixerTap.PreFader)
                 route.Add(buffer, _buffers[route.DestinationIndex], frames, startSample,
@@ -151,6 +158,32 @@ public sealed class MixerProcessor
             _meters[index] = new(channel.Id, peakLeft, peakRight,
                 frames == 0 ? 0 : (float)Math.Sqrt(squareLeft / frames),
                 frames == 0 ? 0 : (float)Math.Sqrt(squareRight / frames));
+        }
+    }
+
+    private sealed class InsertState
+    {
+        private readonly MixerInsert _plan;
+        private readonly IVst3InsertProcessor? _processor;
+        private readonly DelayState _fallbackDelay;
+
+        public InsertState(MixerInsert plan, IVst3InsertProcessor? processor)
+        {
+            _plan = plan;
+            _processor = processor;
+            _fallbackDelay = new DelayState(plan.LatencySamples);
+        }
+
+        public void ProcessInPlace(float[] buffer, int frames)
+        {
+            if (_plan.Bypassed || _processor is null || !_processor.TryProcessInPlace(buffer.AsSpan(0, frames * 2), frames))
+                _fallbackDelay.ProcessInPlace(buffer, frames * 2);
+        }
+
+        public void Reset()
+        {
+            _processor?.Reset();
+            _fallbackDelay.Reset();
         }
     }
 

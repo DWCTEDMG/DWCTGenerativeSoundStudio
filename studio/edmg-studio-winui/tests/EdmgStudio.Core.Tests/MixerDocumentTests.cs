@@ -56,7 +56,7 @@ public sealed class MixerDocumentTests
         JsonObject timeline = JsonNode.Parse("""
             {"tracks":[],"mixer":{"schema_version":1,"vendor_root":{"x":1},"channels":[
               {"id":"track","name":"Track","kind":"Track","output_id":"group","gain":0.8,"pan":-0.2,"vendor_channel":7,
-               "inserts":[{"id":"i1","plugin_id":"vendor.plugin","enabled":true,"bypassed":false,"latency_samples":64,"preset_name":"Wide","state_base64":"AQI=","vendor_insert":true}],
+               "inserts":[{"id":"i1","plugin_id":"vendor.plugin","enabled":true,"bypassed":false,"latency_samples":64,"preset_name":"Wide","state_base64":"AQI=","module_path":"C:\\VST3\\Vendor.vst3","module_sha256":"abc123","vendor_insert":true}],
                "sends":[{"id":"s1","destination_id":"fx","tap":"PreFader","gain":0.25,"enabled":true,"vendor_send":"keep"}]},
               {"id":"group","name":"Group","kind":"Group","output_id":"master"},
               {"id":"fx","name":"FX","kind":"FxReturn","output_id":"master"},
@@ -68,6 +68,10 @@ public sealed class MixerDocumentTests
         Assert.AreEqual(7, written["mixer"]!["channels"]![0]!["vendor_channel"]!.GetValue<int>());
         Assert.IsTrue(written["mixer"]!["channels"]![0]!["inserts"]![0]!["vendor_insert"]!.GetValue<bool>());
         Assert.AreEqual("keep", written["mixer"]!["channels"]![0]!["sends"]![0]!["vendor_send"]!.GetValue<string>());
+        MixerPluginInstanceDocument insert = document.Channels[0].Inserts[0];
+        Assert.AreEqual(@"C:\VST3\Vendor.vst3", insert.ModulePath);
+        Assert.AreEqual("abc123", insert.ModuleSha256);
+        Assert.AreEqual(@"C:\VST3\Vendor.vst3", written["mixer"]!["channels"]![0]!["inserts"]![0]!["module_path"]!.GetValue<string>());
         MixerChannel track = MixerDocumentCodec.ToMixerChannels(document).Single(channel => channel.Id == "track");
         Assert.AreEqual("AQI=", track.Inserts[0].StateBase64);
         Assert.AreEqual(MixerTap.PreFader, track.Sends[0].Tap);

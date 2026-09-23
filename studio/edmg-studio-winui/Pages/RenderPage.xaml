@@ -1670,12 +1670,12 @@
                                         </StackPanel>
                                         <StackPanel Grid.Row="1" Spacing="4">
                                             <TextBlock Text="Width" Style="{StaticResource FieldLabelStyle}" />
-                                            <NumberBox x:Name="TensorWidthBox" Value="1024" Minimum="256" Maximum="1920"
+                                            <NumberBox x:Name="TensorWidthBox" Value="512" Minimum="256" Maximum="1920"
                                                        AutomationProperties.AutomationId="TensorWidthBox" />
                                         </StackPanel>
                                         <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
                                             <TextBlock Text="Height" Style="{StaticResource FieldLabelStyle}" />
-                                            <NumberBox x:Name="TensorHeightBox" Value="1024" Minimum="256" Maximum="1080"
+                                            <NumberBox x:Name="TensorHeightBox" Value="512" Minimum="256" Maximum="1080"
                                                        AutomationProperties.AutomationId="TensorHeightBox" />
                                         </StackPanel>
                                         <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">

@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 
+from .adapters import ComponentAdapterRegistry
 from .cache import EngineCache, atomic_write
 from .manager import RuntimeRegistry
 from .package import discover
@@ -18,7 +19,7 @@ def _component_runtime_status(
     policy_enabled: bool,
     package_available: bool,
     compatible: bool,
-    managed_model_installed: bool,
+    model_installed: bool,
 ) -> dict:
     model_family = str(declared["model_family"])
     component = str(declared["component"])
@@ -35,21 +36,37 @@ def _component_runtime_status(
         and policy_enabled
         and package_available
         and compatible
-        and managed_model_installed
+        and model_installed
     )
     reason = None
     if not adapter_available:
-        reason = "component_not_converted"
+        reason = declared.get("reason") or "component_not_converted"
     elif not policy_enabled:
         reason = "tensorrt_disabled"
     elif not package_available:
         reason = "tensorrt_not_installed"
     elif not compatible:
         reason = "diagnostics_not_ready"
-    elif not managed_model_installed:
+    elif not model_installed:
         reason = "managed_model_not_installed"
+    if not adapter_available:
+        display_state = "unsupported"
+    elif not policy_enabled:
+        display_state = "disabled"
+    elif not package_available or not compatible:
+        display_state = "incompatible"
+    elif latest and latest.get("state") == "ready":
+        display_state = "validated"
+    elif latest and latest.get("state") in {"failed", "quarantined"}:
+        display_state = "invalid"
+    elif latest:
+        display_state = latest.get("state", "adapter_available")
+    else:
+        display_state = "adapter_available"
     return {
         **declared,
+        "adapter_status": declared["status"],
+        "status": display_state,
         "optimization_eligible": eligible,
         "optimization_reason": reason,
         "validated_engine_count": len(ready_engines),
@@ -78,20 +95,19 @@ def runtime_status(data_dir: Path, hardware: dict, models_dir: Path | None = Non
     compatible = bool(healthy and report.get("status") == "ready")
     receipt_state = report.get("status") if report else None
     state = "disabled" if not policy.enabled else receipt_state or package["status"]
-    managed_model_installed = bool(
-        models_dir and (models_dir / "internal" / "diffusers" / "hf_sd15_internal").is_dir()
-    )
-    components = [
-        _component_runtime_status(
+    adapter_registry = ComponentAdapterRegistry()
+    components = []
+    for component in RuntimeRegistry().component_status():
+        adapter = adapter_registry.get(component["model_family"], component["component"])
+        model_dir = adapter.model_dir(models_dir) if adapter and models_dir else None
+        components.append(_component_runtime_status(
             component,
             engines,
             policy_enabled=policy.enabled,
             package_available=installed,
             compatible=compatible,
-            managed_model_installed=managed_model_installed,
-        )
-        for component in RuntimeRegistry().component_status()
-    ]
+            model_installed=bool(model_dir and model_dir.is_dir()),
+        ))
     return {
         "settings": policy.model_dump(),
         "hardware": hardware,
@@ -109,7 +125,9 @@ def runtime_status(data_dir: Path, hardware: dict, models_dir: Path | None = Non
         "cuda_status": report.get("cuda") if report else None,
         "pytorch_cuda_available": hardware.get("backend") == "cuda",
         "gpus": report.get("devices", []) if report else [],
-        "supported_component_count": sum(1 for component in components if component["status"] == "adapter_available"),
+        "supported_component_count": sum(
+            1 for component in components if component["adapter_status"] == "adapter_available"
+        ),
         "capabilities": RuntimeRegistry().capabilities,
         "engines": engines,
         "components": components,
@@ -137,13 +155,65 @@ def run_runtime_job(job, data_dir: Path, models_dir: Path, cancel_check, progres
             return receipt
         if not report.get("healthy"):
             raise RuntimeError(report.get("reason", "TensorRT diagnostics failed"))
-        model_dir = models_dir / "internal" / "diffusers" / "hf_sd15_internal"
-        if not model_dir.is_dir():
-            raise RuntimeError("Install the managed SD1.5 model before optimizing its decoder")
+        operation = str(payload.get("operation", "optimize"))
+        model_family = str(payload.get("model_family", "sd15"))
+        requested_component = str(payload.get("component", "vae_decoder"))
+        registry = ComponentAdapterRegistry()
+        components = (
+            registry.supported_components().get(model_family, [])
+            if operation == "optimize_all"
+            else [requested_component]
+        )
+        if not components:
+            raise RuntimeError(f"No buildable TensorRT adapters for {model_family}")
         precision = payload.get("precision", "fp16")
-        result = process.request("prepare", timeout_s=1800, model_dir=str(model_dir),
-            shape=[1, 4, int(payload["height"]) // 8, int(payload["width"]) // 8],
-            precision=precision, device=device, allow_build=True,
-            validation_limits=policy.validation_limits(precision))
-        EngineCache(data_dir).trim(int(policy.cache_limit_gb * 1024**3), keep=result["manifest"]["engine_id"])
-        return result
+        cache = EngineCache(data_dir)
+        results = []
+        for component in components:
+            adapter = registry.require(model_family, component)
+            model_dir = adapter.model_dir(models_dir)
+            if model_dir is None or not model_dir.is_dir():
+                raise RuntimeError(
+                    f"Install managed model {adapter.model_id} before optimizing {model_family}/{component}"
+                )
+            if operation == "rebuild":
+                matching = [
+                    entry["engine_id"] for entry in cache.entries()
+                    if entry.get("identity", {}).get("model") == model_family
+                    and entry.get("identity", {}).get("component") == component
+                ]
+                for engine_id in matching:
+                    cache.clear(engine_id)
+            shape = [1, 4, int(payload["height"]) // 8, int(payload["width"]) // 8]
+            result = process.request(
+                "prepare", timeout_s=1800, model_dir=str(model_dir),
+                shape=shape,
+                precision=precision, device=device, model_family=model_family, component=component,
+                allow_build=operation != "validate",
+                validation_limits=policy.validation_limits(precision, component),
+            )
+            if operation == "validate":
+                import numpy as np
+
+                dtype = np.float16 if precision == "fp16" else np.float32
+                generator = np.random.default_rng(1729)
+                if component == "unet":
+                    execution = process.request("execute", arrays={
+                        "sample": generator.standard_normal(shape).astype(dtype),
+                        "timestep": np.array([500.0], dtype=dtype),
+                        "encoder_hidden_states": generator.standard_normal((1, 77, 768)).astype(dtype),
+                    })
+                else:
+                    execution = process.request(
+                        "execute", array=generator.standard_normal(shape).astype(dtype),
+                    )
+                result["validation_execution"] = {
+                    "passed": True,
+                    "inference_s": execution.get("inference_s"),
+                    "scope": "cached_engine_deserialize_and_execute",
+                }
+            cache.trim(int(policy.cache_limit_gb * 1024**3), keep=result["manifest"]["engine_id"])
+            results.append({**result, "model_family": model_family, "component": component})
+        if len(results) == 1:
+            return {**results[0], "operation": operation}
+        return {"operation": operation, "model_family": model_family, "components": results}

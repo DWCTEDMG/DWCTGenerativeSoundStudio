@@ -81,19 +81,24 @@ The baseline description below is historical. `Core/Audio/TransportService.cs` a
 The same mixer module now owns atomic versioned snapshots and bus-aware mute/solo
 audibility planning. The Timeline routing inspector presents the plan; it does not certify active
 plugin DSP, compensation delay buffers, mixer persistence or hardware playback.
-`Core/Audio/Vst3Discovery.cs` defines the isolated scanner protocol, fingerprint-aware
-metadata cache and persistent crash/timeout quarantine. Settings reports scanner capability
-separately from host and processing readiness; no native scanner or VST3 processing host is
-claimed by this managed boundary.
-`Core/Audio/TimelineMixerProjection.cs` now owns extension-safe per-track mixer defaults,
-validation and updates. The Timeline Mixer inspector synchronizes clip and track-header selection
-and sends gain, mute, solo, arm, monitor and master-route edits through the existing revisioned
-editor history. Persisted pan is visible but cannot be published as active state until Windows pan
-processing exists. Playback configuration consumes the same projection. This is persisted control
-state only: current Windows playback still rejects active pan and non-master routing, and no bus DSP,
-delay buffers, meters or plugin processing are claimed.
+`Core/Audio/Vst3Discovery.cs` defines the isolated scanner protocol, file/bundle fingerprints,
+reparse-point rejection, metadata cache and persistent crash/timeout quarantine. The native C++17
+`EdmgStudio.Vst3Scanner.exe` handles only discovery and returns explicit supported or unsupported
+outcomes; `EdmgStudio.Vst3Host.exe` handles only qualification and one-worker-per-instance hosting.
+Both use the pinned Steinberg VST3 SDK. `NativeVst3HostSession` provides bounded paired-pipe audio,
+selected-event-bus MIDI, parameter, state and sticky failure-isolation transport. Settings reports
+scanner/host/catalog/quarantine state and Timeline owns insert ordering, worker lifetime, parameter
+edits, state capture and persisted module identity. `Core/Audio/TimelineMixerProjection.cs` owns
+extension-safe per-track mixer defaults, validation and updates. The Timeline Mixer inspector
+synchronizes clip and track-header selection and sends gain, pan, mute, solo, arm, monitor and routing
+edits through revisioned editor history. Playback consumes the same projection;
+`WindowsAudioEngine` sizes buffers and workers from the negotiated AudioGraph quantum, recreates
+incompatible worker contracts, supplies exact per-track float32 frames to `MixerProcessor`, then
+submits the processed master frame to WASAPI. Steinberg AGain proves scanner, lifecycle, state,
+crash/timeout and native process-block behavior for that sample, but no audible device run or
+hard-realtime/underrun qualification is claimed.
 
-No production real-time DAW audio backend exists at this baseline. The repository has audio upload, offline analysis, FFmpeg media decoding, and preview transport controls, but it does not have an authoritative sample clock, ASIO/WASAPI device backend, multitrack render graph, real-time callback boundary, routing, metering, or glitch-safety tests.
+The preview audio backend is not a qualified production real-time DAW backend. AudioGraph/WASAPI shared playback, Core routing, PDC, metering, and VST3 process-block integration exist, but ASIO/exclusive mode, audible device qualification, sustained glitch-safety measurements, and hard-realtime behavior remain open.
 
 Phase 4 must introduce narrow transport, device, and render-graph interfaces with a deterministic fake backend before native output. UI, AI, filesystem, network, allocation-heavy, and blocking work must never execute on the real-time callback.
 

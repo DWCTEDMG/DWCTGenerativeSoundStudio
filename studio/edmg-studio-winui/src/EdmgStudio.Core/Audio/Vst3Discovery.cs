@@ -1,13 +1,75 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace EdmgStudio.Core.Audio;
 
 public enum Vst3CapabilityState { Unavailable, ScannerReady, HostReady, ProcessingReady }
-public enum Vst3ScanStatus { Success, Failed, TimedOut, MalformedResponse, Quarantined }
+public enum Vst3ScanStatus { Success, Unsupported, Failed, TimedOut, MalformedResponse, Quarantined }
+
+public static class Vst3ModuleDiscovery
+{
+    public static ImmutableArray<string> StandardWindowsRoots()
+    {
+        if (!OperatingSystem.IsWindows()) return [];
+        string? programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string? localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return new[]
+        {
+            string.IsNullOrWhiteSpace(programFiles) ? null : Path.Combine(programFiles, "Common Files", "VST3"),
+            string.IsNullOrWhiteSpace(localAppData) ? null : Path.Combine(localAppData, "Programs", "Common", "VST3")
+        }.Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+         .Select(path => Path.GetFullPath(path!))
+         .Distinct(StringComparer.OrdinalIgnoreCase)
+         .ToImmutableArray();
+    }
+
+    public static ImmutableArray<string> EnumerateModules(IEnumerable<string> roots)
+    {
+        ArgumentNullException.ThrowIfNull(roots);
+        var modules = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string rawRoot in roots.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            string root = Path.GetFullPath(Environment.ExpandEnvironmentVariables(rawRoot.Trim()));
+            if (IsVst3Module(root)) { modules.Add(root); continue; }
+            if (!Directory.Exists(root)) continue;
+            foreach (string entry in EnumerateDirectory(root))
+                if (IsVst3Module(entry)) modules.Add(Path.GetFullPath(entry));
+        }
+        return modules.ToImmutableArray();
+    }
+
+    private static bool IsVst3Module(string path) =>
+        string.Equals(Path.GetExtension(path), ".vst3", StringComparison.OrdinalIgnoreCase) &&
+        (File.Exists(path) || Directory.Exists(path));
+
+    private static IEnumerable<string> EnumerateDirectory(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            string directory = pending.Pop();
+            IEnumerable<string> entries;
+            try { entries = Directory.EnumerateFileSystemEntries(directory).ToArray(); }
+            catch (UnauthorizedAccessException) { continue; }
+            catch (IOException) { continue; }
+            foreach (string entry in entries)
+            {
+                FileAttributes attributes;
+                try { attributes = File.GetAttributes(entry); }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (IOException) { continue; }
+                if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                if (IsVst3Module(entry)) { yield return entry; continue; }
+                if ((attributes & FileAttributes.Directory) != 0) pending.Push(entry);
+            }
+        }
+    }
+}
 
 public sealed record Vst3ModuleFingerprint(
     string ModulePath,
@@ -25,12 +87,18 @@ public sealed record Vst3PluginMetadata(
     int AudioOutputs,
     bool HasEditor,
     bool SupportsPresets,
-    int ReportedLatencySamples);
+    int ReportedLatencySamples,
+    int EventInputBuses = 0,
+    int EventOutputBuses = 0,
+    int ParameterCount = 0,
+    string Architecture = "x64",
+    string Capabilities = "audio");
 
 public sealed record Vst3ScanResponse(
     int SchemaVersion,
     Vst3ModuleFingerprint Fingerprint,
-    ImmutableArray<Vst3PluginMetadata> Plugins);
+    ImmutableArray<Vst3PluginMetadata> Plugins,
+    string Status = "success");
 
 public sealed record Vst3ScanResult(
     Vst3ScanStatus Status,
@@ -116,15 +184,73 @@ public static class Vst3ModuleFingerprinting
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modulePath);
         string path = Path.GetFullPath(modulePath);
-        var info = new FileInfo(path);
-        if (!info.Exists) throw new FileNotFoundException("The VST3 module does not exist.", path);
+        if (File.Exists(path))
+        {
+            var info = new FileInfo(path);
+            await using var stream = OpenRead(path);
+            byte[] fileHash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+            return new(path, info.Length, info.LastWriteTimeUtc.Ticks, Convert.ToHexString(fileHash).ToLowerInvariant());
+        }
+        if (!Directory.Exists(path)) throw new FileNotFoundException("The VST3 module does not exist.", path);
 
-        await using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-        byte[] hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
-        return new(path, info.Length, info.LastWriteTimeUtc.Ticks, Convert.ToHexString(hash).ToLowerInvariant());
+        string[] files = EnumerateBundleFiles(path)
+            .OrderBy(file => Path.GetRelativePath(path, file).Replace('\\', '/'), StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        long length = 0;
+        long lastWriteTicks = new DirectoryInfo(path).LastWriteTimeUtc.Ticks;
+        byte[] buffer = new byte[128 * 1024];
+        foreach (string file in files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var info = new FileInfo(file);
+            string relativePath = Path.GetRelativePath(path, file).Replace('\\', '/');
+            Append(hash, relativePath);
+            Append(hash, info.Length);
+            Append(hash, info.LastWriteTimeUtc.Ticks);
+            length = checked(length + info.Length);
+            lastWriteTicks = Math.Max(lastWriteTicks, info.LastWriteTimeUtc.Ticks);
+            await using var stream = OpenRead(file);
+            int read;
+            while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                hash.AppendData(buffer.AsSpan(0, read));
+        }
+        return new(path, length, lastWriteTicks, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
     }
+
+    private static IEnumerable<string> EnumerateBundleFiles(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            string directory = pending.Pop();
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException($"VST3 bundle contains a directory reparse point: {directory}");
+            foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                FileAttributes attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"VST3 bundle contains a reparse point: {entry}");
+                if ((attributes & FileAttributes.Directory) != 0) pending.Push(entry);
+                else yield return entry;
+            }
+        }
+    }
+
+    private static FileStream OpenRead(string path) => new(
+        path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024,
+        FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+    private static void Append(IncrementalHash hash, string value)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        Append(hash, bytes.Length);
+        hash.AppendData(bytes);
+    }
+
+    private static void Append(IncrementalHash hash, long value) =>
+        hash.AppendData(BitConverter.GetBytes(value));
 }
 
 public sealed class Vst3CatalogStore
@@ -246,14 +372,16 @@ public sealed class Vst3ScannerClient(
         if (!force && catalog.IsQuarantined(fingerprint))
             return new(Vst3ScanStatus.Quarantined, fingerprint, [], "The unchanged module is quarantined. Clear quarantine or force a rescan.");
         if (!force && catalog.TryGetCached(fingerprint, out Vst3CacheEntry? cached))
-            return new(Vst3ScanStatus.Success, fingerprint, cached!.Plugins, null);
+            return cached!.Plugins.IsEmpty
+                ? new(Vst3ScanStatus.Unsupported, fingerprint, [], "The module exposes no supported VST3 audio-effect classes.")
+                : new(Vst3ScanStatus.Success, fingerprint, cached.Plugins, null);
         if (!File.Exists(scannerPath))
             return new(Vst3ScanStatus.Failed, fingerprint, [], "The native VST3 scanner is not installed.");
 
         try
         {
             Vst3ScannerProcessResult processResult = await _processRunner.RunAsync(
-                CreateStartInfo(modulePath), timeout, cancellationToken).ConfigureAwait(false);
+                CreateStartInfo(fingerprint), timeout, cancellationToken).ConfigureAwait(false);
             if (processResult.ExitCode != 0)
                 return Failure(Vst3ScanStatus.Failed, $"The VST3 scanner exited with code {processResult.ExitCode}: {Normalize(processResult.StandardError)}");
             Vst3ScanResponse response;
@@ -266,7 +394,9 @@ public sealed class Vst3ScannerClient(
                 return Failure(Vst3ScanStatus.MalformedResponse, exception.Message);
             }
             catalog.RecordSuccess(response);
-            return new(Vst3ScanStatus.Success, fingerprint, response.Plugins, null);
+            return response.Status == "unsupported"
+                ? new(Vst3ScanStatus.Unsupported, fingerprint, [], "The module exposes no supported VST3 audio-effect classes.")
+                : new(Vst3ScanStatus.Success, fingerprint, response.Plugins, null);
         }
         catch (System.ComponentModel.Win32Exception exception)
         {
@@ -298,10 +428,15 @@ public sealed class Vst3ScannerClient(
             });
             if (response is null || response.SchemaVersion != 1 || response.Plugins.IsDefault ||
                 response.Fingerprint != expectedFingerprint ||
+                response.Status is not ("success" or "unsupported") ||
+                (response.Status == "success" && response.Plugins.IsEmpty) ||
+                (response.Status == "unsupported" && !response.Plugins.IsEmpty) ||
                 response.Plugins.Select(plugin => plugin.PluginId).Distinct(StringComparer.Ordinal).Count() != response.Plugins.Length ||
                 response.Plugins.Any(plugin =>
                     string.IsNullOrWhiteSpace(plugin.PluginId) || string.IsNullOrWhiteSpace(plugin.Name) ||
-                    plugin.AudioInputs < 0 || plugin.AudioOutputs < 0 || plugin.ReportedLatencySamples < 0))
+                    plugin.AudioInputs < 0 || plugin.AudioOutputs < 0 || plugin.ReportedLatencySamples < 0 ||
+                    plugin.EventInputBuses < 0 || plugin.EventOutputBuses < 0 || plugin.ParameterCount < 0 ||
+                    !string.Equals(plugin.Architecture, "x64", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("The VST3 scanner returned an invalid or mismatched response.");
             return response;
         }
@@ -311,7 +446,7 @@ public sealed class Vst3ScannerClient(
         }
     }
 
-    private ProcessStartInfo CreateStartInfo(string modulePath)
+    private ProcessStartInfo CreateStartInfo(Vst3ModuleFingerprint fingerprint)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -322,7 +457,16 @@ public sealed class Vst3ScannerClient(
             RedirectStandardError = true
         };
         startInfo.ArgumentList.Add("--scan-module");
-        startInfo.ArgumentList.Add(Path.GetFullPath(modulePath));
+        startInfo.ArgumentList.Add("--module");
+        startInfo.ArgumentList.Add(fingerprint.ModulePath);
+        startInfo.ArgumentList.Add("--fingerprint-path");
+        startInfo.ArgumentList.Add(fingerprint.ModulePath);
+        startInfo.ArgumentList.Add("--fingerprint-length");
+        startInfo.ArgumentList.Add(fingerprint.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("--fingerprint-ticks");
+        startInfo.ArgumentList.Add(fingerprint.LastWriteUtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("--fingerprint-sha256");
+        startInfo.ArgumentList.Add(fingerprint.Sha256);
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("json-v1");
         return startInfo;

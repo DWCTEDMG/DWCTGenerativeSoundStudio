@@ -1,10 +1,4 @@
-$env:EDMG_BACKEND_ACCELERATOR_PROFILE = "cuda"
-
-uv run --project studio\edmg-studio\python_backend `
-  --frozen --no-sync `
-  python -m edmg_studio_backend serve `
-  --host 127.0.0.1 `
-  --port 7863# Studio implementation and review handoff
+# Studio implementation and review handoff
 
 ## Purpose and ownership
 
@@ -38,19 +32,18 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
 
-**Acknowledgement:** Repository instructions and the latest Reviewer update are loaded. The authorized WinUI local AI runtime orchestration implementation is complete without changing backend TensorRT/render dispatch contracts.
+**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. The user expanded the VST3 gate to require a separately named x64 `EdmgStudio.Vst3Scanner.exe`; existing staged TensorRT/VST3 work is preserved and CUDA was not synchronized or replaced.
 
-- Updated UTC: 2026-09-22T05:16:48Z.
-- Task / blueprint gate: implemented `studio\edmg-studio-winui\IMPLEMENTATION_PLAN.md`; supports consolidated blueprint Gates B and E.
-- Branch / base commit / dirty state: `codex/Unified` at `e8e10cd19b97e64fca27d0d5b1a2b32d74f3f119`, aligned 0 ahead/0 behind `origin/codex/Unified` before publication. The user authorized committing and pushing the entire current worktree, including the pre-existing backend contract-test and plan-file changes.
-- Owned paths: `src\EdmgStudio.Core\Runtime\`, local-runtime Core tests, `Services\AppServices.cs`, `App.xaml.cs`, `Pages\SettingsPage.xaml*`, and this Implementer section; publication scope is the complete user-authorized worktree.
-- Completed: persisted runtime settings; WSL/CUDA discovery and safe command execution; llama.cpp and TensorRT-LLM providers; ownership-safe startup, readiness, cancellation cleanup, restart, and bounded shutdown; async app lifecycle integration; native Settings status/actions/diagnostics/log access; malformed-health handling; deterministic coverage.
-- Validation/evidence from repository root against the current dirty candidate: `dotnet test studio\edmg-studio-winui\tests\EdmgStudio.Core.Tests\EdmgStudio.Core.Tests.csproj --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 548/548 passed (`files\local-runtime-core-release.log`); focused `FullyQualifiedName~LocalRuntime` exited 0 with 21/21 passed (`files\local-runtime-focused-release.log`); `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.slnx --no-restore --configuration Release -p:PlatformTarget=x64 --nologo` exited 0 with 0 warnings/errors and complete XAML compilation (`files\local-runtime-winui-release.log`); frozen/no-sync focused backend contracts exited 0 with 50/50 passed (`files\local-runtime-backend-focused.log`). Logs are under session `155679d1-6423-4733-beb0-e40ece40f2f0`.
-- Baseline regressions observed, not caused by owned paths: aggregate frozen/no-sync run exited 1 with 172 passed/4 skipped/2 static-scan failures from untracked `tools\LTX-2-v1.3.0` and `tools\ltx-2.5-env` contents (`files\local-runtime-python-regressions.log`); backend-only suite exited 1 with 1037 passed/2 skipped/4 existing engine-package expectation failures (`files\local-runtime-backend-release.log`).
-- Remaining / acceptance limits: no live WSL runtime/model was installed or launched, so actual CUDA inference, GPU-memory behavior, endpoint routing, multi-GPU splitting, and interactive Settings operation remain unqualified hardware/device evidence rather than deterministic completion claims.
-- Blockers: none for implementation or deterministic acceptance; live qualification requires installed WSL llama.cpp/TensorRT-LLM binaries and compatible models.
-- Next step: reviewer inspection or separate live-hardware qualification; no additional implementation is pending in this task.
-- Reviewer findings addressed: GPU-first/no-sync policy is preserved; external endpoints are never killed; Studio only stops recorded owned PIDs; render TensorRT remains separate; code presence, deterministic tests, native compilation, and live evidence are reported distinctly.
+- Updated UTC: 2026-09-23T01:27:30Z. Task / gate: commit and push the qualified TensorRT, WinUI, and split native VST3 implementation to the repository default branch.
+- Branch / base / state: `codex/Unified` at `aff8b9dbc9d5ce6ba3b0d6cbfcd8d23fa5aadb39`; `origin/codex/Unified` has no divergence. The 89-file implementation batch is staged and passed `git diff --cached --check`; unrelated `.github/agents/` remains untracked and excluded.
+- Completed: built distinct C++17 x64 `EdmgStudio.Vst3Scanner.exe` and `EdmgStudio.Vst3Host.exe` targets from Steinberg VST3 SDK 3.8.1 commit `3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96`. Compile-time operation gates restrict scanning to the scanner and qualification/workers to the host. Valid modules without audio-effect classes return explicit unsupported status, are cached, and are not quarantined. Settings resolves scanner and host independently and reports ready/unsupported/failed counts. Candidate and MSIX contracts bind both executable identities.
+- Processing retained: paired-pipe float32 DSP, selected event-bus MIDI, rich parameter metadata/editing, component/controller state, latency, fatal crash/timeout isolation, worker compatibility checks, ordered inserts and delayed bypass, project persistence/lifecycle, Timeline controls, and negotiated-quantum AudioGraph-to-Core mixer bridging.
+- Real plug-in evidence: clean and extracted scanners each found two AGain classes with status `success`; clean and extracted hosts each qualified AGain 2-in/2-out, one event-input bus, three parameters, 12 component-state bytes, 257 controller-state bytes, and finite checksum `0.375`, exit 0 (`%TEMP%\edmg-vst3-dedicated-scan.log`, `%TEMP%\edmg-vst3-dedicated-qualify.log`, `%TEMP%\edmg-vst3-split-packaged-scan.log`, `%TEMP%\edmg-vst3-split-packaged-qualify.log`). Scanner worker mode and host scan mode both failed closed with exit 2. Clean and extracted host lifecycle/MIDI/state/crash/timeout tests each passed 3/3 (`%TEMP%\edmg-vst3-native-managed-split.log`, `%TEMP%\edmg-vst3-split-packaged-managed.log`).
+- Regression/package evidence from repository root unless noted: focused scanner/VST3/mixer/audio tests passed 27 with 3 native tests skipped when environment paths were absent (`%TEMP%\edmg-vst3-scanner-focused-final.log`); those three native tests passed separately with real paths. Complete Core Debug run passed 560 with the same 3 environment-dependent tests skipped (`%TEMP%\edmg-vst3-core-split-full.log`); WinUI Debug x64 built with 0 warnings/errors (`%TEMP%\edmg-vst3-scanner-winui.log`); release-candidate Node tests passed 9/9 (`%TEMP%\edmg-vst3-scanner-release-final.log`); packaging foundations passed (`%TEMP%\edmg-vst3-scanner-packaging-final.log`). All commands exited 0.
+- Exact candidate: packaged Release x64 build passed with 0 warnings/errors (`%TEMP%\edmg-vst3-split-msix.log`). Candidate `edmg-rc1-a5356f78e1f4d8800404e5622c2668526720b6ee521ecd919453972b039c49e2`; MSIX `%TEMP%\edmg-vst3-split-msix\ED2F9BCD-A580-4603-8A17-A7AD5FF6D451_1.2.1.0_x64.msix`, SHA-256 `E181B96E226394CE10CCB0D2B4E4C14028ED06470B1C5F40A83805A0B9F5F6D9`. Packaged host SHA-256 `AAFB3AA5C40D7B9641EDB229C0D5159E9B59FAB4F7E65B3072250D963C04F80D` and scanner SHA-256 `E376DF9F394C8221EEC0AE9CBBFE6D23C362957EDAE2675475597C4EB1CF07AE` exactly match candidate provenance.
+- Remaining limits: the MSIX is unsigned, backendless by explicit developer diagnostic allowance, and non-distributable. No installed third-party module was found beyond official AGain. Interactive Settings/Timeline controls, audible AudioGraph/WASAPI playback, sustained underrun/latency behavior, arbitrary plug-in compatibility, ASIO, editor embedding, and hard-realtime safety were not verified and are not claimed.
+- Blockers / next step: implementation and deterministic/package qualification are complete for the available specification. Real-device interactive/audio and signed clean-machine/Store qualification require separate operator evidence. The user authorized committing and pushing the staged implementation to the default branch; commit and push are the remaining actions.
+- Reviewer findings addressed: all five VST3/audio defects remain corrected and regression-covered; the reviewer’s device-audio and realtime caveats remain open and explicit.
 
 <!-- IMPLEMENTER-UPDATE-END -->
 

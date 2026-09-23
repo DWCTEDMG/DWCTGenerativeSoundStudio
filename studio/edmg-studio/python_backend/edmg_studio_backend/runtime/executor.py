@@ -20,31 +20,79 @@ class TensorExecutor:
         self.names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)]
         self.inputs = [n for n in self.names if self.engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT]
         self.outputs = [n for n in self.names if n not in self.inputs]
-        if len(self.inputs) != 1 or len(self.outputs) != 1:
-            raise RuntimeError("This component adapter requires exactly one input and one output")
+        if not self.inputs or not self.outputs:
+            raise RuntimeError("TensorRT engine must declare at least one input and one output")
 
-    def __call__(self, value):
+    def _torch_dtype(self, name: str):
         torch, trt = self.torch, self.trt
-        types = {trt.float32: torch.float32, trt.float16: torch.float16}
-        name = self.inputs[0]
-        dtype = types[self.engine.get_tensor_dtype(name)]
-        value = value.to(device=f"cuda:{self.device}", dtype=dtype).contiguous()
-        if not self.context.set_input_shape(name, tuple(value.shape)):
-            raise RuntimeError("TensorRT input is outside the compiled profile")
-        if not self.context.set_tensor_address(name, value.data_ptr()):
-            raise RuntimeError("TensorRT input binding failed")
-        output_name = self.outputs[0]
-        shape = tuple(self.context.get_tensor_shape(output_name))
-        if any(v <= 0 for v in shape):
-            raise RuntimeError("TensorRT returned an unresolved output shape")
-        output = torch.empty(shape, device=value.device, dtype=types[self.engine.get_tensor_dtype(output_name)])
-        if not self.context.set_tensor_address(output_name, output.data_ptr()):
-            raise RuntimeError("TensorRT output binding failed")
+        types = {
+            trt.float32: torch.float32,
+            trt.float16: torch.float16,
+            trt.int32: torch.int32,
+            trt.int8: torch.int8,
+            trt.bool: torch.bool,
+        }
+        if hasattr(trt, "bfloat16"):
+            types[trt.bfloat16] = torch.bfloat16
+        dtype = self.engine.get_tensor_dtype(name)
+        if dtype not in types:
+            raise RuntimeError(f"TensorRT binding {name!r} has unsupported dtype {dtype}")
+        return types[dtype]
+
+    def execute(self, inputs: dict[str, object]) -> dict[str, object]:
+        torch = self.torch
+        supplied = set(inputs)
+        expected = set(self.inputs)
+        if supplied != expected:
+            missing = sorted(expected - supplied)
+            unexpected = sorted(supplied - expected)
+            raise RuntimeError(
+                f"TensorRT input bindings do not match the engine; missing={missing}, unexpected={unexpected}"
+            )
+
+        bound_inputs = {}
+        for name in self.inputs:
+            value = inputs[name]
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"TensorRT input {name!r} must be a torch.Tensor")
+            value = value.to(
+                device=f"cuda:{self.device}",
+                dtype=self._torch_dtype(name),
+            ).contiguous()
+            if not self.context.set_input_shape(name, tuple(value.shape)):
+                raise RuntimeError(
+                    f"TensorRT input {name!r} shape {tuple(value.shape)} is outside the compiled profile"
+                )
+            if not self.context.set_tensor_address(name, value.data_ptr()):
+                raise RuntimeError(f"TensorRT input binding failed for {name!r}")
+            bound_inputs[name] = value
+
+        outputs = {}
+        for name in self.outputs:
+            shape = tuple(self.context.get_tensor_shape(name))
+            if any(value <= 0 for value in shape):
+                raise RuntimeError(f"TensorRT returned an unresolved output shape for {name!r}: {shape}")
+            output = torch.empty(
+                shape,
+                device=f"cuda:{self.device}",
+                dtype=self._torch_dtype(name),
+            )
+            if not self.context.set_tensor_address(name, output.data_ptr()):
+                raise RuntimeError(f"TensorRT output binding failed for {name!r}")
+            outputs[name] = output
+
         stream = torch.cuda.current_stream(self.device)
         if not self.context.execute_async_v3(stream.cuda_stream):
             raise RuntimeError("TensorRT execution failed")
         stream.synchronize()
-        return output
+        return outputs
+
+    def __call__(self, value):
+        if isinstance(value, dict):
+            return self.execute(value)
+        if len(self.inputs) != 1 or len(self.outputs) != 1:
+            raise RuntimeError("Multi-binding TensorRT engines require named input tensors")
+        return self.execute({self.inputs[0]: value})[self.outputs[0]]
 
 
 def identity_engine():

@@ -32,14 +32,46 @@ test("candidate core and artifact tampering fail closed", async () => {
   await fsp.rm(scratch, { recursive: true, force: true });
 });
 
-test("candidate creation hashes repository-pinned build inputs", async () => {
+test("candidate creation hashes repository-pinned build inputs and exact native VST3 executables", async () => {
+  await fsp.mkdir(scratch, { recursive: true });
+  const vst3HostPath = path.join(scratch, "EdmgStudio.Vst3Host.exe");
+  const vst3ScannerPath = path.join(scratch, "EdmgStudio.Vst3Scanner.exe");
+  await fsp.writeFile(vst3HostPath, "native host fixture", "utf8");
+  await fsp.writeFile(vst3ScannerPath, "native scanner fixture", "utf8");
   const value = await createCandidate({
     repoRoot: path.resolve(studioRoot, "..", ".."),
     studioRoot,
+    vst3HostPath,
+    vst3ScannerPath,
     packageIdentity: { name: "EDMG.Studio", publisher: "CN=EDMG", version: "1.2.0.0", applicationId: "App" },
   });
   assertCandidate(value);
   assert.ok(value.candidateCore.inputs.some((input) => input.path === "studio/edmg-studio-winui/global.json"));
+  assert.ok(value.candidateCore.inputs.some((input) => input.path === "studio/edmg-studio-winui/native/vst3-host/src/main.cpp"));
+  assert.equal(value.candidateCore.nativeVst3Host.sha256, await (await import("./release-candidate-lib.mjs")).sha256File(vst3HostPath));
+  assert.equal(value.candidateCore.nativeVst3Host.sdkVersion, "3.8.1");
+  assert.equal(value.candidateCore.nativeVst3Host.sdkCommit, "3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96");
+  assert.equal(value.candidateCore.nativeVst3Scanner.sha256, await (await import("./release-candidate-lib.mjs")).sha256File(vst3ScannerPath));
+  assert.equal(value.candidateCore.nativeVst3Scanner.fileName, "EdmgStudio.Vst3Scanner.exe");
+  await fsp.rm(scratch, { recursive: true, force: true });
+});
+
+test("candidate creation fails closed without both native VST3 executables", async () => {
+  await assert.rejects(() => createCandidate({
+    repoRoot: path.resolve(studioRoot, "..", ".."),
+    studioRoot,
+    packageIdentity: { name: "EDMG.Studio", publisher: "CN=EDMG", version: "1.2.0.0", applicationId: "App" },
+  }), /exact EdmgStudio\.Vst3Host\.exe/);
+  await fsp.mkdir(scratch, { recursive: true });
+  const vst3HostPath = path.join(scratch, "EdmgStudio.Vst3Host.exe");
+  await fsp.writeFile(vst3HostPath, "native host fixture", "utf8");
+  await assert.rejects(() => createCandidate({
+    repoRoot: path.resolve(studioRoot, "..", ".."),
+    studioRoot,
+    vst3HostPath,
+    packageIdentity: { name: "EDMG.Studio", publisher: "CN=EDMG", version: "1.2.0.0", applicationId: "App" },
+  }), /exact EdmgStudio\.Vst3Scanner\.exe/);
+  await fsp.rm(scratch, { recursive: true, force: true });
 });
 
 test("backend payload identity changes when an inventoried hash changes", () => {
@@ -51,13 +83,18 @@ test("backend payload identity changes when an inventoried hash changes", () => 
 
 test("package and installer contracts reject candidate, backend, and hash mismatches", () => {
   const value = candidate();
+  value.candidateCore.nativeVst3Host = { sha256: "8".repeat(64), bytes: 1024 };
+  value.candidateCore.nativeVst3Scanner = { sha256: "7".repeat(64), bytes: 512 };
+  value.candidateId = `edmg-rc1-${sha256Bytes(stableJson(value.candidateCore))}`;
   value.artifacts.msix = { sha256: "4".repeat(64) };
   value.artifacts.installer = { sha256: "5".repeat(64) };
-  const msix = { candidateId: value.candidateId, backend: value.candidateCore.backend, package: { ...value.candidateCore.product.identity, sha256: value.artifacts.msix.sha256 } };
+  const msix = { candidateId: value.candidateId, backend: value.candidateCore.backend, nativeVst3Host: value.candidateCore.nativeVst3Host, nativeVst3Scanner: value.candidateCore.nativeVst3Scanner, package: { ...value.candidateCore.product.identity, sha256: value.artifacts.msix.sha256 } };
   const installer = { candidateId: value.candidateId, backend: value.candidateCore.backend, sha256: value.artifacts.installer.sha256, msixSha256: value.artifacts.msix.sha256 };
   validatePackageContract({ candidate: value, msixMetadata: msix, installerMetadata: installer });
   assert.throws(() => validatePackageContract({ candidate: value, msixMetadata: { ...msix, candidateId: id } }), /candidate ID mismatch/);
   assert.throws(() => validatePackageContract({ candidate: value, msixMetadata: { ...msix, backend: { ...msix.backend, binarySha256: "6".repeat(64) } } }), /backend payload identity mismatch/);
+  assert.throws(() => validatePackageContract({ candidate: value, msixMetadata: { ...msix, nativeVst3Host: { ...msix.nativeVst3Host, sha256: "9".repeat(64) } } }), /native VST3 host identity mismatch/);
+  assert.throws(() => validatePackageContract({ candidate: value, msixMetadata: { ...msix, nativeVst3Scanner: { ...msix.nativeVst3Scanner, sha256: "9".repeat(64) } } }), /native VST3 scanner identity mismatch/);
   assert.throws(() => validatePackageContract({ candidate: value, msixMetadata: msix, installerMetadata: { ...installer, msixSha256: "7".repeat(64) } }), /Installer MSIX hash mismatch/);
 });
 

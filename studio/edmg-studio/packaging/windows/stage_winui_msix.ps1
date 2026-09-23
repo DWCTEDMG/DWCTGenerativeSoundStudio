@@ -5,12 +5,19 @@ param(
   [string]$StoreIdentityFile = "",
   [string]$SideloadPublisher = "",
   [switch]$IncludeProductionBackend,
+  [switch]$AllowBackendlessPackage,
   [ValidateSet("developer", "production", "store")]
   [string]$ReleaseMode = "developer",
-  [string]$CandidateManifest = ""
+  [string]$CandidateManifest = "",
+  [string]$Vst3HostPath = "",
+  [string]$Vst3ScannerPath = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ($AllowBackendlessPackage -and ($ReleaseMode -ne "developer" -or $IncludeProductionBackend)) {
+  throw "Backendless packages are only explicit developer diagnostics."
+}
+if (-not $AllowBackendlessPackage) { $IncludeProductionBackend = $true }
 
 function Get-SigningCertificateSubject([string]$Reference, [string]$Root) {
   if ([string]::IsNullOrWhiteSpace($Reference)) {
@@ -67,6 +74,14 @@ if (-not $CandidateManifest) {
   $CandidateManifest = Join-Path $StudioDir $CandidateManifest
 }
 $CandidateManifest = [IO.Path]::GetFullPath($CandidateManifest)
+if (-not $Vst3HostPath) { $Vst3HostPath = [string]$env:EDMG_VST3_HOST_PATH }
+if ([string]::IsNullOrWhiteSpace($Vst3HostPath)) { throw "Vst3HostPath or EDMG_VST3_HOST_PATH must point to the clean-built EdmgStudio.Vst3Host.exe." }
+$Vst3HostPath = [IO.Path]::GetFullPath($Vst3HostPath)
+if (-not (Test-Path -LiteralPath $Vst3HostPath -PathType Leaf)) { throw "Native VST3 host was not found: $Vst3HostPath" }
+if (-not $Vst3ScannerPath) { $Vst3ScannerPath = [string]$env:EDMG_VST3_SCANNER_PATH }
+if ([string]::IsNullOrWhiteSpace($Vst3ScannerPath)) { throw "Vst3ScannerPath or EDMG_VST3_SCANNER_PATH must point to the clean-built EdmgStudio.Vst3Scanner.exe." }
+$Vst3ScannerPath = [IO.Path]::GetFullPath($Vst3ScannerPath)
+if (-not (Test-Path -LiteralPath $Vst3ScannerPath -PathType Leaf)) { throw "Native VST3 scanner was not found: $Vst3ScannerPath" }
 
 foreach ($requiredFile in @($projectPath, $manifestPath, $signingScript, $candidateScript, $storeValidator)) {
   if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
@@ -147,7 +162,9 @@ if ($ReleaseMode -ne "developer" -and -not $IncludeProductionBackend) {
   throw "$ReleaseMode mode requires -IncludeProductionBackend."
 }
 if ($RequireSigning -and -not $StoreIdentityFile -and -not $SideloadPublisher) {
-  $SideloadPublisher = Get-SigningCertificateSubject ([string]$env:EDMG_CODE_SIGN_CERT) $StudioDir
+  $SideloadPublisher = if ($env:EDMG_ARTIFACT_SIGNING_METADATA) {
+    [string]$sourceManifest.Package.Identity.Publisher
+  } else { Get-SigningCertificateSubject ([string]$env:EDMG_CODE_SIGN_CERT) $StudioDir }
 }
 if ($SideloadPublisher) {
   if ($SideloadPublisher -notmatch "^CN=") {
@@ -159,6 +176,9 @@ if ($SideloadPublisher) {
 $sourceIdentity = $sourceManifest.Package.Identity
 $expectedName = [string]$sourceIdentity.Name
 $expectedPublisher = [string]$sourceIdentity.Publisher
+if ($expectedPublisher -cne "CN=Driftwoodcraftthing, O=Driftwoodcraftthing, STREET=1815 Sterling Avenue, L=Cincinnati, S=Ohio, C=US, PostalCode=45239") {
+  throw "Package publisher must match the permanent Driftwoodcraftthing signing identity."
+}
 $expectedVersion = [string]$sourceIdentity.Version
 $expectedArchitecture = "x64"
 $expectedApplicationId = [string]$sourceManifest.Package.Applications.Application.Id
@@ -166,6 +186,7 @@ if (-not $expectedName -or -not $expectedPublisher -or -not $expectedVersion -or
   throw "Package.appxmanifest must define Identity Name, Publisher, Version, and Application Id."
 }
 
+if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($buildDirectory)) -ne $OutputDirectory) { throw "Unsafe build directory." }
 Remove-Item -LiteralPath $buildDirectory -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $buildDirectory | Out-Null
 
@@ -203,7 +224,8 @@ $node = Get-Command "node" -ErrorAction Stop | Select-Object -First 1
 $candidateArguments = @(
   "create", "--manifest", $CandidateManifest, "--mode", $ReleaseMode,
   "--package-name", $expectedName, "--package-publisher", $expectedPublisher,
-  "--package-version", $expectedVersion, "--application-id", $expectedApplicationId
+  "--package-version", $expectedVersion, "--application-id", $expectedApplicationId,
+  "--vst3-host", $Vst3HostPath, "--vst3-scanner", $Vst3ScannerPath
 )
 if ($IncludeProductionBackend) { $candidateArguments += @("--backend-manifest", (Join-Path $backendPayloadPath "backend-bundle-manifest.json")) }
 if ($StoreIdentityFile) { $candidateArguments += @("--store-metadata", $StoreIdentityFile) }
@@ -240,8 +262,11 @@ $buildArguments = @(
   "-p:DebugSymbols=false",
   "-p:AppxPackageDir=$buildDirectory\",
   "-p:EdmgPackageManifestPath=$effectiveManifestPath",
-  "-p:EdmgReleaseCandidatePath=$candidatePayloadPath"
+  "-p:EdmgReleaseCandidatePath=$candidatePayloadPath",
+  "-p:EdmgVst3HostPath=$Vst3HostPath",
+  "-p:EdmgVst3ScannerPath=$Vst3ScannerPath"
 )
+if ($AllowBackendlessPackage) { $buildArguments += "-p:EdmgAllowBackendlessPackage=true" }
 if ($IncludeProductionBackend) {
   $buildArguments += "-p:EdmgPackagedBackendPath=$backendPayloadPath"
   $buildArguments += "-p:RequireEdmgPackagedBackend=true"
@@ -278,25 +303,64 @@ try {
   $requiredPayloadEntries = @(
     "bin/ffmpeg.exe",
     "bin/ffprobe.exe",
-    "release-candidate.json"
+    "release-candidate.json",
+    "EdmgStudio.Vst3Host.exe",
+    "EdmgStudio.Vst3Scanner.exe",
+    "EdmgStudio.Vst3Host.THIRD-PARTY-NOTICES.txt"
   )
   if ($IncludeProductionBackend) {
     $requiredPayloadEntries += @(
       "backend/edmg-studio-backend.exe",
-      "backend/backend-bundle-manifest.json"
+      "backend/backend-bundle-manifest.json",
+      "backend/_internal/python312.dll",
+      "backend/_internal/edmg_studio_backend/services/engine_package_manifests.json",
+      "bin/FFmpeg-LICENSE.txt",
+      "bin/FFmpeg-SOURCE.txt"
     )
   }
   $archiveEntryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
+  $signingMaterial = @($archiveEntryNames | Where-Object { $_ -match '(?i)(\.pfx|\.p12|\.cer|_TemporaryKey\.)$' })
+  if ($signingMaterial.Count -gt 0) {
+    throw "The generated WinUI MSIX contains signing material: $($signingMaterial -join ', ')"
+  }
   foreach ($requiredEntry in $requiredPayloadEntries) {
     if ($requiredEntry -cnotin $archiveEntryNames) {
       throw "The generated WinUI MSIX is missing required payload entry: $requiredEntry"
     }
+  }
+  $hostEntry = $archive.Entries | Where-Object { $_.FullName.Replace("\", "/") -ceq "EdmgStudio.Vst3Host.exe" } | Select-Object -First 1
+  $hostStream = $hostEntry.Open()
+  $hostHasher = [Security.Cryptography.SHA256]::Create()
+  try { $packagedHostHash = ([BitConverter]::ToString($hostHasher.ComputeHash($hostStream))).Replace("-", "").ToLowerInvariant() }
+  finally { $hostHasher.Dispose(); $hostStream.Dispose() }
+  if ($packagedHostHash -cne [string]$candidate.candidateCore.nativeVst3Host.sha256) {
+    throw "Packaged VST3 host hash does not match release-candidate provenance."
+  }
+  $scannerEntry = $archive.Entries | Where-Object { $_.FullName.Replace("\", "/") -ceq "EdmgStudio.Vst3Scanner.exe" } | Select-Object -First 1
+  $scannerStream = $scannerEntry.Open()
+  $scannerHasher = [Security.Cryptography.SHA256]::Create()
+  try { $packagedScannerHash = ([BitConverter]::ToString($scannerHasher.ComputeHash($scannerStream))).Replace("-", "").ToLowerInvariant() }
+  finally { $scannerHasher.Dispose(); $scannerStream.Dispose() }
+  if ($packagedScannerHash -cne [string]$candidate.candidateCore.nativeVst3Scanner.sha256) {
+    throw "Packaged VST3 scanner hash does not match release-candidate provenance."
   }
   if ($IncludeProductionBackend -and
       -not ($archiveEntryNames | Where-Object { $_ -like "backend/_internal/*" } | Select-Object -First 1)) {
     throw "The generated WinUI MSIX is missing the production backend _internal runtime."
   }
   if ($IncludeProductionBackend) {
+    $bundleManifest = Get-Content -Raw -LiteralPath (Join-Path $backendPayloadPath "backend-bundle-manifest.json") | ConvertFrom-Json
+    $entryMap = @{}
+    foreach ($entry in $archive.Entries) { $entryMap[$entry.FullName.Replace("\", "/")] = $entry }
+    foreach ($file in @($bundleManifest.bundleEntries | Where-Object { $_.type -eq "file" })) {
+      $entry = $entryMap["backend/" + $file.path]
+      if (-not $entry -or $entry.Length -ne $file.size) { throw "Packaged backend inventory mismatch: $($file.path)" }
+      $stream = $entry.Open()
+      $hasher = [Security.Cryptography.SHA256]::Create()
+      try { $entryHash = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant() }
+      finally { $hasher.Dispose(); $stream.Dispose() }
+      if ($entryHash -cne $file.sha256) { throw "Packaged backend hash mismatch: $($file.path)" }
+    }
     foreach ($unsupportedEntry in @(
       "backend/_internal/tcl86t.dll",
       "backend/_internal/tk86t.dll"
@@ -405,6 +469,8 @@ $metadata = [ordered]@{
   releaseMode = $ReleaseMode
   distributable = $false
   backend = if ($IncludeProductionBackend) { $candidate.candidateCore.backend } else { $null }
+  nativeVst3Host = $candidate.candidateCore.nativeVst3Host
+  nativeVst3Scanner = $candidate.candidateCore.nativeVst3Scanner
   package = [ordered]@{
     fileName = [IO.Path]::GetFileName($stagedPath)
     name = $expectedName

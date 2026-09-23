@@ -49,7 +49,9 @@ public sealed record AudioEngineConfiguration(
     string DeviceId,
     int SampleRate,
     int BufferFrames,
-    ImmutableArray<AudioTrackRoute> Tracks)
+    ImmutableArray<AudioTrackRoute> Tracks,
+    ImmutableArray<MixerChannel> MixerChannels = default,
+    AudioAutomationSnapshot? Automation = null)
 {
     public AudioEngineConfiguration ForDirectMasterPlayback() => this with
     {

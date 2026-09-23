@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from edmg_studio_backend.errors import UserFacingError
+from edmg_studio_backend.schemas import TensorRTStandaloneRenderRequest
 from edmg_studio_backend.services import tensorrt_standalone as standalone_module
 from edmg_studio_backend.services.model_manager import ModelManager
 from edmg_studio_backend.services.tensorrt_bundle_migration import (
@@ -20,7 +21,9 @@ from edmg_studio_backend.services.tensorrt_standalone import (
     _find_unet_engine,
     _infer_base_model_ref,
     _resolve_bundle_contract,
+    _render_sd15_tensorrt,
     _validate_profile,
+    TensorRTRenderCanceled,
 )
 
 BASE_MODEL_ID = "runwayml/stable-diffusion-v1-5"
@@ -123,6 +126,18 @@ def test_validate_profile_rejects_mismatched_image_size(tmp_path):
 
     assert exc.value.code == "TRT_PROFILE_MISMATCH"
     assert "512x512" in (exc.value.hint or "")
+
+
+def test_default_request_matches_canonical_bundle_profile(tmp_path):
+    contract = _write_ready_contract(tmp_path)
+    payload = TensorRTStandaloneRenderRequest().model_dump(mode="json")
+
+    assert _validate_profile(contract, payload) == (512, 512)
+
+
+def test_render_cancellation_stops_before_gpu_setup():
+    with pytest.raises(TensorRTRenderCanceled):
+        _render_sd15_tensorrt("project", "job", {}, cancel_check=lambda: True)
 
 
 def test_infer_base_model_ref_uses_pinned_manifest_coordinates(tmp_path):

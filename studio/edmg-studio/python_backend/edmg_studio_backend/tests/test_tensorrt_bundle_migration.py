@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections import namedtuple
 from pathlib import Path
@@ -337,17 +338,37 @@ def test_unlisted_onnx_file_invalidates_complete_component_inventory(tmp_path: P
 def test_same_size_engine_tamper_is_rejected_by_execution_validation(tmp_path: Path) -> None:
     migration = _ready_migration(tmp_path, "models")
     unet = migration.canonical_root / "engine" / "unet_b1_workspace4096.engine"
+    migration.inspect(include_hashes=True)
+    original_mtime_ns = unet.stat().st_mtime_ns
     original = unet.read_bytes()
     unet.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
-    verifier = TensorRTBundleMigration(tmp_path / "models")
+    os.utime(unet, ns=(original_mtime_ns, original_mtime_ns))
 
-    status = verifier.inspect(include_hashes=True)["canonical"]
+    status = migration.inspect(include_hashes=True)["canonical"]
 
     assert status["engine_hashes_verified_now"] is False
     assert status["engine_files_verified"] is False
     assert status["renderer_ready"] is False
     with pytest.raises(UserFacingError) as exc:
-        verifier.validate_bundle_root(verifier.canonical_root, verify_engine_hashes=True)
+        migration.validate_bundle_root(migration.canonical_root, verify_engine_hashes=True)
+    assert exc.value.code == "TRT_BUNDLE_UNVERIFIED"
+
+
+def test_same_size_onnx_tamper_is_rejected_by_execution_validation(tmp_path: Path) -> None:
+    migration = _ready_migration(tmp_path, "models")
+    model = migration.canonical_root / REQUIRED_ONNX_FILES["unet_model"]
+    migration.inspect(include_hashes=True)
+    original_mtime_ns = model.stat().st_mtime_ns
+    original = model.read_bytes()
+    model.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
+    os.utime(model, ns=(original_mtime_ns, original_mtime_ns))
+
+    status = migration.inspect(include_hashes=True)["canonical"]
+
+    assert status["onnx_ready"] is False
+    assert status["renderer_ready"] is False
+    with pytest.raises(UserFacingError) as exc:
+        migration.validate_bundle_root(migration.canonical_root, verify_engine_hashes=True)
     assert exc.value.code == "TRT_BUNDLE_UNVERIFIED"
 
 

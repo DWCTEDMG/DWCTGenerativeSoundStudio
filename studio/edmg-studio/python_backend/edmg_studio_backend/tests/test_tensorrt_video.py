@@ -308,7 +308,8 @@ def test_standalone_worker_resolves_private_bundle_path_only_at_execution(tmp_pa
     bundle_path.mkdir()
     calls: list[tuple[str, str, dict]] = []
 
-    def fake_run_job(project_id: str, job_id: str, payload: dict) -> dict:
+    def fake_run_job(project_id: str, job_id: str, payload: dict, *, cancel_check=None) -> dict:
+        assert cancel_check is None
         calls.append((project_id, job_id, dict(payload)))
         return {"ok": True, "output_path": "outputs/stills/keyframe.png"}
 

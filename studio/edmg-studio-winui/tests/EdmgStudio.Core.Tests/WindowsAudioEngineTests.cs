@@ -8,7 +8,7 @@ namespace EdmgStudio.Core.Tests;
 public sealed class WindowsAudioEngineTests
 {
   [TestMethod]
-  public async Task CoreProcessorBoundaryIsAvailableWithoutClaimingAudioGraphProcessing()
+  public async Task CoreProcessorBoundaryReportsLiveAudioGraphMixerProcessing()
   {
     AudioEngineConfiguration configuration = new("project", "{default}", 48_000, 256,
             [new AudioTrackRoute("track", "master", 1, 0, false, false, [])]);
@@ -16,8 +16,45 @@ public sealed class WindowsAudioEngineTests
     await using WindowsAudioEngine engine = new();
 
     Assert.AreEqual(256, processor.MaximumFrames);
-    StringAssert.Contains(engine.MixerProcessingCapability, "file nodes do not expose decoded per-track quantum buffers");
-    StringAssert.Contains(engine.MixerProcessingCapability, "does not execute bus/send/PDC/automation DSP");
+    StringAssert.Contains(engine.MixerProcessingCapability, "decoded per-track float quanta");
+    StringAssert.Contains(engine.MixerProcessingCapability, "ordered isolated VST3 inserts");
+    StringAssert.Contains(engine.MixerProcessingCapability, "processed stereo master");
+  }
+
+  [TestMethod]
+  public void CoreProcessorUsesAuthoritativeMixerChannelsWhenProvided()
+  {
+    AudioEngineConfiguration configuration = new("project", "{default}", 48_000, 256,
+        [new AudioTrackRoute("route-track", "master", 1, 0, false, false, [])],
+        [new MixerChannel("snapshot-track", "Snapshot", MixerChannelKind.Track, "master", [], []),
+         new MixerChannel("master", "Master", MixerChannelKind.Master, null, [], [])]);
+
+    MixerProcessor processor = WindowsAudioEngine.CreateCoreProcessor(configuration);
+
+    CollectionAssert.Contains(processor.ChannelIds.ToArray(), "snapshot-track");
+    CollectionAssert.DoesNotContain(processor.ChannelIds.ToArray(), "route-track");
+  }
+
+  [TestMethod]
+  public void CoreProcessorAcceptsNegotiatedQuantumCapacity()
+  {
+    AudioEngineConfiguration configuration = new("project", "{default}", 48_000, 256, []);
+
+    MixerProcessor processor = WindowsAudioEngine.CreateCoreProcessor(configuration, maximumFrames: 480);
+
+    Assert.AreEqual(480, processor.MaximumFrames);
+  }
+
+  [TestMethod]
+  public void WorkerCompatibilityRequiresIdentityFormatAndCapacity()
+  {
+    var insert = new MixerInsert("insert", 0, PluginId: "plugin", ModulePath: @"C:\Plugins\effect.vst3");
+    using var processor = new FakeInsertProcessor(@"C:\Plugins\effect.vst3", "plugin", 48_000, 512);
+
+    Assert.IsTrue(WindowsAudioEngine.IsProcessorCompatible(processor, insert, 48_000, 256));
+    Assert.IsFalse(WindowsAudioEngine.IsProcessorCompatible(processor, insert, 44_100, 256));
+    Assert.IsFalse(WindowsAudioEngine.IsProcessorCompatible(processor, insert, 48_000, 1024));
+    Assert.IsFalse(WindowsAudioEngine.IsProcessorCompatible(processor, insert with { PluginId = "other" }, 48_000, 256));
   }
 
   [TestMethod]
@@ -65,5 +102,20 @@ public sealed class WindowsAudioEngineTests
     Assert.AreSame(failure, reported.InnerException);
     Assert.IsNotNull(engine.FailureMessage);
     Assert.IsNull(engine.Configuration);
+  }
+
+  private sealed class FakeInsertProcessor(string modulePath, string pluginId, int sampleRate, int maximumFrames) : IVst3InsertProcessor
+  {
+    public string InstanceId => "fake";
+    public string ModulePath { get; } = modulePath;
+    public string PluginId { get; } = pluginId;
+    public int SampleRate { get; } = sampleRate;
+    public int MaximumFrames { get; } = maximumFrames;
+    public int ReportedLatencySamples => 0;
+    public Vst3WorkerHealth Health => Vst3WorkerHealth.Ready;
+    public string? Diagnostic => null;
+    public bool TryProcessInPlace(Span<float> interleavedStereo, int frames) => true;
+    public void Reset() { }
+    public void Dispose() { }
   }
 }

@@ -88,7 +88,7 @@ public sealed partial class SettingsPage
         LocalRuntimeErrorText.Text = status.Error ?? string.Empty;
         LocalRuntimeErrorText.Visibility = string.IsNullOrWhiteSpace(status.Error) ? Visibility.Collapsed : Visibility.Visible;
         bool busy = status.State is RuntimeState.Detecting or RuntimeState.Starting or RuntimeState.LoadingModel or RuntimeState.Stopping;
-        LocalRuntimeStartButton.IsEnabled = !busy && status.State != RuntimeState.Ready;
+        LocalRuntimeStartButton.IsEnabled = App.Services.LocalRuntime.Settings.Enabled && !busy && status.State != RuntimeState.Ready;
         LocalRuntimeStopButton.IsEnabled = !busy && status.StartedByStudio;
         LocalRuntimeRestartButton.IsEnabled = !busy && status.StartedByStudio;
         LocalRuntimeProgress.IsActive = busy;
@@ -163,6 +163,7 @@ public sealed partial class SettingsPage
                 TensorRtPort = ReadPort(LocalRuntimeTensorRtPort.Value, "TensorRT-LLM port")
             };
             App.Services.LocalRuntime.UpdateSettings(updated);
+            ApplyLocalRuntimeStatus(App.Services.LocalRuntime.CurrentStatus);
             ShowStatus("Local Director runtime settings saved. Restart the runtime to apply profile changes.", InfoBarSeverity.Success);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)

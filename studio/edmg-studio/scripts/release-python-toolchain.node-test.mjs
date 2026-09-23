@@ -242,10 +242,15 @@ test("release builds isolate accelerator environments from the source runtime", 
   assert.equal(sourceEnv.UV_PROJECT_ENVIRONMENT, undefined);
   assert.throws(() => releaseUvEnvironment(studioRoot, "unknown", {}), /Unsupported accelerator profile/);
 });
-test("PyInstaller release spec bundles Faster-Whisper VAD data and metadata", () => {
+test("PyInstaller release spec bundles backend runtime modules and Faster-Whisper data", () => {
   const spec = fs.readFileSync(path.join(studioRoot, "python_backend", "pyinstaller.spec"), "utf8");
+  const entrypoint = fs.readFileSync(path.join(studioRoot, "python_backend", "backend_entry.py"), "utf8");
+  assert.match(spec, /collect_submodules\(["']edmg_studio_backend["']\)/);
+  assert.match(spec, /collect_data_files\(["']edmg_studio_backend["']\)/);
   assert.match(spec, /collect_data_files,\s*["']faster_whisper["']/);
   assert.match(spec, /copy_metadata,\s*["']faster-whisper["']/);
+  assert.match(spec, /module_collection_mode=\{["']scipy\.stats\._distn_infrastructure["']:\s*["']py["']\}/);
+  assert.match(entrypoint, /multiprocessing\.freeze_support\(\)/);
 });
 
 test("media-tool assets pin immutable checksum-verified FFmpeg and FFprobe archives", () => {
@@ -757,10 +762,14 @@ test("package release commands select explicit profiles without changing pnpm", 
     );
   }
   assert.equal(packageJson.scripts["dist:win"], "pnpm run dist:win:winui");
-  assert.match(packageJson.scripts["dist:win:winui"], /prepare:release-bundle:directml/);
-  assert.match(packageJson.scripts["dist:win:winui"], /stage:winui:msix:production/);
-  assert.match(packageJson.scripts["dist:win:winui"], /build_winui_installer\.ps1/);
-  assert.match(packageJson.scripts["dist:win:winui"], /--artifact-set win-winui-exe/);
+  assert.match(packageJson.scripts["dist:win:winui"], /build_all\.ps1/);
+  const buildAll = fs.readFileSync(path.join(studioRoot, "packaging", "windows", "build_all.ps1"), "utf8");
+  assert.match(buildAll, /prepare:release-bundle:directml/);
+  assert.match(buildAll, /stage_winui_msix\.ps1/);
+  assert.match(buildAll, /build_winui_installer\.ps1/);
+  assert.match(buildAll, /sign_release\.ps1/);
+  assert.match(buildAll, /verify-package/);
+  assert.match(buildAll, /--production/);
   assert.match(packageJson.scripts["stage:winui:msix:production"], /-IncludeProductionBackend -RequireSigning/);
   assert.match(packageJson.scripts["dist:win:cpu"], /prepare:release-bundle:cpu/);
   assert.match(packageJson.scripts["dist:win:directml"], /prepare:release-bundle:directml/);
@@ -805,7 +814,7 @@ test("Windows packaging stages and installs a self-contained packaged WinUI prim
   assert.match(stageWinUi, /Get-SigningCertificateSubject/);
 
   assert.match(winUiInstaller, /backend\/edmg-studio-backend\.exe/);
-  assert.match(winUiInstaller, /Get-AuthenticodeSignature/);
+  assert.match(winUiInstaller, /build_all\.ps1 owns candidate binding, joint signing/);
   assert.match(winUiInstaller, /-Action Install -MsixPath/);
   assert.doesNotMatch(winUiInstaller, /Electron compatibility/);
 

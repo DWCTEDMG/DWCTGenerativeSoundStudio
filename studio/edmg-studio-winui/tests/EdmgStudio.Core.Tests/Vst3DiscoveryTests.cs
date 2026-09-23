@@ -26,6 +26,54 @@ public sealed class Vst3DiscoveryTests
     }
 
     [TestMethod]
+    public async Task FingerprintSupportsWindowsDirectoryBundles()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string module = Path.Combine(root, "Bundle.vst3");
+            string binaryDirectory = Path.Combine(module, "Contents", "x86_64-win");
+            Directory.CreateDirectory(binaryDirectory);
+            string binary = Path.Combine(binaryDirectory, "Bundle.vst3");
+            await File.WriteAllTextAsync(binary, "first");
+            Vst3ModuleFingerprint first = await Vst3ModuleFingerprinting.CreateAsync(module);
+            await File.WriteAllTextAsync(binary, "second-content");
+            Vst3ModuleFingerprint second = await Vst3ModuleFingerprinting.CreateAsync(module);
+
+            Assert.AreEqual(Path.GetFullPath(module), first.ModulePath);
+            Assert.AreEqual(5, first.Length);
+            Assert.AreEqual(14, second.Length);
+            Assert.AreNotEqual(first.Sha256, second.Sha256);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task FingerprintRejectsDirectoryBundleReparsePoints()
+    {
+        string root = CreateRoot();
+        string external = CreateRoot();
+        try
+        {
+            string module = Path.Combine(root, "Bundle.vst3");
+            Directory.CreateDirectory(module);
+            await File.WriteAllTextAsync(Path.Combine(external, "external.bin"), "external");
+            string link = Path.Combine(module, "escaped");
+            try { Directory.CreateSymbolicLink(link, external); }
+            catch (UnauthorizedAccessException) { Assert.Inconclusive("Symbolic-link creation is unavailable on this Windows host."); return; }
+
+            InvalidDataException exception = await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await Vst3ModuleFingerprinting.CreateAsync(module));
+            StringAssert.Contains(exception.Message, "reparse point");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(external, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void CatalogInvalidatesOldFingerprintAndPersistsQuarantine()
     {
         string root = CreateRoot();
@@ -98,6 +146,35 @@ public sealed class Vst3DiscoveryTests
             Assert.AreEqual(Vst3CapabilityState.Unavailable, client.CapabilityState);
             Assert.AreEqual(Vst3ScanStatus.Failed, result.Status);
             Assert.IsFalse(store.IsQuarantined(result.Fingerprint));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task UnsupportedModuleIsCachedWithoutQuarantine()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string module = Path.Combine(root, "unsupported.vst3");
+            string scanner = Path.Combine(root, "EdmgStudio.Vst3Scanner.exe");
+            await File.WriteAllTextAsync(module, "module");
+            await File.WriteAllTextAsync(scanner, "stub");
+            Vst3ModuleFingerprint fingerprint = await Vst3ModuleFingerprinting.CreateAsync(module);
+            string response = JsonSerializer.Serialize(new Vst3ScanResponse(1, fingerprint, [], "unsupported"));
+            var store = new Vst3CatalogStore(Path.Combine(root, "catalog.json"));
+            var runner = new CapturingRunner(new Vst3ScannerProcessResult(0, response, string.Empty));
+            var client = new Vst3ScannerClient(scanner, store, runner);
+
+            Vst3ScanResult first = await client.ScanAsync(module, TimeSpan.FromSeconds(1));
+            Vst3ScanResult cached = await client.ScanAsync(module, TimeSpan.FromSeconds(1));
+
+            Assert.AreEqual(Vst3ScanStatus.Unsupported, first.Status);
+            Assert.AreEqual(Vst3ScanStatus.Unsupported, cached.Status);
+            Assert.IsFalse(store.IsQuarantined(fingerprint));
+            Assert.AreEqual("--scan-module", runner.StartInfo!.ArgumentList[0]);
+            Assert.AreEqual(Path.GetFullPath(scanner), runner.StartInfo.FileName);
+            Assert.AreEqual(1, runner.CallCount);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -196,5 +273,21 @@ public sealed class Vst3DiscoveryTests
             _exception is null
                 ? Task.FromResult(_result!)
                 : Task.FromException<Vst3ScannerProcessResult>(_exception);
+    }
+
+    private sealed class CapturingRunner(Vst3ScannerProcessResult result) : IVst3ScannerProcessRunner
+    {
+        public System.Diagnostics.ProcessStartInfo? StartInfo { get; private set; }
+        public int CallCount { get; private set; }
+
+        public Task<Vst3ScannerProcessResult> RunAsync(
+            System.Diagnostics.ProcessStartInfo startInfo,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
+            StartInfo = startInfo;
+            CallCount++;
+            return Task.FromResult(result);
+        }
     }
 }

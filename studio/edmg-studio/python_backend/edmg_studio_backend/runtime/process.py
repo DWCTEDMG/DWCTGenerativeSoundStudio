@@ -45,19 +45,39 @@ class RuntimeProcess:
             raise
         atexit.register(self.close)
 
-    def request(self, operation: str, *, timeout_s=180, array=None, **payload):
+    def request(self, operation: str, *, timeout_s=180, array=None, arrays=None, **payload):
         import numpy as np
         self.sequence += 1
         sequence = self.sequence
+        input_files = []
+        if array is not None and arrays is not None:
+            raise ValueError("Specify either array or named arrays, not both")
         if array is not None:
             np.save(self.root / f"{sequence}-input.npy", array, allow_pickle=False)
+        if arrays is not None:
+            if not isinstance(arrays, dict) or not arrays:
+                raise ValueError("Named TensorRT inputs must be a non-empty mapping")
+            payload["input_names"] = list(arrays)
+            for index, (name, value) in enumerate(arrays.items()):
+                path = self.root / f"{sequence}-input-{index}.npy"
+                np.save(path, value, allow_pickle=False)
+                input_files.append(path)
         try:
             self.process.stdin.write(json.dumps({"operation": operation, "sequence": sequence, **payload}) + "\n")
             self.process.stdin.flush()
             response = self.root / f"{sequence}.json"
             deadline = time.monotonic() + timeout_s
             previous_stage = ""
-            while not response.exists():
+            document = None
+            while document is None:
+                if response.exists():
+                    try:
+                        document = json.loads(response.read_text())
+                    except (OSError, ValueError):
+                        # Windows can briefly deny the reader while os.replace finalizes.
+                        pass
+                if document is not None:
+                    break
                 if self.cancel_check and self.cancel_check():
                     raise RuntimeCanceled("Runtime operation canceled")
                 if self.process.poll() is not None:
@@ -73,13 +93,18 @@ class RuntimeProcess:
                     except (OSError, ValueError, KeyError):
                         pass
                 time.sleep(0.001 if operation == "execute" else 0.05)
-            document = json.loads(response.read_text())
             if not document["ok"]:
                 raise RuntimeError(document["error"])
             result = document["result"]
             output = self.root / f"{sequence}-output.npy"
             if output.exists():
                 result["output"] = np.load(output, allow_pickle=False)
+            output_names = result.pop("output_names", None)
+            if output_names:
+                result["outputs"] = {
+                    name: np.load(self.root / f"{sequence}-output-{index}.npy", allow_pickle=False)
+                    for index, name in enumerate(output_names)
+                }
             return result
         except BaseException as exc:
             if operation == "prepare" and not isinstance(exc, (RuntimeCanceled, KeyboardInterrupt, SystemExit)):
@@ -95,6 +120,10 @@ class RuntimeProcess:
         finally:
             for suffix in (".json", "-input.npy", "-output.npy"):
                 (self.root / f"{sequence}{suffix}").unlink(missing_ok=True)
+            for path in input_files:
+                path.unlink(missing_ok=True)
+            for path in self.root.glob(f"{sequence}-output-*.npy"):
+                path.unlink(missing_ok=True)
 
     def close(self):
         atexit.unregister(self.close)
