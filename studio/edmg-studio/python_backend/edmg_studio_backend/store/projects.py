@@ -630,7 +630,13 @@ class ProjectStore:
         return self._proj_dir(project_id)
 
     def set_audio(
-        self, project_id: str, filename: str, bytes_len: int, *, source_hash: str | None = None
+        self,
+        project_id: str,
+        filename: str,
+        bytes_len: int,
+        *,
+        source_hash: str | None = None,
+        media_asset_id: str | None = None,
     ) -> None:
         def _apply(proj: Project) -> None:
             audio = dict(proj.meta.get("audio") or {})
@@ -640,6 +646,8 @@ class ProjectStore:
             proj.meta["audio"] = audio
             if source_hash:
                 audio["source_hash"] = source_hash
+            if media_asset_id:
+                audio["media_asset_id"] = media_asset_id
             if not source_unchanged and proj.meta.get("analysis"):
                 proj.meta.setdefault("analysis_history", []).append(deepcopy(proj.meta["analysis"]))
                 proj.meta["analysis_history"] = proj.meta["analysis_history"][-10:]

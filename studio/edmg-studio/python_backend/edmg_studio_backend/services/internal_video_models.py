@@ -596,23 +596,31 @@ def _stop_hunyuan_process(proc: subprocess.Popen[str], config: HunyuanRunnerConf
 
 
 def _decode_video(path: Path, *, width: int, height: int) -> list[Any]:
-    import cv2  # type: ignore
-    from PIL import Image  # type: ignore
+    import av  # type: ignore
 
-    capture = cv2.VideoCapture(str(path))
     frames: list[Any] = []
     try:
-        if not capture.isOpened():
-            raise RuntimeError("HunyuanVideo-1.5 output is not a readable MP4 video")
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(Image.fromarray(frame).convert("RGB").resize((int(width), int(height))))
-    finally:
-        capture.release()
+        with av.open(str(path), mode="r") as container:
+            video_stream = next((stream for stream in container.streams if stream.type == "video"), None)
+            if video_stream is None:
+                raise RuntimeError("HunyuanVideo-1.5 output contains no video stream")
+            for frame in container.decode(video_stream):
+                frames.append(frame.to_image().convert("RGB").resize((int(width), int(height))))
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("HunyuanVideo-1.5 output is not a readable MP4 video") from exc
+    if not frames:
+        raise RuntimeError("HunyuanVideo-1.5 output contains no decodable video frames")
     return frames
+
+
+def _is_hunyuan_distributed_cuda_failure(stderr: str, gpu_count: int) -> bool:
+    text = str(stderr or "").lower()
+    return gpu_count > 1 and (
+        "ncclunhandledcudaerror" in text
+        or ("distbackenderror" in text and "cuda failure 999" in text)
+    )
 
 
 def _run_hunyuan(
@@ -662,55 +670,71 @@ def _run_hunyuan(
         request_path.write_text(json.dumps(request), encoding="utf-8")
         backend_root = Path(__file__).resolve().parents[2]
         python_path = os.pathsep.join((config.repo, str(backend_root)))
-        command = [*_runner_prefix(config)]
         if config.mode == "wsl":
             python_path = ":".join((_wsl_path(config.repo, config), _wsl_path(backend_root, config)))
-            gpus = ",".join(part.strip() for part in config.gpus.split(",") if part.strip()) or str(gpu_index)
-            command.extend(["env", f"CUDA_VISIBLE_DEVICES={gpus}",
-                            "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
-                            f"PYTHONPATH={python_path}"])
-        command.extend([
-            config.python, "-m", "torch.distributed.run", "--standalone",
-            "--nproc_per_node", str(len([part for part in config.gpus.split(",") if part.strip()])),
-            "-m", "edmg_studio_backend.services.hunyuan_video15_worker",
-            "--request", _wsl_path(request_path, config),
-            "--model", config.model_path or _wsl_path(model_dir, config),
-            "--llm", _wsl_path(config.companions["llm"], config),
-            "--byt5", _wsl_path(config.companions["byt5"], config), "--glyph", _wsl_path(config.companions["glyph"], config),
-            "--vision", _wsl_path(config.companions["vision"], config), "--output", _wsl_path(output_path, config),
-            "--pid-file", _wsl_path(pid_path, config),
-        ])
-        child_env = os.environ.copy()
-        child_env["CUDA_VISIBLE_DEVICES"] = ",".join(
-            part.strip() for part in config.gpus.split(",") if part.strip()
-        ) or str(gpu_index)
-        child_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-        child_env["PYTHONPATH"] = python_path
-        with stdout_path.open("w", encoding="utf-8") as stdout_log, \
-                stderr_path.open("w", encoding="utf-8") as stderr_log:
-            proc = subprocess.Popen(command, stdout=stdout_log, stderr=stderr_log, text=True,
-                                    start_new_session=config.mode == "external", env=child_env)
-            started = time.monotonic()
-            while True:
-                try:
-                    if cancel_check and cancel_check():
-                        raise RuntimeError("HunyuanVideo-1.5 generation was cancelled")
-                    remaining = config.timeout_s - (time.monotonic() - started)
-                    if remaining <= 0:
-                        raise TimeoutError(f"Hunyuan generation exceeded {config.timeout_s:g} seconds")
-                    proc.communicate(timeout=min(0.25, remaining))
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-                except BaseException:
-                    _stop_hunyuan_process(proc, config, pid_path)
-                    raise
-        stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
-        stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
-        if proc.returncode:
-            detail = (stderr or stdout or "worker exited without diagnostics").strip()[-4000:]
-            raise RuntimeError(
-                f"HunyuanVideo-1.5 Linux worker failed ({proc.returncode}); complete diagnostics: {work}: {detail}"
+        configured_gpus = [part.strip() for part in config.gpus.split(",") if part.strip()] or [str(gpu_index)]
+        gpu_attempts = [configured_gpus]
+        if len(configured_gpus) > 1:
+            gpu_attempts.append(configured_gpus[:1])
+        proc: subprocess.Popen[str] | None = None
+        stdout = ""
+        stderr = ""
+        for attempt_index, attempt_gpus in enumerate(gpu_attempts):
+            visible_gpus = ",".join(attempt_gpus)
+            command = [*_runner_prefix(config)]
+            if config.mode == "wsl":
+                command.extend(["env", f"CUDA_VISIBLE_DEVICES={visible_gpus}",
+                                "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
+                                f"PYTHONPATH={python_path}"])
+            command.extend([
+                config.python, "-m", "torch.distributed.run", "--standalone",
+                "--nproc_per_node", str(len(attempt_gpus)),
+                "-m", "edmg_studio_backend.services.hunyuan_video15_worker",
+                "--request", _wsl_path(request_path, config),
+                "--model", config.model_path or _wsl_path(model_dir, config),
+                "--llm", _wsl_path(config.companions["llm"], config),
+                "--byt5", _wsl_path(config.companions["byt5"], config), "--glyph", _wsl_path(config.companions["glyph"], config),
+                "--vision", _wsl_path(config.companions["vision"], config), "--output", _wsl_path(output_path, config),
+                "--pid-file", _wsl_path(pid_path, config),
+            ])
+            child_env = os.environ.copy()
+            child_env["CUDA_VISIBLE_DEVICES"] = visible_gpus
+            child_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            child_env["PYTHONPATH"] = python_path
+            with stdout_path.open("w", encoding="utf-8") as stdout_log, \
+                    stderr_path.open("w", encoding="utf-8") as stderr_log:
+                proc = subprocess.Popen(command, stdout=stdout_log, stderr=stderr_log, text=True,
+                                        start_new_session=config.mode == "external", env=child_env)
+                started = time.monotonic()
+                while True:
+                    try:
+                        if cancel_check and cancel_check():
+                            raise RuntimeError("HunyuanVideo-1.5 generation was cancelled")
+                        remaining = config.timeout_s - (time.monotonic() - started)
+                        if remaining <= 0:
+                            raise TimeoutError(f"Hunyuan generation exceeded {config.timeout_s:g} seconds")
+                        proc.communicate(timeout=min(0.25, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                    except BaseException:
+                        _stop_hunyuan_process(proc, config, pid_path)
+                        raise
+            stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+            stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
+            if not proc.returncode:
+                break
+            retry_primary = attempt_index == 0 and _is_hunyuan_distributed_cuda_failure(stderr, len(attempt_gpus))
+            if not retry_primary:
+                detail = (stderr or stdout or "worker exited without diagnostics").strip()[-4000:]
+                raise RuntimeError(
+                    f"HunyuanVideo-1.5 Linux worker failed ({proc.returncode}); complete diagnostics: {work}: {detail}"
+                )
+            stdout_path.replace(work / "worker.distributed.stdout.log")
+            stderr_path.replace(work / "worker.distributed.stderr.log")
+            logger.warning(
+                "Hunyuan multi-GPU worker failed with NCCL/CUDA; retrying on primary GPU %s. Diagnostics: %s",
+                attempt_gpus[0], work,
             )
         if not output_path.is_file() or output_path.stat().st_size <= 0:
             raise RuntimeError(f"HunyuanVideo-1.5 worker did not produce a non-empty MP4; diagnostics: {work}")
@@ -722,7 +746,7 @@ def _run_hunyuan(
         succeeded = True
         return frames
     finally:
-        if succeeded:
+        if succeeded and not (work / "worker.distributed.stderr.log").is_file():
             shutil.rmtree(work, ignore_errors=True)
 
 
@@ -805,6 +829,9 @@ def generate_video_model_frames(
         return _to_rgb_frames(frames[:requested_frames], width=requested_size[0], height=requested_size[1])
     validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
+    if engine_l == "svd" and device == "cuda" and dtype_l.lower() in {"bfloat16", "bf16"}:
+        logger.warning("SVD does not support bfloat16 image conditioning; using float16 on CUDA")
+        dtype_l = "float16"
     if engine_l == "hunyuan_video15":
         from PIL import Image  # type: ignore
 

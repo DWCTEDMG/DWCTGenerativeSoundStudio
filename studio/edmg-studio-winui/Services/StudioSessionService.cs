@@ -3,6 +3,11 @@ using Windows.Storage;
 
 namespace EdmgStudio.WinUI.Services;
 
+public sealed class ProjectContentChangedEventArgs(string projectId) : EventArgs
+{
+    public string ProjectId { get; } = projectId;
+}
+
 public sealed class StudioSessionService
 {
     private const string ProjectKey = "StudioSession.ActiveProjectId";
@@ -54,6 +59,7 @@ public sealed class StudioSessionService
     }
 
     public event EventHandler? Changed;
+    public event EventHandler<ProjectContentChangedEventArgs>? ProjectContentChanged;
 
     public StudioWorkflowContext Context => _context;
 
@@ -160,6 +166,9 @@ public sealed class StudioSessionService
 
     public void SetLastWorkflowDestination(string? destination) =>
         SetContext(_context with { LastWorkflowDestination = destination });
+
+    public void NotifyProjectContentChanged(string projectId) =>
+        ProjectContentChanged?.Invoke(this, new ProjectContentChangedEventArgs(projectId));
 
     private string? ReadString(string key) => _settings?.Values[key] as string;
 

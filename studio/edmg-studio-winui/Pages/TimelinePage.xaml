@@ -37,6 +37,8 @@
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <CommandBar x:Name="EditorTrackCommands" DefaultLabelPosition="Right">
+                    <AppBarButton Label="Import audio" Icon="OpenFile" Click="ImportAudio_Click"
+                                  AutomationProperties.AutomationId="Timeline.ImportAudio" />
                     <AppBarButton Label="Add audio track" Icon="Audio" Click="AddAudioTrack_Click"
                                   AutomationProperties.AutomationId="Timeline.AddAudioTrack" />
                     <AppBarButton Label="Add video track" Icon="Video" Click="AddVideoTrack_Click"

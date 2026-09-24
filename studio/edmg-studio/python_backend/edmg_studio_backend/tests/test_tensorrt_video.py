@@ -682,6 +682,85 @@ def test_anchorless_hunyuan_render_uses_native_text_to_video(tmp_path, monkeypat
     assert proof["project_revision"] == "37"
 
 
+@pytest.mark.parametrize("always_static", [False, True])
+def test_video_model_motion_retry_is_bounded(tmp_path, monkeypatch, always_static: bool) -> None:
+    model_path = tmp_path / "hunyuan"
+    model_path.mkdir()
+    calls: list[dict] = []
+
+    def fake_generate(**kwargs):
+        calls.append(kwargs)
+        if always_static or len(calls) == 1:
+            return [Image.new("RGB", (64, 64), "black") for _ in range(kwargs["num_frames"])]
+        frames = []
+        for index in range(kwargs["num_frames"]):
+            frame = Image.new("RGB", (64, 64), "black")
+            for x in range(8):
+                for y in range(8):
+                    frame.putpixel((index * 6 + x, 28 + y), (255, 255, 255))
+            frames.append(frame)
+        return frames
+
+    monkeypatch.setattr(internal_video, "validate_video_model_layout", lambda *_args: None)
+    monkeypatch.setattr(internal_video, "generate_video_model_frames", fake_generate)
+    monkeypatch.setattr(
+        internal_video,
+        "assemble_image_sequence",
+        lambda **kwargs: kwargs["out_mp4"].write_bytes(b"video"),
+    )
+    settings = InternalVideoSettings(
+        width=64,
+        height=64,
+        fps_render=2,
+        fps_output=2,
+        temporal_mode="video_model",
+        video_model_engine="hunyuan_video15",
+        video_model_id=app_module.HUNYUAN_MODEL_ID,
+        video_model_path=str(model_path),
+        hunyuan_generation_mode="t2v",
+        video_model_max_frames_per_scene=8,
+    )
+
+    if always_static:
+        with pytest.raises(UserFacingError) as exc_info:
+            internal_video.render_internal_video_variant(
+                ffmpeg_path="ffmpeg",
+                project_dir=tmp_path,
+                project_id="motion-retry-project",
+                project_revision=1,
+                variant={"index": 0, "duration_s": 4.0},
+                scenes=[{"start_s": 0.0, "end_s": 4.0, "prompt": "a dancer spins"}],
+                audio_path=None,
+                model_dir=model_path,
+                settings=settings,
+            )
+        assert exc_info.value.code == "INSUFFICIENT_TEMPORAL_MOTION"
+        assert "after 3 attempts" in str(exc_info.value.hint)
+        assert len(calls) == 3
+        return
+
+    output = internal_video.render_internal_video_variant(
+        ffmpeg_path="ffmpeg",
+        project_dir=tmp_path,
+        project_id="motion-retry-project",
+        project_revision=1,
+        variant={"index": 0, "duration_s": 4.0},
+        scenes=[{"start_s": 0.0, "end_s": 4.0, "prompt": "a dancer spins"}],
+        audio_path=None,
+        model_dir=model_path,
+        settings=settings,
+    )
+
+    assert output.is_file()
+    assert len(calls) == 2
+    assert calls[0]["seed"] != calls[1]["seed"]
+    metadata_paths = list((tmp_path / "outputs" / "videos").glob("*.render.json"))
+    assert len(metadata_paths) == 1
+    metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
+    assert len(metadata["motion_validation"]["native_scenes"]) == 1
+    assert metadata["motion_validation"]["native_scenes"][0]["generation_attempt"] == 2
+
+
 def test_internal_video_request_rejects_flux_still_model(tmp_path, monkeypatch) -> None:
     store, project = _make_render_project(tmp_path)
     flux_path = tmp_path / "hf_flux1_schnell_internal"

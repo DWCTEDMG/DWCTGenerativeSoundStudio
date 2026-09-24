@@ -57,6 +57,31 @@ class DirectionDraft(ExtensibleModel):
         return value
 
 
+_FEATURE_SAMPLE_LIMIT = 32
+
+
+def _bounded_analysis_features(features: object) -> object:
+    if not isinstance(features, dict):
+        return deepcopy(features)
+    bounded = {}
+    for key, value in features.items():
+        if not isinstance(value, list) or len(value) <= _FEATURE_SAMPLE_LIMIT:
+            bounded[key] = deepcopy(value)
+            continue
+        numeric = [item for item in value if isinstance(item, (int, float)) and not isinstance(item, bool)]
+        step = (len(value) - 1) / (_FEATURE_SAMPLE_LIMIT - 1)
+        samples = [deepcopy(value[round(index * step)]) for index in range(_FEATURE_SAMPLE_LIMIT)]
+        summary = {"count": len(value), "samples": samples}
+        if len(numeric) == len(value):
+            summary.update({
+                "min": min(numeric),
+                "max": max(numeric),
+                "mean": sum(numeric) / len(numeric),
+            })
+        bounded[key] = summary
+    return bounded
+
+
 def timeline_context(project, start_sample: str, end_sample: str) -> dict:
     """Build bounded, server-authoritative context for an exact timeline range."""
     start, end = int64(start_sample), int64(end_sample)
@@ -72,10 +97,19 @@ def timeline_context(project, start_sample: str, end_sample: str) -> dict:
     selected = [scene for scene in ordered if int(scene.end_sample) > start and int(scene.start_sample) < end]
     selected_ids = {scene.scene_id for scene in selected}
     indices = [index for index, scene in enumerate(ordered) if scene.scene_id in selected_ids]
+    def scene_reference(scene: SceneSpec) -> dict:
+        return {
+            "scene_id": scene.scene_id,
+            "start_sample": scene.start_sample,
+            "end_sample": scene.end_sample,
+            "continuity_mode": scene.continuity_mode,
+            "locked": bool(scene.renderer_hints.get("locked")),
+        }
+
     neighbors = []
     if indices:
         neighbor_indices = {max(0, min(indices) - 1), min(len(ordered) - 1, max(indices) + 1)} - set(indices)
-        neighbors = [ordered[index].model_dump(mode="json") for index in sorted(neighbor_indices)]
+        neighbors = [scene_reference(ordered[index]) for index in sorted(neighbor_indices)]
 
     def position(item):
         if "position_sample" in item:
@@ -113,14 +147,16 @@ def timeline_context(project, start_sample: str, end_sample: str) -> dict:
     context = {
         "version": 1,
         "selected_range": {"start_sample": start_sample, "end_sample": end_sample},
-        "selected_scenes": [scene.model_dump(mode="json") for scene in selected],
+        "selected_scenes": [scene_reference(scene) for scene in selected],
         "neighbor_scenes": neighbors,
         "markers": markers,
         "transcript": {"text": str(transcript.get("text", ""))[:8000], "segments": selected_segments[:200]}
         if isinstance(transcript, dict) else {"text": str(transcript)[:8000], "segments": []},
         "lyrics": deepcopy(analysis.get("lyrics") or []),
-        "analysis_excerpt": {key: deepcopy(analysis.get(key)) for key in
-                             ("revision", "summary", "tags", "features") if key in analysis},
+        "analysis_excerpt": {
+            key: _bounded_analysis_features(analysis.get(key)) if key == "features" else deepcopy(analysis.get(key))
+            for key in ("revision", "summary", "tags", "features") if key in analysis
+        },
         "clips": clips,
     }
     return context

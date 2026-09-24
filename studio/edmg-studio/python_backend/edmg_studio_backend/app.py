@@ -243,6 +243,7 @@ from .render_conductor.planner import (
     build_advisory_render_plan,
     promote_proxy_sections,
 )
+from .domain.editor_commands import execute as execute_editor_command
 from .domain.music_graph import music_graph_for_project
 from .domain.performer_workflow import build_performer_workflow_plan
 from .services.setup_wizard import (
@@ -3941,27 +3942,138 @@ if HAS_MULTIPART:
         proj = store.get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
+        timeline = proj.meta.get("timeline") if isinstance(proj.meta.get("timeline"), dict) else {}
+        locked_primary_track = next(
+            (
+                track for track in timeline.get("tracks", []) if isinstance(track, dict) and track.get("locked")
+                and any(
+                    isinstance(clip, dict) and str(clip.get("id") or "").startswith("primary-audio-clip-")
+                    for clip in track.get("clips", [])
+                )
+            ),
+            None,
+        )
+        if locked_primary_track is not None:
+            raise HTTPException(409, "Unlock the existing Project Audio track before replacing primary audio")
         pdir = store.project_dir(project_id)
         audio_dir = pdir / "assets" / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
         name = _safe_upload_filename(file.filename, "audio.wav")
-        out = audio_dir / name
+        staging = audio_dir / f".{name}.{os.getpid()}.{time.time_ns()}.upload"
         size = 0
         source_hasher = hashlib.sha256()
-        with out.open("wb") as handle:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                source_hasher.update(chunk)
-                size += len(chunk)
         try:
-            await file.close()
+            with staging.open("wb") as handle:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    source_hasher.update(chunk)
+                    size += len(chunk)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+        if not size:
+            staging.unlink(missing_ok=True)
+            raise HTTPException(400, "Audio file is empty")
+
+        source_hash = source_hasher.hexdigest()
+        out = audio_dir / f"{source_hash[:16]}-{name}"
+        previous_audio = proj.meta.get("audio") if isinstance(proj.meta.get("audio"), dict) else {}
+        try:
+            os.replace(staging, out)
+            registered = media_pool.register_existing_media(
+                project_id,
+                out.relative_to(pdir).as_posix(),
+                display_name=name,
+                content_type=file.content_type,
+                preferred_asset_id=previous_audio.get("media_asset_id"),
+            )
         except Exception:
-            pass
-        store.set_audio(project_id, name, size, source_hash=source_hasher.hexdigest())
-        return {"ok": True, "path": str(out)}
+            staging.unlink(missing_ok=True)
+            out.unlink(missing_ok=True)
+            raise
+        asset = registered["asset"]
+        asset_source = (pdir / str(asset.get("path") or "")).resolve()
+        if registered["deduplicated"] and asset_source != out.resolve():
+            out.unlink(missing_ok=True)
+
+        def ensure_primary_audio_clip(project):
+            timeline = project.meta.get("timeline") if isinstance(project.meta.get("timeline"), dict) else {}
+            managed_clip = next(
+                (
+                    (track, clip)
+                    for track in timeline.get("tracks", []) if isinstance(track, dict)
+                    for clip in track.get("clips", []) if isinstance(clip, dict)
+                    and str(clip.get("id") or "").startswith("primary-audio-clip-")
+                ),
+                None,
+            )
+            duration_seconds = (asset.get("probe") or {}).get("duration_seconds")
+            try:
+                duration_seconds = float(duration_seconds)
+            except (TypeError, ValueError):
+                duration_seconds = 0.0
+            if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+                raise ValueError("Primary audio duration could not be determined")
+            sample_rate = int((timeline.get("timebase") or {}).get("sample_rate") or 48000)
+            end_sample = max(1, round(duration_seconds * sample_rate))
+            if managed_clip and managed_clip[0].get("locked"):
+                raise ValueError("Unlock the existing Project Audio track before replacing primary audio")
+            audio_track = managed_clip[0] if managed_clip else next(
+                (
+                    track for track in timeline.get("tracks", [])
+                    if isinstance(track, dict) and track.get("type") == "audio" and not track.get("locked")
+                ),
+                None,
+            )
+            track_id = str(audio_track.get("id")) if audio_track else f"primary-audio-track-{asset['id']}"
+            clip_id = f"primary-audio-clip-{asset['id']}"
+            operations = []
+            if managed_clip:
+                operations.append({
+                    "kind": "delete", "track_id": managed_clip[0]["id"], "clip_id": managed_clip[1]["id"]
+                })
+            if audio_track is None:
+                operations.append({
+                    "kind": "add_track", "track_type": "audio", "new_id": track_id, "name": "Project Audio"
+                })
+            operations.append({
+                "kind": "add_clip",
+                "track_id": track_id,
+                "new_id": clip_id,
+                "name": asset["display_name"],
+                "type": "audio",
+                "start_sample": "0",
+                "end_sample": str(end_sample),
+                "media_asset_id": asset["id"],
+            })
+            execute_editor_command(project.meta, {
+                "operation_id": f"primary-audio-{asset['sha256']}-{time.time_ns()}",
+                "action": "edit",
+                "label": "Update project audio on Timeline",
+                "operations": operations,
+            })
+            audio = dict(project.meta.get("audio") or {})
+            source_unchanged = audio.get("source_hash") == source_hash
+            audio.update({
+                "filename": out.name,
+                "size_bytes": size,
+                "source_hash": source_hash,
+                "media_asset_id": asset["id"],
+            })
+            project.meta["audio"] = audio
+            if not source_unchanged and project.meta.get("analysis"):
+                project.meta.setdefault("analysis_history", []).append(deepcopy(project.meta["analysis"]))
+                project.meta["analysis_history"] = project.meta["analysis_history"][-10:]
+            if not source_unchanged:
+                project.meta.pop("analysis", None)
+
+        store.mutate(project_id, ensure_primary_audio_clip)
+        return {"ok": True, "deduplicated": registered["deduplicated"], "asset": asset}
 else:
     async def upload_audio(project_id: str):
         _require_multipart()

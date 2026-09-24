@@ -24,6 +24,34 @@ def _check_canceled(cancel_check: CancelCheck | None) -> None:
         raise ModelLoadCanceled("Director generation canceled")
 
 
+def _selected_cuda_devices(requested: object, device_count: int) -> list[int]:
+    value = str(requested or "auto").strip().lower()
+    if value in {"", "auto", "all"}:
+        return list(range(device_count))
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if not parts or any(not part.isdigit() for part in parts):
+        raise ValueError("Director GPU devices must be 'auto' or comma-separated non-negative indexes")
+    devices = [int(part) for part in parts]
+    if len(set(devices)) != len(devices):
+        raise ValueError("Director GPU devices must not contain duplicate indexes")
+    if any(index >= device_count for index in devices):
+        raise ValueError("Director GPU devices include an index that PyTorch does not expose")
+    return devices
+
+
+def _dense_device_map(value: object) -> str:
+    requested = str(value or "balanced_low_0").strip().lower()
+    if requested not in {"auto", "balanced", "balanced_low_0", "sequential"}:
+        raise ValueError("Unsupported dense Director device-map strategy")
+    return requested
+
+
+def _json_device_map(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
 def run_director_job(
     payload: dict,
     models,
@@ -53,6 +81,8 @@ def run_director_job(
             directory,
             device=str(payload.get("device") or os.getenv("EDMG_LLAMA_DEVICE") or "cpu"),
             gpu_layers=payload.get("gpu_layers", os.getenv("EDMG_LLAMA_GPU_LAYERS", "auto")),
+            gpu_devices=payload.get("gpu_devices", "auto"),
+            tensor_split=payload.get("tensor_split", "auto"),
             context_length=int(payload.get("context_length") or os.getenv("EDMG_LLAMA_CONTEXT_LENGTH", "8192")),
             batch_size=int(payload.get("batch_size") or os.getenv("EDMG_LLAMA_BATCH_SIZE", "64")),
             ubatch_size=int(payload.get("ubatch_size") or os.getenv("EDMG_LLAMA_UBATCH_SIZE", "16")),
@@ -63,19 +93,28 @@ def run_director_job(
         )
         try:
             backend.start(cancel_check=cancel_check)
-            if progress_fn:
-                progress_fn("generating", "Generating a Director draft with llama.cpp")
-            text = backend.generate(
-                document,
-                str(payload["instruction"]),
-                timeline_context=payload.get("timeline_context"),
-                image_paths=[str(value) for value in payload.get("image_paths", [])],
-                max_tokens=int(payload.get("max_new_tokens") or 4096),
-                cancel_check=cancel_check,
-            )
-            if progress_fn:
-                progress_fn("validating_draft", "Checking the draft against approved scene constraints")
-            proposal = validate_proposal(text, document)
+            windows = _scene_windows(document)
+            proposal = document.model_copy(deep=True)
+            for window_index, window in enumerate(windows, start=1):
+                if progress_fn:
+                    progress_fn(
+                        "generating",
+                        f"Generating Director scene window {window_index} of {len(windows)} with llama.cpp",
+                    )
+                text = backend.generate(
+                    window,
+                    str(payload["instruction"]),
+                    timeline_context=payload.get("timeline_context"),
+                    image_paths=[str(value) for value in payload.get("image_paths", [])],
+                    max_tokens=int(payload.get("max_new_tokens") or 4096),
+                    cancel_check=cancel_check,
+                )
+                if progress_fn:
+                    progress_fn(
+                        "validating_draft",
+                        f"Checking Director scene window {window_index} of {len(windows)}",
+                    )
+                _merge_window_proposal(proposal, validate_proposal(text, window))
         finally:
             backend.close()
         launch_configuration = (
@@ -94,6 +133,7 @@ def run_director_job(
                 "runtime": "llama-server",
                 "device": backend.device,
                 "launch_configuration": launch_configuration,
+                "scene_windows": len(windows),
             },
         }
 
@@ -116,8 +156,10 @@ def run_director_job(
     gib = 1024**3
     cpu_budget = max(0, int(psutil.virtual_memory().available) - 4 * gib)
     budgets = {"cpu": cpu_budget}
+    selected_devices: list[int] = []
     if torch.cuda.is_available():
-        for device in range(torch.cuda.device_count()):
+        selected_devices = _selected_cuda_devices(payload.get("gpu_devices"), torch.cuda.device_count())
+        for device in selected_devices:
             free, _ = torch.cuda.mem_get_info(device)
             budget = max(0, int(free) - 2 * gib)
             if budget:
@@ -137,12 +179,42 @@ def run_director_job(
         payload["instruction"],
         timeline_context=payload.get("timeline_context"),
         max_memory=budgets,
+        device_map=_dense_device_map(payload.get("dense_device_map")),
+        max_new_tokens=int(payload.get("max_new_tokens") or 4096),
         cancel_check=cancel_check,
         progress_fn=progress_fn,
     )
     result["source_revision"] = payload["source_revision"]
     result["provenance"]["model_id"] = model_id
     return result
+
+
+_SCENE_WINDOW_LIMIT = 12
+_SCENE_WINDOW_CHARACTER_LIMIT = 24000
+
+
+def _scene_windows(document: DirectorDocument) -> list[DirectorDocument]:
+    windows: list[DirectorDocument] = []
+    scenes = []
+    characters = 0
+    for scene in document.scenes:
+        scene_characters = len(json.dumps(scene.model_dump(mode="json"), ensure_ascii=False))
+        if scenes and (len(scenes) >= _SCENE_WINDOW_LIMIT or characters + scene_characters > _SCENE_WINDOW_CHARACTER_LIMIT):
+            windows.append(document.model_copy(update={"scenes": scenes}, deep=True))
+            scenes = []
+            characters = 0
+        scenes.append(scene)
+        characters += scene_characters
+    if scenes or not document.scenes:
+        windows.append(document.model_copy(update={"scenes": scenes}, deep=True))
+    return windows
+
+
+def _merge_window_proposal(target: DirectorDocument, proposal: DirectorDocument) -> None:
+    updates = {scene.scene_id: scene for scene in proposal.scenes}
+    for index, scene in enumerate(target.scenes):
+        if scene.scene_id in updates:
+            target.scenes[index] = updates[scene.scene_id]
 
 
 def _planning_document(document: DirectorDocument) -> dict:
@@ -153,7 +225,7 @@ def _planning_document(document: DirectorDocument) -> dict:
                 "scene_id": scene.scene_id,
                 "start_sample": scene.start_sample,
                 "end_sample": scene.end_sample,
-                "intent": scene.intent[:1000],
+                "intent": scene.intent,
                 "subjects": [subject.model_dump(mode="json") for subject in scene.subjects],
                 "actions": scene.actions,
                 "camera": scene.camera.model_dump(mode="json"),
@@ -279,6 +351,7 @@ def generate_proposal(
     *,
     timeline_context: dict | None = None,
     max_memory: dict,
+    device_map: str = "balanced_low_0",
     max_new_tokens: int = 4096,
     cancel_check: CancelCheck | None = None,
     progress_fn: ProgressCallback | None = None,
@@ -293,7 +366,7 @@ def generate_proposal(
     config = json.loads((model_directory / "config.json").read_text(encoding="utf-8"))
     if config.get("model_type") != "qwen3_vl":
         raise ValueError("This adapter requires the dense Qwen3-VL model")
-    messages = planning_messages(document, instruction, timeline_context)
+    windows = _scene_windows(document)
     # Optional dependencies are imported only inside the model worker.
     import torch
     import transformers
@@ -311,7 +384,7 @@ def generate_proposal(
         str(model_directory),
         local_files_only=True,
         trust_remote_code=False,
-        device_map="auto",
+        device_map=_dense_device_map(device_map),
         max_memory=max_memory,
         torch_dtype="auto",
         attn_implementation="sdpa",
@@ -322,19 +395,6 @@ def generate_proposal(
         local_files_only=True,
         trust_remote_code=False,
     )
-    _check_canceled(cancel_check)
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    ).to(model.device)
-    inputs.pop("token_type_ids", None)
-    _check_canceled(cancel_check)
-    if progress_fn:
-        progress_fn("generating", "Generating a Director draft for review")
-
     class CancelRequested(StoppingCriteria):
         def __call__(self, _input_ids, _scores, **_kwargs):
             return bool(cancel_check and cancel_check())
@@ -342,20 +402,51 @@ def generate_proposal(
     generation_kwargs = {}
     if cancel_check is not None:
         generation_kwargs["stopping_criteria"] = StoppingCriteriaList([CancelRequested()])
-    with torch.inference_mode():
-        generated = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=False, **generation_kwargs
-        )
-    _check_canceled(cancel_check)
-    trimmed = [
-        output[len(source) :] for source, output in zip(inputs.input_ids, generated, strict=True)
-    ]
-    text = processor.batch_decode(
-        trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )[0]
-    if progress_fn:
-        progress_fn("validating_draft", "Checking the draft against approved scene constraints")
-    proposal = validate_proposal(text, document)
+    proposal = document.model_copy(deep=True)
+    for window_index, window in enumerate(windows, start=1):
+        _check_canceled(cancel_check)
+        messages = planning_messages(window, instruction, timeline_context)
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(model.device)
+        inputs.pop("token_type_ids", None)
+        if progress_fn:
+            progress_fn(
+                "generating",
+                f"Generating Director scene window {window_index} of {len(windows)}",
+            )
+        try:
+            with torch.inference_mode():
+                generated = model.generate(
+                    **inputs, max_new_tokens=max_new_tokens, do_sample=False, **generation_kwargs
+                )
+        except torch.OutOfMemoryError as exc:
+            raise UserFacingError(
+                "The Director model ran out of GPU memory while generating the draft",
+                hint=(
+                    "Close other GPU workloads, choose a smaller or GGUF Director profile, "
+                    "or shorten the selected timeline range, then retry."
+                ),
+                code="DIRECTOR_MEMORY_EXHAUSTED",
+                status_code=422,
+            ) from exc
+        _check_canceled(cancel_check)
+        trimmed = [
+            output[len(source) :] for source, output in zip(inputs.input_ids, generated, strict=True)
+        ]
+        text = processor.batch_decode(
+            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0]
+        if progress_fn:
+            progress_fn(
+                "validating_draft",
+                f"Checking Director scene window {window_index} of {len(windows)}",
+            )
+        _merge_window_proposal(proposal, validate_proposal(text, window))
     _check_canceled(cancel_check)
     return {
         "status": "draft",
@@ -363,6 +454,10 @@ def generate_proposal(
         "provenance": {
             "model_directory": str(model_directory),
             "model_type": "qwen3_vl",
+            "device_map_strategy": _dense_device_map(device_map),
+            "max_memory": {str(key): int(value) for key, value in max_memory.items()},
+            "hf_device_map": _json_device_map(getattr(model, "hf_device_map", {})),
+            "scene_windows": len(windows),
             "transformers_version": transformers.__version__,
             "torch_version": torch.__version__,
         },

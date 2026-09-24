@@ -111,7 +111,7 @@ def test_start_isolates_requested_cuda_device_and_loads_projector(tmp_path, monk
     ))
     monkeypatch.setattr(llama_cpp_director.subprocess, "Popen", Process)
     monkeypatch.setattr(llama_cpp_director.requests, "get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
-    backend = LlamaCppDirectorBackend(tmp_path, device="cuda:1")
+    backend = LlamaCppDirectorBackend(tmp_path, device="cuda:1", gpu_devices="1")
     backend.start()
     command, kwargs = commands[0]
     assert command[command.index("-m") + 1] == str(model)
@@ -129,6 +129,21 @@ def test_start_isolates_requested_cuda_device_and_loads_projector(tmp_path, monk
     assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "1"
     assert kwargs["env"]["GGML_CUDA_DISABLE_GRAPHS"] == "1"
     backend.close()
+
+
+def test_auto_multi_gpu_configuration_uses_every_detected_device(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+    monkeypatch.delenv("EDMG_QWEN_GPUS", raising=False)
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stdout="CUDA0: NVIDIA RTX A6000\nCUDA1: NVIDIA RTX A6000\nCUDA2: NVIDIA RTX A6000",
+        stderr="",
+    ))
+    backend = LlamaCppDirectorBackend(tmp_path, executable=runtime, device="cuda:0")
+    environment = backend._cuda_environment()
+    assert environment["CUDA_VISIBLE_DEVICES"] == "0,1,2"
+    assert backend.launch_configuration()["gpu_devices"] == ["0", "1", "2"]
+    assert backend.launch_configuration()["tensor_split"] == "1,1,1"
 
 
 def test_explicit_multi_gpu_configuration_maps_requested_main_gpu(tmp_path, monkeypatch):
@@ -161,6 +176,27 @@ def test_explicit_multi_gpu_configuration_rejects_invalid_or_missing_requested_d
     monkeypatch.setenv("EDMG_QWEN_GPUS", "0,zero")
     with pytest.raises(RuntimeError, match="non-negative CUDA indexes"):
         backend._cuda_environment()
+
+
+def test_explicit_tensor_split_requires_one_positive_weight_per_gpu(tmp_path, monkeypatch):
+    _model, _projector, runtime = _package(tmp_path)
+    monkeypatch.delenv("EDMG_QWEN_GPUS", raising=False)
+    monkeypatch.setattr(llama_cpp_director.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stdout="CUDA0: NVIDIA RTX A6000\nCUDA1: NVIDIA RTX A6000\nCUDA2: NVIDIA RTX A6000",
+        stderr="",
+    ))
+    backend = LlamaCppDirectorBackend(
+        tmp_path, executable=runtime, device="cuda:2", gpu_devices="0,2", tensor_split="2,3",
+    )
+    backend._cuda_environment()
+    assert backend.launch_configuration()["tensor_split"] == "2,3"
+
+    invalid = LlamaCppDirectorBackend(
+        tmp_path, executable=runtime, device="cuda:0", gpu_devices="0,1", tensor_split="1",
+    )
+    with pytest.raises(RuntimeError, match="one positive weight"):
+        invalid._cuda_environment()
 
 
 def test_auto_gpu_layers_are_partial_on_six_gib_and_manual_override_wins():
@@ -293,6 +329,8 @@ def test_worker_routes_both_gguf_sizes_through_common_backend(tmp_path, monkeypa
         "device": "cpu",
         "runtime_path": str(tmp_path / "llama-server.exe"),
         "gpu_layers": "5",
+        "gpu_devices": "0,2",
+        "tensor_split": "2,3",
         "context_length": 12288,
         "batch_size": 32,
         "ubatch_size": 8,
@@ -307,6 +345,8 @@ def test_worker_routes_both_gguf_sizes_through_common_backend(tmp_path, monkeypa
     init_options = calls[0][2]
     assert init_options["executable"] == tmp_path / "llama-server.exe"
     assert init_options["gpu_layers"] == "5"
+    assert init_options["gpu_devices"] == "0,2"
+    assert init_options["tensor_split"] == "2,3"
     assert init_options["context_length"] == 12288
     assert init_options["batch_size"] == 32
     assert init_options["ubatch_size"] == 8

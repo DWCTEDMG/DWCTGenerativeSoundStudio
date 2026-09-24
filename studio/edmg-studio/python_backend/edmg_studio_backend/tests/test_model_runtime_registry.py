@@ -340,6 +340,31 @@ def test_level_five_video_smoke_requires_distributed_motion(tmp_path, monkeypatc
     assert result["motion_evidence"]["status"] == "pass"
 
 
+def test_hunyuan_smoke_requests_a_motion_qualifying_clip(tmp_path, monkeypatch):
+    from edmg_studio_backend.services import internal_video_models
+
+    captured = {}
+
+    def generate(**kwargs):
+        captured.update(kwargs)
+        return _motion_frames(17)
+
+    monkeypatch.setattr(internal_video_models, "generate_video_model_frames", generate)
+
+    result = runtime_module._smoke_test_hunyuan(
+        package_root=tmp_path,
+        hardware={"backend": "cuda", "device": "cuda:0"},
+    )
+
+    assert result["motion_evidence"]["status"] == "pass"
+    assert captured["num_frames"] == 17
+    assert captured["fps"] == 8
+    assert captured["steps"] == 4
+    assert "far left" in captured["prompt"].lower()
+    assert "far right" in captured["prompt"].lower()
+    assert "continuous motion" in captured["prompt"].lower()
+
+
 def test_level_five_video_smoke_rejects_insufficient_frames(tmp_path, monkeypatch):
     from edmg_studio_backend.services import internal_video_models
 

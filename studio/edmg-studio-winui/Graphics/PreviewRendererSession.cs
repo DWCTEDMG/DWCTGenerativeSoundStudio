@@ -430,27 +430,28 @@ internal sealed class PreviewRendererSession : IAsyncDisposable
 
     private void UploadRetainedFrame()
     {
-        if (_retainedFrame is null || _uploader is null || _d2dContext is null)
+        if (_retainedFrame is null || _d2dContext is null)
         {
             return;
         }
 
-        ID3D11Texture2D uploadedTexture = _uploader.Upload(_retainedFrame);
-        if (_sourceBitmap is not null &&
-            _sourceWidth == _retainedFrame.Layout.Width &&
-            _sourceHeight == _retainedFrame.Layout.Height)
+        int width = _retainedFrame.Layout.Width;
+        int height = _retainedFrame.Layout.Height;
+        if (_sourceBitmap is null || _sourceWidth != width || _sourceHeight != height)
         {
-            return;
+            _sourceBitmap?.Dispose();
+            _sourceBitmap = null;
+            var properties = new BitmapProperties1(
+                new D2DPixelFormat(DxgiFormat.B8G8R8A8_UNorm, D2DAlphaMode.Premultiplied));
+            var size = new SizeI(width, height);
+            _sourceBitmap = _d2dContext.CreateBitmap(size, properties);
+            _sourceWidth = width;
+            _sourceHeight = height;
         }
 
-        _sourceBitmap?.Dispose();
-        _sourceBitmap = null;
-        using IDXGISurface sourceSurface = uploadedTexture.QueryInterface<IDXGISurface>();
-        var properties = new BitmapProperties1(
-            new D2DPixelFormat(DxgiFormat.B8G8R8A8_UNorm, D2DAlphaMode.Premultiplied));
-        _sourceBitmap = _d2dContext.CreateBitmapFromDxgiSurface(sourceSurface, properties);
-        _sourceWidth = _retainedFrame.Layout.Width;
-        _sourceHeight = _retainedFrame.Layout.Height;
+        byte[] pixels = GC.AllocateUninitializedArray<byte>(_retainedFrame.Layout.TightBufferLength);
+        _retainedFrame.CopyToBgra(pixels);
+        _sourceBitmap.CopyFromMemory(pixels, (uint)_retainedFrame.Layout.RowBytes).CheckError();
     }
 
     private void DrawEmptySurface()

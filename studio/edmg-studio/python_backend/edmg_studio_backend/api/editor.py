@@ -243,9 +243,6 @@ def create_editor_router(
             return repeated
 
         def apply(project):
-            execute(project.meta, command_payload)
-            project.meta["editor_history"]["receipts"][receipt_id] = fingerprint
-            validate_timeline_media(project_dir, project.meta["timeline"])
             pool = project.meta.setdefault("media_pool", [])
             if not any(isinstance(item, dict) and item.get("path") == relative for item in pool):
                 pool.append({
@@ -264,6 +261,9 @@ def create_editor_router(
                     "source_assets": deepcopy(manifest.get("source_assets") or []),
                     "lineage": deepcopy(manifest.get("lineage") or {"parents": []}),
                 })
+            execute(project.meta, command_payload)
+            project.meta["editor_history"]["receipts"][receipt_id] = fingerprint
+            validate_timeline_media(project_dir, project.meta["timeline"])
 
         try:
             project = store.mutate(project_id, apply, expected_revision=request.expected_revision)

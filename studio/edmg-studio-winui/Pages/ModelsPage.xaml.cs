@@ -24,6 +24,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     private TensorRtMigrationStatus? _tensorRtStatus;
     private RuntimeStatusResponse? _runtimeStatus;
     private string? _taskFingerprint;
+    private bool _isInitialized;
     private bool _isRefreshing;
     private bool _isPolling;
     private bool _isCommandRunning;
@@ -31,6 +32,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     public ModelsPage()
     {
         InitializeComponent();
+        _isInitialized = true;
         ModelList.ItemsSource = _visibleModels;
         PackCombo.ItemsSource = _packs;
         TaskItems.ItemsSource = _tasks;
@@ -416,7 +418,10 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         JsonElement response = await _apiClient.GetDirectorRuntimeSettingsAsync(cancellationToken);
         JsonElement settings = response.GetProperty("settings");
         SetHunyuanText(QwenRuntimePathBox, settings, "runtime_path");
+        QwenGpuDevicesBox.Text = settings.TryGetProperty("gpu_devices", out JsonElement devices) ? devices.ToString() : "auto";
+        SelectTag(QwenDensePlacementCombo, settings.TryGetProperty("dense_device_map", out JsonElement placement) ? placement.GetString() : "balanced_low_0");
         QwenGpuLayersBox.Text = settings.TryGetProperty("gpu_layers", out JsonElement layers) ? layers.ToString() : "auto";
+        QwenTensorSplitBox.Text = settings.TryGetProperty("tensor_split", out JsonElement split) ? split.ToString() : "auto";
         QwenContextBox.Value = JsonNumber(settings, "context_length", 8192);
         await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, cancellationToken);
     }
@@ -444,7 +449,16 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
 
     private async void QwenSave_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
     {
-        await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(new { runtime_path = QwenRuntimePathBox.Text, gpu_layers = QwenGpuLayersBox.Text, context_length = QwenContextBox.Value }), token);
+        string denseDeviceMap = (QwenDensePlacementCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "balanced_low_0";
+        await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(new
+        {
+            runtime_path = QwenRuntimePathBox.Text,
+            gpu_devices = QwenGpuDevicesBox.Text,
+            dense_device_map = denseDeviceMap,
+            gpu_layers = QwenGpuLayersBox.Text,
+            tensor_split = QwenTensorSplitBox.Text,
+            context_length = QwenContextBox.Value,
+        }), token);
         await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token);
     }, "Qwen Director runtime settings saved.");
 
@@ -1006,18 +1020,24 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
         ComponentDeleteButton.IsEnabled = !_isCommandRunning && hasEngineRecord;
         ComponentAccelerationText.Text = component is null
             ? "Component acceleration status is unavailable."
-            : $"SD1.5 {component.Component}: {component.Status}; {component.ValidatedEngineCount} validated engine(s); "
+            : $"SD1.5 {component.Component}: {TensorRtRoutePresentation.From(component).RouteLabel}; "
+              + $"{TensorRtRoutePresentation.From(component).State}; {component.ValidatedEngineCount} validated engine(s); "
               + $"{component.ProfileCoverage.Count} profile(s); fallback {component.FallbackRuntime}.";
         ComponentAccelerationReasonText.Text = component?.OptimizationEligible == true
-            ? "Eligible for an explicit 512 x 512 optimization job. Rendering remains usable through fallback."
-            : $"Optimize unavailable: {FormatBlockedReason(component?.OptimizationReason)}.";
+            ? $"{TensorRtRoutePresentation.From(component).Detail} Eligible for an explicit 512 x 512 optimization job."
+            : $"Optimize unavailable: {component?.RouteReason ?? FormatBlockedReason(component?.OptimizationReason)}.";
     }
 
     private string SelectedTensorRtComponent() =>
         (ComponentSelector.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "unet";
 
-    private void ComponentSelector_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        UpdateComponentAcceleration();
+    private void ComponentSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isInitialized)
+        {
+            UpdateComponentAcceleration();
+        }
+    }
 
     private async void ComponentOptimize_Click(object sender, RoutedEventArgs e)
     {

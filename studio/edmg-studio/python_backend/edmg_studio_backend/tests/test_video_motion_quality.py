@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from edmg_studio_backend import app as app_module
@@ -10,6 +11,7 @@ from edmg_studio_backend.services.internal_video import (
     _cached_motion_validation_passed,
     _cached_native_motion_report,
     _use_direct_video_model_source_anchor,
+    _video_model_motion_attempt_parameters,
     describe_internal_video_model_preflight,
 )
 from edmg_studio_backend.services.video_motion_quality import (
@@ -52,6 +54,49 @@ def test_progressive_subject_motion_passes_validation() -> None:
     assert report["meaningful_transition_count"] == 7
     assert report["motion_quartiles"] == [0, 1, 2, 3]
     assert report["longest_static_hold_s"] == 0.0
+
+
+def test_svd_motion_retry_parameters_strengthen_conditioning_deterministically() -> None:
+    first = _video_model_motion_attempt_parameters(
+        engine="svd",
+        seed=1234,
+        motion_bucket_id=176,
+        noise_aug_strength=0.1,
+        attempt_index=0,
+    )
+    second = _video_model_motion_attempt_parameters(
+        engine="svd",
+        seed=1234,
+        motion_bucket_id=176,
+        noise_aug_strength=0.1,
+        attempt_index=1,
+    )
+    repeated = _video_model_motion_attempt_parameters(
+        engine="svd",
+        seed=1234,
+        motion_bucket_id=176,
+        noise_aug_strength=0.1,
+        attempt_index=1,
+    )
+
+    assert first == (1234, 176, 0.1)
+    assert second == repeated
+    assert second[0] != first[0]
+    assert second[1] == 200
+    assert second[2] == pytest.approx(0.15)
+
+
+def test_non_svd_motion_retry_changes_only_seed() -> None:
+    retried = _video_model_motion_attempt_parameters(
+        engine="animatediff",
+        seed=1234,
+        motion_bucket_id=176,
+        noise_aug_strength=0.1,
+        attempt_index=1,
+    )
+
+    assert retried[0] != 1234
+    assert retried[1:] == (176, 0.1)
 
 
 def test_temporal_blending_does_not_repeat_two_endpoint_frames() -> None:

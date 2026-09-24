@@ -296,6 +296,9 @@ def test_director_generation_persists_resolved_workspace_policy(tmp_path):
             lambda: {
                 "runtime_path": "C:\\Studio\\llama-server.exe",
                 "gpu_layers": "7",
+                "gpu_devices": "0,1,2",
+                "tensor_split": "1,1,1",
+                "dense_device_map": "balanced_low_0",
                 "context_length": 12288,
                 "batch_size": 32,
                 "ubatch_size": 8,
@@ -327,6 +330,9 @@ def test_director_generation_persists_resolved_workspace_policy(tmp_path):
     assert job.payload["readiness"]["renderer"]["engine"] == "external"
     assert job.payload["runtime_path"] == "C:\\Studio\\llama-server.exe"
     assert job.payload["gpu_layers"] == "7"
+    assert job.payload["gpu_devices"] == "0,1,2"
+    assert job.payload["tensor_split"] == "1,1,1"
+    assert job.payload["dense_device_map"] == "balanced_low_0"
     assert job.payload["context_length"] == 12288
     assert job.payload["batch_size"] == 32
     assert job.payload["ubatch_size"] == 8

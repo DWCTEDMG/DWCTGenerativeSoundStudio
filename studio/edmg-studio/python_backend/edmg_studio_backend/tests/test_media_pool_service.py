@@ -10,9 +10,11 @@ import pytest
 from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
+from edmg_studio_backend import app as backend_app
 from edmg_studio_backend.services import media_pool as media_pool_module
 from edmg_studio_backend.services.media_pool import MediaPoolService, _waveform_peaks
 from edmg_studio_backend.store.projects import ProjectStore
+from edmg_studio_backend.tests.revision_client import TestClient
 
 
 def upload(name: str, content: bytes, content_type: str) -> UploadFile:
@@ -49,6 +51,39 @@ def test_import_uses_canonical_pool_deduplicates_and_preserves_unknown_fields(tm
     assert saved.meta["unknown_project"] == {"keep": True}
     assert saved.meta["timeline"]["unknown_timeline"] == 7
     assert len(saved.meta["timeline"]["media_pool"]) == 1
+
+
+def test_register_existing_media_keeps_source_and_stable_identity(tmp_path):
+    media, store, project_id = service(tmp_path)
+    source = store.project_dir(project_id) / "assets" / "audio" / "source.wav"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"original")
+
+    first = media.register_existing_media(
+        project_id, "assets/audio/source.wav", preferred_asset_id="primary-audio"
+    )
+    repeated = media.register_existing_media(project_id, "assets/audio/source.wav")
+
+    assert first["deduplicated"] is False
+    assert first["asset"]["id"] == "primary-audio"
+    assert first["asset"]["path"] == "assets/audio/source.wav"
+    assert repeated["deduplicated"] is True
+    assert repeated["asset"]["id"] == "primary-audio"
+    assert source.read_bytes() == b"original"
+    assert len(store.get(project_id).meta["timeline"]["media_pool"]) == 1
+
+
+def test_register_existing_media_rejects_empty_and_unsafe_paths(tmp_path):
+    media, store, project_id = service(tmp_path)
+    empty = store.project_dir(project_id) / "empty.wav"
+    empty.write_bytes(b"")
+
+    with pytest.raises(HTTPException) as empty_error:
+        media.register_existing_media(project_id, "empty.wav")
+    assert empty_error.value.status_code == 400
+    with pytest.raises(HTTPException) as unsafe_error:
+        media.register_existing_media(project_id, "../outside.wav")
+    assert unsafe_error.value.status_code == 400
 
 
 def test_relink_preserves_stable_id_unknown_fields_and_validates_path(tmp_path):
@@ -170,3 +205,93 @@ def test_waveform_peak_partition_preserves_requested_resolution(tmp_path, sample
     peaks = _waveform_peaks(pcm, sample_count, bins)
 
     assert len(peaks) == bins
+
+
+def _primary_audio_route(tmp_path, monkeypatch):
+    store = ProjectStore(tmp_path / "data")
+    project = store.create("Primary audio")
+    project.meta["timeline"] = {
+        "timebase": {"sample_rate": 48000},
+        "tracks": [{"id": "audio", "type": "audio", "clips": []}],
+        "media_pool": [],
+    }
+    store.save(project)
+    media = MediaPoolService(store, "ffmpeg", max_upload_bytes=1024)
+    monkeypatch.setattr(media, "_probe", lambda *_args, **_kwargs: {
+        "status": "ready", "duration_seconds": 2.5, "streams": []
+    })
+    monkeypatch.setattr(backend_app, "store", store)
+    monkeypatch.setattr(backend_app, "media_pool", media)
+    return store, project.id
+
+
+def _primary_clips(project):
+    return [
+        (track, clip)
+        for track in project.meta["timeline"]["tracks"]
+        for clip in track.get("clips", [])
+        if str(clip.get("id") or "").startswith("primary-audio-clip-")
+    ]
+
+
+def test_primary_audio_route_creates_deduplicates_and_replaces_one_clip(tmp_path, monkeypatch):
+    store, project_id = _primary_audio_route(tmp_path, monkeypatch)
+    with TestClient(backend_app.app) as client:
+        first = client.post(
+            f"/v1/projects/{project_id}/assets/audio",
+            files={"file": ("first.wav", b"first audio", "audio/wav")},
+        )
+        repeated = client.post(
+            f"/v1/projects/{project_id}/assets/audio",
+            files={"file": ("first.wav", b"first audio", "audio/wav")},
+        )
+        replacement = client.post(
+            f"/v1/projects/{project_id}/assets/audio",
+            files={"file": ("second.wav", b"second audio", "audio/wav")},
+        )
+
+    assert first.status_code == 200, first.text
+    assert first.json()["deduplicated"] is False
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["deduplicated"] is True
+    assert replacement.status_code == 200, replacement.text
+    saved = store.get(project_id)
+    clips = _primary_clips(saved)
+    assert len(saved.meta["timeline"]["media_pool"]) == 1
+    assert len(clips) == 1
+    assert clips[0][0]["id"] == "audio"
+    assert clips[0][1]["start_sample"] == "0"
+    assert clips[0][1]["end_sample"] == "120000"
+    assert clips[0][1]["media_asset_id"] == saved.meta["audio"]["media_asset_id"]
+    assert saved.meta["audio"]["filename"].endswith("-second.wav")
+
+
+def test_primary_audio_route_rejects_empty_and_locked_replacement_without_mutation(tmp_path, monkeypatch):
+    store, project_id = _primary_audio_route(tmp_path, monkeypatch)
+    with TestClient(backend_app.app) as client:
+        empty = client.post(
+            f"/v1/projects/{project_id}/assets/audio",
+            files={"file": ("empty.wav", b"", "audio/wav")},
+        )
+        created = client.post(
+            f"/v1/projects/{project_id}/assets/audio",
+            files={"file": ("first.wav", b"first audio", "audio/wav")},
+        )
+        project = store.get(project_id)
+        project.meta["timeline"]["tracks"][0]["locked"] = True
+        store.save(project)
+        before = store.get(project_id)
+        files_before = {path.name for path in store.project_dir(project_id).joinpath("assets", "audio").iterdir()}
+        rejected = client.post(
+            f"/v1/projects/{project_id}/assets/audio",
+            files={"file": ("second.wav", b"second audio", "audio/wav")},
+        )
+
+    assert empty.status_code == 400
+    assert created.status_code == 200, created.text
+    assert rejected.status_code == 409
+    assert "Unlock the existing Project Audio track" in rejected.text
+    after = store.get(project_id)
+    assert after.revision == before.revision
+    assert after.meta == before.meta
+    assert {path.name for path in store.project_dir(project_id).joinpath("assets", "audio").iterdir()} == files_before

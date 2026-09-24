@@ -205,6 +205,78 @@ class MediaPoolService:
             "streams": compact,
         }
 
+    def register_existing_media(
+        self,
+        project_id: str,
+        relative_path: str,
+        *,
+        display_name: str | None = None,
+        content_type: str | None = None,
+        preferred_asset_id: str | None = None,
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        source = self._safe_project_path(project_id, relative_path)
+        root = self.store.project_dir(project_id)
+        original_name = _safe_name(display_name or source.name)
+        kind = _media_kind(original_name, content_type)
+        size, content_hash = _sha256(source)
+        if not size:
+            raise HTTPException(400, "Media file is empty")
+        existing = next(
+            (
+                item for item in _pool(project.meta, create=False)
+                if isinstance(item, dict) and item.get("sha256") == content_hash
+            ),
+            None,
+        )
+        if existing is not None:
+            return {"ok": True, "deduplicated": True, "asset": self._public_asset(project_id, existing)}
+
+        now = _utc_now()
+        asset_id = preferred_asset_id or uuid.uuid4().hex
+        asset = {
+            "id": asset_id,
+            "display_name": original_name,
+            "original_filename": original_name,
+            "path": _relative(source, root),
+            "kind": kind,
+            "content_type": mimetypes.guess_type(original_name)[0] or content_type or "application/octet-stream",
+            "size_bytes": size,
+            "sha256": content_hash,
+            "probe": self._probe(source, required=False),
+            "derivatives": {},
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        def register(value: Any) -> None:
+            current_pool = _pool(value.meta, create=True)
+            duplicate = next(
+                (item for item in current_pool if isinstance(item, dict) and item.get("sha256") == content_hash),
+                None,
+            )
+            if duplicate is not None:
+                raise FileExistsError(str(duplicate.get("id") or "duplicate"))
+            replace_index = next(
+                (index for index, item in enumerate(current_pool) if isinstance(item, dict) and item.get("id") == asset_id),
+                None,
+            )
+            if replace_index is None:
+                current_pool.append(deepcopy(asset))
+            else:
+                previous = current_pool[replace_index]
+                asset["created_at"] = previous.get("created_at") or now
+                current_pool[replace_index] = {**previous, **deepcopy(asset)}
+
+        try:
+            saved = self.store.mutate(project_id, register)
+        except FileExistsError:
+            current = self._project(project_id)
+            duplicate = next(item for item in _pool(current.meta, create=False) if item.get("sha256") == content_hash)
+            return {"ok": True, "deduplicated": True, "asset": self._public_asset(project_id, duplicate)}
+        stored = self._find(saved.meta, asset_id)
+        return {"ok": True, "deduplicated": False, "asset": self._public_asset(project_id, stored)}
+
     async def import_media(self, project_id: str, upload: UploadFile) -> dict[str, Any]:
         self._project(project_id)
         original_name = _safe_name(upload.filename)

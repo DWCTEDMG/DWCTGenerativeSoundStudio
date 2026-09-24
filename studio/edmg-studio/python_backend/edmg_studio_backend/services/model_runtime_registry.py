@@ -191,12 +191,19 @@ def _smoke_test_hunyuan(
 
     frames = generate_video_model_frames(
         engine="hunyuan_video15", video_model_dir=package_root, base_model_dir=package_root,
-        init_image=None, prompt="A red cube slowly rotates on a black background",
-        negative_prompt="text, watermark", width=256, height=256, num_frames=9, fps=24,
-        steps=2, cfg=1.0, seed=1, device=ModelRuntimeRegistry._device(hardware),
+        init_image=None,
+        prompt=(
+            "Runtime validation animation: a large bright white sphere travels rapidly "
+            "from the far left edge to the far right edge across a pure black background, "
+            "continuous motion throughout the entire clip, fixed camera, no cuts, no pauses, "
+            "no frozen frames."
+        ),
+        negative_prompt="text, watermark, static image, frozen frame, camera cut",
+        width=256, height=256, num_frames=17, fps=8,
+        steps=4, cfg=1.0, seed=1, device=ModelRuntimeRegistry._device(hardware),
         dtype="bfloat16", cpu_offload=True, workspace=package_root, cancel_check=cancel_check,
     )
-    motion = analyze_motion_images(frames, fps=24, minimum_frames=9)
+    motion = analyze_motion_images(frames, fps=8, minimum_frames=9)
     if motion["status"] != "pass":
         raise RuntimeError("Hunyuan smoke test did not demonstrate temporal motion: " + ", ".join(motion["failures"]))
     return {"success": True, "device": ModelRuntimeRegistry._device(hardware), "dtype": "bfloat16",

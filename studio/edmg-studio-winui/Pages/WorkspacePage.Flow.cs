@@ -93,12 +93,13 @@ public sealed partial class WorkspacePage
 
     private async void CommandReview_Click(object sender, RoutedEventArgs e)
     {
-        if (_commandRunning || !TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits()) return;
+        if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
         SetCommandBusy(true);
         try
         {
             await RunBusyAsync("Recovering Director draft", async token =>
             {
+                if (!await CheckpointWorkspaceEditsAsync(projectId, token)) return;
                 await LoadSelectedProjectAsync(projectId, token);
                 if (_directorDraftJobId is not string jobId)
                     throw new InvalidOperationException("This project has no Director job to recover.");
@@ -122,9 +123,16 @@ public sealed partial class WorkspacePage
 
     private async void UseCommandProposal_Click(object sender, RoutedEventArgs e)
     {
-        if (_commandRunning || !TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits()) return;
+        if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
         SetCommandBusy(true);
-        try { await RunBusyAsync("Preparing shared direction", token => UseCommandProposalAsync(projectId, token)); }
+        try
+        {
+            await RunBusyAsync("Preparing shared direction", async token =>
+            {
+                if (!await CheckpointWorkspaceEditsAsync(projectId, token)) return;
+                await UseCommandProposalAsync(projectId, token);
+            });
+        }
         finally { SetCommandBusy(false); }
     }
 

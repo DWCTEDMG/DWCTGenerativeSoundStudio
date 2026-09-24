@@ -985,7 +985,7 @@ def execute(meta: dict, command: dict) -> None:
             for operation in operations:
                 if not isinstance(operation, dict) or not isinstance(operation.get("kind"), str):
                     raise ValueError("Each edit operation must be an object with a kind")
-                _edit(after, operation)
+                _edit(after, operation, project_media_pool=media_pool)
             after = normalize_timeline(after, project_media_pool=media_pool)
         undo, redo = _changes(before, after)
         if redo:
@@ -1108,7 +1108,7 @@ def _validate_replacement_editing(before: dict, after: dict) -> None:
                 raise ValueError("Unlock the editing owner before changing its editing records")
 
 
-def _edit(timeline: dict, op: dict) -> None:
+def _edit(timeline: dict, op: dict, project_media_pool: object = None) -> None:
     kind = op.get("kind")
     tracks = timeline["tracks"]
     if kind in {
@@ -1198,8 +1198,19 @@ def _edit(timeline: dict, op: dict) -> None:
         raise ValueError("Unlock the track before editing it")
     if kind == "add_clip":
         clock = ProjectClock.from_timeline(timeline)
-        start = clock.samples(op.get("start_seconds", 0))
-        end = clock.samples(op.get("end_seconds", 1))
+        has_samples = "start_sample" in op or "end_sample" in op
+        has_seconds = "start_seconds" in op or "end_seconds" in op
+        if has_samples and has_seconds:
+            raise ValueError("Use either exact samples or seconds when adding a clip, not both")
+        if has_samples:
+            if not isinstance(op.get("start_sample"), str) or not isinstance(op.get("end_sample"), str):
+                raise ValueError("Exact clip positions must be canonical sample strings")
+            start, end = int64(op["start_sample"]), int64(op["end_sample"])
+            if str(start) != op["start_sample"] or str(end) != op["end_sample"]:
+                raise ValueError("Exact clip positions must be canonical sample strings")
+        else:
+            start = clock.samples(op.get("start_seconds", 0))
+            end = clock.samples(op.get("end_seconds", 1))
         if start < 0 or end <= start:
             raise ValueError("A new clip requires a positive duration at a nonnegative position")
         clip_data = deepcopy(op.get("data")) if isinstance(op.get("data"), dict) else {}
@@ -1209,6 +1220,9 @@ def _edit(timeline: dict, op: dict) -> None:
             not isinstance(media_asset_id, str) or not media_asset_id
         ):
             raise ValueError("Media asset ID must be a nonempty string")
+        available_assets = _media_asset_ids(project_media_pool) | _media_asset_ids(timeline.get("media_pool"))
+        if media_asset_id is not None and media_asset_id not in available_assets:
+            raise ValueError("Media asset not found")
         track["clips"].append(
             {
                 "id": op.get("new_id") or str(uuid4()),

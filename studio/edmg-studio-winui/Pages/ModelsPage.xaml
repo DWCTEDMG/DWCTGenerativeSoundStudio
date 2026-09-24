@@ -361,9 +361,17 @@
                         CornerRadius="8">
                         <StackPanel Spacing="10">
                             <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="Qwen Director runtime" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Configure llama.cpp for Qwen3-VL. Installed, configured, execution-ready, and optional Level-5 smoke-qualified states are reported separately." TextWrapping="Wrap" />
-                            <TextBox x:Name="QwenRuntimePathBox" Header="llama.cpp runtime path" PlaceholderText="Path to llama-mtmd-cli" />
-                            <TextBox x:Name="QwenGpuLayersBox" Header="GPU layers" PlaceholderText="auto" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Automatic placement uses every detected GPU. Choose explicit indexes for isolation; dense and GGUF runtimes preserve their own optimized placement strategies." TextWrapping="Wrap" />
+                            <TextBox x:Name="QwenRuntimePathBox" Header="llama.cpp runtime path" PlaceholderText="Path to llama-server.exe" />
+                            <TextBox x:Name="QwenGpuDevicesBox" Header="GPU devices" Description="Use auto for every detected GPU, or comma-separated indexes such as 0,2." PlaceholderText="auto" />
+                            <ComboBox x:Name="QwenDensePlacementCombo" Header="Dense model placement" SelectedIndex="0">
+                                <ComboBoxItem Content="Balanced with GPU 0 headroom" Tag="balanced_low_0" />
+                                <ComboBoxItem Content="Balanced" Tag="balanced" />
+                                <ComboBoxItem Content="Automatic capacity" Tag="auto" />
+                                <ComboBoxItem Content="Sequential" Tag="sequential" />
+                            </ComboBox>
+                            <TextBox x:Name="QwenGpuLayersBox" Header="GGUF GPU layers" PlaceholderText="auto" />
+                            <TextBox x:Name="QwenTensorSplitBox" Header="GGUF tensor split" Description="Use auto for an equal split, or positive comma-separated weights matching the selected GPUs." PlaceholderText="auto" />
                             <NumberBox x:Name="QwenContextBox" Header="Context length" Minimum="8192" Maximum="32768" Value="8192" />
                             <TextBlock x:Name="QwenStatusText" TextWrapping="Wrap" />
                             <StackPanel Orientation="Horizontal" Spacing="8">

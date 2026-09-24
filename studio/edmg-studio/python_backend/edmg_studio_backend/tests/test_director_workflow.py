@@ -172,6 +172,50 @@ def test_exact_range_context_is_versioned_persisted_and_stale_safe(state):
         reviewed_draft(project, loaded.draft_id, None)
 
 
+def test_timeline_context_bounds_dense_analysis_features_without_losing_range_context(state):
+    _, project = state
+    project.meta["analysis"].update({
+        "summary": {"mood": "cosmic"},
+        "features": {
+            "bpm": 120,
+            "energy": [index / 100 for index in range(7104)],
+            "labels": [f"label-{index}" for index in range(100)],
+        },
+        "transcript": {
+            "text": "selected words",
+            "segments": [{"start": 0.5, "end": 1.5, "text": "selected lyric"}],
+        },
+    })
+    project.meta["timeline"]["tracks"][0]["clips"] = [{
+        "id": "voice", "start_sample": "0", "end_sample": "176400",
+        "data": {"active_take_id": "take-2", "takes": [{"id": "take-2"}]},
+    }]
+    project.meta["director_document"] = prepare_workflow(
+        project, local_plan, resulting_revision=project.revision + 1,
+    ).document.model_dump(mode="json")
+
+    first = timeline_context(project, "22050", "88200")
+    second = timeline_context(project, "22050", "88200")
+
+    assert first == second
+    assert first["selected_range"] == {"start_sample": "22050", "end_sample": "88200"}
+    assert first["transcript"]["segments"][0]["text"] == "selected lyric"
+    assert first["clips"][0]["active_take_id"] == "take-2"
+    assert set(first["selected_scenes"][0]) == {
+        "scene_id", "start_sample", "end_sample", "continuity_mode", "locked",
+    }
+    assert "intent" not in first["selected_scenes"][0]
+    features = first["analysis_excerpt"]["features"]
+    assert features["bpm"] == 120
+    assert features["energy"]["count"] == 7104
+    assert len(features["energy"]["samples"]) == 32
+    assert features["energy"]["min"] == 0
+    assert features["energy"]["max"] == pytest.approx(71.03)
+    assert features["labels"]["count"] == 100
+    assert len(features["labels"]["samples"]) == 32
+    assert len(str(first)) < 10_000
+
+
 def test_handoff_upgrades_legacy_and_rejects_future_version(state):
     _, project = state
     draft = prepare_workflow(project, local_plan, resulting_revision=project.revision + 1)

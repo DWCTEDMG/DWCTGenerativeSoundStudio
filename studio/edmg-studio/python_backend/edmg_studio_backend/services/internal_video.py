@@ -58,6 +58,7 @@ from .video_motion_quality import (
 logger = logging.getLogger(__name__)
 
 INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION = "storyboard-continuity-v3"
+_VIDEO_MODEL_MOTION_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -3442,77 +3443,99 @@ def render_internal_video_variant(
             if adapter_note and log_fn:
                 log_fn(f"{adapter_note}; final frames will be resized to {out_w}x{out_h}.")
 
-            generated = generate_video_model_frames(
-                engine=engine,
-                video_model_dir=video_model_path,
-                base_model_dir=model_dir,
-                init_image=init_img,
-                prompt=prompt_for_model,
-                negative_prompt=negative_prompt,
-                width=adapter_w,
-                height=adapter_h,
-                num_frames=adapter_frames,
-                fps=fps_r,
-                steps=steps_for_scene,
-                cfg=cfg_for_scene,
-                seed=seed,
-                device=device,
-                dtype=str(settings.video_model_dtype or "auto"),
-                motion_bucket_id=int(motion_bucket_id),
-                noise_aug_strength=float(noise_aug_strength),
-                decode_chunk_size=int(settings.video_model_decode_chunk_size),
-                cpu_offload=bool(settings.video_model_cpu_offload),
-                workspace=out_frames,
-                cancel_check=cancel_check_fn,
-                generation_mode=str(settings.hunyuan_generation_mode or "auto"),
-                chunk_frames=int(settings.hunyuan_chunk_frames),
-                chunk_overlap=int(settings.hunyuan_chunk_overlap),
-                chunk_callback=lambda current, total: emit_checkpoint(
-                    stage="video_model",
-                    status="running",
-                    message=f"Generated {engine} inference chunk {current}/{total}",
-                ),
-            )
-            if not generated:
-                raise RuntimeError(f"Internal {engine} adapter returned no frames.")
-            if not anchorless_hunyuan and anchor_mode == "end":
-                generated = list(reversed(generated))
-            if anchorless_hunyuan:
-                generated = [frame.convert("RGB") for frame in generated]
-            else:
-                generated = _apply_video_anchor_frames(
-                    [frame.convert("RGB") for frame in generated],
-                    anchor_mode=anchor_mode,
-                    start_img=start_anchor_img,
-                    end_img=end_anchor_img,
-                    anchor_strength=float(shot_anchor_strength),
+            generated: list[Image.Image] = []
+            native_motion_report: dict[str, Any] = {}
+            for motion_attempt in range(_VIDEO_MODEL_MOTION_ATTEMPTS):
+                attempt_seed, attempt_bucket, attempt_noise = _video_model_motion_attempt_parameters(
+                    engine=engine,
+                    seed=seed,
+                    motion_bucket_id=motion_bucket_id,
+                    noise_aug_strength=noise_aug_strength,
+                    attempt_index=motion_attempt,
                 )
-            previous_video_model_frame = generated[-1].convert("RGB").copy()
-            native_motion_report = analyze_motion_images(generated, fps=fps_r)
-            native_motion_report = {
-                **native_motion_report,
-                "scene_index": int(source_scene_index),
-                "shot_index": shot_index,
-                "start_s": round(float(start_s), 4),
-                "end_s": round(float(end_s), 4),
-                "engine": engine,
-                "motion_score": score_info.get("motion_score"),
-                "prompt": prompt_for_model,
-                "continuity_anchor_source": continuity_anchor_source,
-            }
+                if motion_attempt and log_fn:
+                    log_fn(
+                        f"Regenerating {engine} scene {scene_index+1}/{len(sorted_scenes)} after insufficient "
+                        f"native motion (attempt {motion_attempt + 1}/{_VIDEO_MODEL_MOTION_ATTEMPTS}, "
+                        f"seed={attempt_seed}, motion_bucket={attempt_bucket}, noise_aug={attempt_noise:.3f})."
+                    )
+                generated = generate_video_model_frames(
+                    engine=engine,
+                    video_model_dir=video_model_path,
+                    base_model_dir=model_dir,
+                    init_image=init_img,
+                    prompt=prompt_for_model,
+                    negative_prompt=negative_prompt,
+                    width=adapter_w,
+                    height=adapter_h,
+                    num_frames=adapter_frames,
+                    fps=fps_r,
+                    steps=steps_for_scene,
+                    cfg=cfg_for_scene,
+                    seed=attempt_seed,
+                    device=device,
+                    dtype=str(settings.video_model_dtype or "auto"),
+                    motion_bucket_id=attempt_bucket,
+                    noise_aug_strength=attempt_noise,
+                    decode_chunk_size=int(settings.video_model_decode_chunk_size),
+                    cpu_offload=bool(settings.video_model_cpu_offload),
+                    workspace=out_frames,
+                    cancel_check=cancel_check_fn,
+                    generation_mode=str(settings.hunyuan_generation_mode or "auto"),
+                    chunk_frames=int(settings.hunyuan_chunk_frames),
+                    chunk_overlap=int(settings.hunyuan_chunk_overlap),
+                    chunk_callback=lambda current, total: emit_checkpoint(
+                        stage="video_model",
+                        status="running",
+                        message=f"Generated {engine} inference chunk {current}/{total}",
+                    ),
+                )
+                if not generated:
+                    raise RuntimeError(f"Internal {engine} adapter returned no frames.")
+                if not anchorless_hunyuan and anchor_mode == "end":
+                    generated = list(reversed(generated))
+                if anchorless_hunyuan:
+                    generated = [frame.convert("RGB") for frame in generated]
+                else:
+                    generated = _apply_video_anchor_frames(
+                        [frame.convert("RGB") for frame in generated],
+                        anchor_mode=anchor_mode,
+                        start_img=start_anchor_img,
+                        end_img=end_anchor_img,
+                        anchor_strength=float(shot_anchor_strength),
+                    )
+                native_motion_report = {
+                    **analyze_motion_images(generated, fps=fps_r),
+                    "scene_index": int(source_scene_index),
+                    "shot_index": shot_index,
+                    "start_s": round(float(start_s), 4),
+                    "end_s": round(float(end_s), 4),
+                    "engine": engine,
+                    "motion_score": score_info.get("motion_score"),
+                    "prompt": prompt_for_model,
+                    "continuity_anchor_source": continuity_anchor_source,
+                    "generation_attempt": motion_attempt + 1,
+                    "seed": attempt_seed,
+                    "motion_bucket_id": attempt_bucket,
+                    "noise_aug_strength": attempt_noise,
+                }
+                if native_motion_report["status"] == "pass":
+                    break
             video_model_native_motion_reports.append(native_motion_report)
             if native_motion_report["status"] != "pass":
                 raise UserFacingError(
                     "The internal video model completed, but its native frames did not contain distributed visible motion.",
                     hint=(
-                        f"Motion validation found {native_motion_report['perceptually_unique_frames']} perceptually "
-                        f"unique frames and {native_motion_report['meaningful_transition_count']} meaningful "
-                        "transitions. Use motion score 4 or higher, keep Prompt refine enabled, choose Animate "
-                        "subjects or Animate whole scene, and retry with Resume existing cached frames off."
+                        f"Motion validation failed after {_VIDEO_MODEL_MOTION_ATTEMPTS} attempts; the last attempt found "
+                        f"{native_motion_report['perceptually_unique_frames']} perceptually unique frames and "
+                        f"{native_motion_report['meaningful_transition_count']} meaningful transitions. Use motion "
+                        "score 4 or higher, keep Prompt refine enabled, choose Animate subjects or Animate whole "
+                        "scene, and retry with Resume existing cached frames off."
                     ),
                     code="INSUFFICIENT_TEMPORAL_MOTION",
                     status_code=422,
                 )
+            previous_video_model_frame = generated[-1].convert("RGB").copy()
             if log_fn:
                 log_fn(
                     "Native motion validation passed: "
@@ -4917,6 +4940,27 @@ def _video_model_motion_bucket_for_score(settings: InternalVideoSettings, score_
     score_i = _clamp_video_motion_score(score)
     mapped = int(round(72 + ((score_i - 1) / 6.0) * 120))
     return max(1, min(255, int(round((mapped * 0.75) + (base_bucket * 0.25)))))
+
+
+def _video_model_motion_attempt_parameters(
+    *,
+    engine: str,
+    seed: int,
+    motion_bucket_id: int,
+    noise_aug_strength: float,
+    attempt_index: int,
+) -> tuple[int, int, float]:
+    attempt = max(0, int(attempt_index))
+    if attempt == 0:
+        return int(seed), int(motion_bucket_id), float(noise_aug_strength)
+    attempt_seed = _stable_seed_int("video-model-motion-retry", seed, attempt)
+    if str(engine).strip().lower() != "svd":
+        return attempt_seed, int(motion_bucket_id), float(noise_aug_strength)
+    return (
+        attempt_seed,
+        min(255, int(motion_bucket_id) + (24 * attempt)),
+        min(1.0, float(noise_aug_strength) + (0.05 * attempt)),
+    )
 
 
 def _video_model_prompt_for_engine(

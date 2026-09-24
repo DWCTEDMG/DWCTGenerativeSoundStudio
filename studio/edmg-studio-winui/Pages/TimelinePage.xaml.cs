@@ -159,6 +159,7 @@ public sealed partial class TimelinePage : Page
 
         _isLoaded = true;
         App.Services.Session.Changed += Session_Changed;
+        App.Services.Session.ProjectContentChanged += Session_ProjectContentChanged;
         App.Services.Transport.StateChanged += Transport_StateChanged;
         App.Services.Commands.StateChanged += Commands_StateChanged;
         App.Services.RemoteControl.Changed += RemoteControl_Changed;
@@ -176,6 +177,7 @@ public sealed partial class TimelinePage : Page
 
         _isLoaded = false;
         App.Services.Session.Changed -= Session_Changed;
+        App.Services.Session.ProjectContentChanged -= Session_ProjectContentChanged;
         App.Services.Transport.StateChanged -= Transport_StateChanged;
         App.Services.Commands.StateChanged -= Commands_StateChanged;
         App.Services.RemoteControl.Changed -= RemoteControl_Changed;
@@ -204,6 +206,17 @@ public sealed partial class TimelinePage : Page
 
         if (!DispatcherQueue.TryEnqueue(() => { _ = ObserveSessionChangeAsync(); }))
             CrashLogger.Write("Timeline session change could not be dispatched because the page dispatcher is unavailable.");
+    }
+
+    private void Session_ProjectContentChanged(object? sender, ProjectContentChangedEventArgs e)
+    {
+        if (!_isLoaded || _isDirty || !string.Equals(e.ProjectId, _loadedProjectId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!DispatcherQueue.TryEnqueue(() => { _ = LoadActiveProjectAsync(forceReload: true); }))
+            CrashLogger.Write("Timeline project-content refresh could not be dispatched.");
     }
 
     private async Task ObserveSessionChangeAsync()
@@ -2352,6 +2365,106 @@ public sealed partial class TimelinePage : Page
     }
 
     private async void Undo_Click(object sender, RoutedEventArgs e) => await ApplyHistoryAsync("undo");
+
+    private async void ImportAudio_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || _isDirty || _canonicalProject is null || _loadedProjectId is not string projectId)
+        {
+            ShowInfo("Load a clean Timeline before importing audio.", InfoBarSeverity.Warning);
+            return;
+        }
+        if (App.MainWindowInstance is null)
+        {
+            ShowInfo("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
+            return;
+        }
+
+        var picker = new FileOpenPicker
+        {
+            SuggestedStartLocation = PickerLocationId.MusicLibrary,
+            ViewMode = PickerViewMode.List,
+        };
+        foreach (string extension in new[] { ".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".aif", ".aiff", ".opus" })
+            picker.FileTypeFilter.Add(extension);
+        nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
+        StorageFile? file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+
+        string startSample = CurrentSampleText();
+        MediaPoolActionResponse imported;
+        CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
+        try
+        {
+            SetBusy(true);
+            await using FileStream stream = File.OpenRead(file.Path);
+            imported = await App.Services.ApiClient.ImportMediaAsync(
+                projectId, stream, file.Name, AudioContentType(file.Path), token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+        catch (Exception ex)
+        {
+            ShowInfo(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+            return;
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+
+        await LoadActiveProjectAsync(forceReload: true);
+        if (_canonicalProject is null || projectId != _loadedProjectId) return;
+        double durationSeconds = ReadMediaDuration(imported.Asset);
+        long start = ParseSample(startSample, "Import position");
+        long duration = _canonicalProject.Timebase.FromSeconds(durationSeconds).Samples;
+        long end = checked(start + Math.Max(1, duration));
+        Track? audioTrack = SelectedMixerTrack is { Locked: false } selected && IsAudioTrack(selected)
+            ? selected
+            : _canonicalProject.Tracks.FirstOrDefault(track => !track.Locked && IsAudioTrack(track));
+        string trackId = audioTrack?.Id ?? $"audio-{Guid.NewGuid():N}";
+        string clipId = $"audio-clip-{Guid.NewGuid():N}";
+        JsonObject? addTrack = audioTrack is null
+            ? new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio", ["new_id"] = trackId, ["name"] = "Imported Audio" }
+            : null;
+        bool added = await ExecuteNativeEditAsync(new JsonObject
+        {
+            ["kind"] = "add_clip",
+            ["track_id"] = trackId,
+            ["new_id"] = clipId,
+            ["name"] = imported.Asset.DisplayName,
+            ["type"] = "audio",
+            ["start_sample"] = start.ToString(CultureInfo.InvariantCulture),
+            ["end_sample"] = end.ToString(CultureInfo.InvariantCulture),
+            ["media_asset_id"] = imported.Asset.Id,
+        }, $"Import {imported.Asset.DisplayName}", addTrack, $"samples {start}-{end}");
+        if (added)
+            ShowInfo($"{imported.Asset.DisplayName} was imported at the playhead and is ready for playback.", InfoBarSeverity.Success);
+    }
+
+    private static double ReadMediaDuration(MediaPoolAsset asset)
+    {
+        if (asset.Probe.ValueKind == JsonValueKind.Object &&
+            asset.Probe.TryGetProperty("duration_seconds", out JsonElement value) &&
+            ((value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double duration)) ||
+             (value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out duration))) &&
+            double.IsFinite(duration) && duration > 0)
+        {
+            return duration;
+        }
+        throw new InvalidDataException("The imported audio duration could not be determined.");
+    }
+
+    private static string AudioContentType(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".wav" => "audio/wav",
+        ".mp3" => "audio/mpeg",
+        ".flac" => "audio/flac",
+        ".m4a" => "audio/mp4",
+        ".ogg" or ".opus" => "audio/ogg",
+        ".aac" => "audio/aac",
+        ".aif" or ".aiff" => "audio/aiff",
+        _ => "application/octet-stream",
+    };
 
     private async void AddAudioTrack_Click(object sender, RoutedEventArgs e) =>
         await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio" }, "Add audio track");

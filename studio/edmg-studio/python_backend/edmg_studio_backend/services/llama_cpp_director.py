@@ -186,6 +186,8 @@ class LlamaCppDirectorBackend:
         *,
         device: str = "cpu",
         gpu_layers: str | int = "auto",
+        gpu_devices: str = "auto",
+        tensor_split: str = "auto",
         context_length: int = 8192,
         batch_size: int = 64,
         ubatch_size: int = 16,
@@ -198,6 +200,10 @@ class LlamaCppDirectorBackend:
         self.executable = executable.resolve(strict=True) if executable else resolve_llama_server()
         self.device = device.strip().lower()
         self.requested_gpu_layers = gpu_layers
+        self.requested_gpu_devices = str(gpu_devices or "auto").strip().lower()
+        self.requested_tensor_split = str(tensor_split or "auto").strip().lower()
+        self._selected_gpu_ids: list[str] = []
+        self._resolved_tensor_split = ""
         self.context_length = int(context_length)
         self.batch_size = int(batch_size)
         self.ubatch_size = int(ubatch_size)
@@ -228,7 +234,12 @@ class LlamaCppDirectorBackend:
         return str(self.plan.gpu_layers)
 
     def launch_configuration(self) -> dict[str, Any]:
-        return {"executable": str(self.executable), **asdict(self.plan)}
+        return {
+            "executable": str(self.executable),
+            **asdict(self.plan),
+            "gpu_devices": list(self._selected_gpu_ids),
+            "tensor_split": self._resolved_tensor_split,
+        }
 
     def _cuda_environment(self) -> dict[str, str]:
         index = int(self.device.split(":", 1)[1])
@@ -246,15 +257,32 @@ class LlamaCppDirectorBackend:
         if index >= len(names):
             raise RuntimeError(f"llama.cpp CUDA backend does not expose requested device {self.device}.")
         configured = os.getenv("EDMG_QWEN_GPUS", "").strip()
-        gpu_ids = [part.strip() for part in configured.split(",") if part.strip()] if configured else [str(index)]
+        requested = configured or self.requested_gpu_devices
+        gpu_ids = (
+            [str(device_index) for device_index in range(len(names))]
+            if requested in {"", "auto", "all"}
+            else [part.strip() for part in requested.split(",") if part.strip()]
+        )
         if any(not value.isdigit() for value in gpu_ids):
-            raise RuntimeError("EDMG_QWEN_GPUS must contain comma-separated non-negative CUDA indexes.")
+            raise RuntimeError("Director GPU devices must contain comma-separated non-negative CUDA indexes.")
         if len(set(gpu_ids)) != len(gpu_ids):
-            raise RuntimeError("EDMG_QWEN_GPUS must not contain duplicate CUDA indexes.")
+            raise RuntimeError("Director GPU devices must not contain duplicate CUDA indexes.")
         if any(int(value) >= len(names) for value in gpu_ids):
-            raise RuntimeError("EDMG_QWEN_GPUS includes a CUDA device that llama.cpp does not expose.")
+            raise RuntimeError("Director GPU devices include a CUDA device that llama.cpp does not expose.")
         if str(index) not in gpu_ids:
-            raise RuntimeError(f"EDMG_QWEN_GPUS must include requested device {self.device}.")
+            raise RuntimeError(f"Director GPU devices must include requested device {self.device}.")
+        split = self.requested_tensor_split
+        if split in {"", "auto"}:
+            weights = [1.0] * len(gpu_ids)
+        else:
+            try:
+                weights = [float(part.strip()) for part in split.split(",") if part.strip()]
+            except ValueError as exc:
+                raise RuntimeError("Director tensor split must contain positive numeric weights.") from exc
+            if len(weights) != len(gpu_ids) or any(weight <= 0 for weight in weights):
+                raise RuntimeError("Director tensor split must provide one positive weight per selected GPU.")
+        self._selected_gpu_ids = gpu_ids
+        self._resolved_tensor_split = ",".join(f"{weight:g}" for weight in weights)
         environment = os.environ.copy()
         environment["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_ids)
         return environment
@@ -313,10 +341,9 @@ class LlamaCppDirectorBackend:
             self._process_env["GGML_CUDA_DISABLE_GRAPHS"] = "0" if plan.cuda_graphs else "1"
             visible = self._process_env["CUDA_VISIBLE_DEVICES"].split(",")
             devices = ",".join(f"CUDA{index}" for index in range(len(visible)))
-            splits = ",".join("1" for _ in visible)
             requested = self.device.split(":", 1)[1]
             main_gpu = visible.index(requested)
-            command[command.index("--tensor-split") + 1] = splits
+            command[command.index("--tensor-split") + 1] = self._resolved_tensor_split
             command.extend(["--device", devices, "--main-gpu", str(main_gpu), "--no-mmproj-offload"])
         else:
             self._process_env = os.environ.copy()

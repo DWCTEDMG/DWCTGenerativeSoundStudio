@@ -151,22 +151,23 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             return;
         }
 
-        if (_session.ActiveProjectId != project.Id)
+        await RunBusyAsync($"Opening {project.Name}", async cancellationToken =>
         {
-            if (ProtectUnsavedWorkflowEdits())
+            if (_session.ActiveProjectId is string currentProjectId && currentProjectId != project.Id &&
+                !await CheckpointWorkspaceEditsAsync(currentProjectId, cancellationToken))
             {
                 _isSynchronizingSelection = true;
-                ProjectComboBox.SelectedItem = _projects.FirstOrDefault(item => item.Id == _session.ActiveProjectId);
+                ProjectComboBox.SelectedItem = _projects.FirstOrDefault(item => item.Id == currentProjectId);
                 _isSynchronizingSelection = false;
                 return;
             }
-            _session.ActiveProjectId = project.Id;
-            _generatedPlan = null;
-        }
-
-        await RunBusyAsync(
-            $"Opening {project.Name}",
-            cancellationToken => LoadSelectedProjectAsync(project.Id, cancellationToken));
+            if (_session.ActiveProjectId != project.Id)
+            {
+                _session.ActiveProjectId = project.Id;
+                _generatedPlan = null;
+            }
+            await LoadSelectedProjectAsync(project.Id, cancellationToken);
+        });
     }
 
     private async void RefreshWorkspaceButton_Click(object sender, RoutedEventArgs e)
@@ -195,13 +196,17 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void UploadAnalyzeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits())
+        if (!TryGetActiveProjectId(out string projectId))
         {
             return;
         }
 
         await RunBusyAsync("Uploading and analyzing audio", async cancellationToken =>
         {
+            if (!await CheckpointWorkspaceEditsAsync(projectId, cancellationToken))
+            {
+                return;
+            }
             if (!string.IsNullOrWhiteSpace(_pendingAudioPath))
             {
                 await using FileStream stream = File.OpenRead(_pendingAudioPath);
@@ -214,6 +219,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             }
 
             AnalysisResponse analysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, cancellationToken);
+            App.Services.Session.NotifyProjectContentChanged(projectId);
             SetLastOperationJson(analysis);
             _pendingAudioPath = null;
             PendingAudioText.Text = "No local audio selected.";
@@ -320,6 +326,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             await using FileStream stream = File.OpenRead(path);
             MediaPoolActionResponse result = await App.Services.ApiClient.ImportMediaAsync(
                 projectId, stream, Path.GetFileName(path), GetMediaContentType(path), token);
+            App.Services.Session.NotifyProjectContentChanged(projectId);
             await RefreshMediaPoolAsync(projectId, token);
             ShowStatus("Media imported", $"{result.Asset.DisplayName} is ready in the project media pool.", InfoBarSeverity.Success);
         });
@@ -454,13 +461,17 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void GeneratePlanButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits())
+        if (!TryGetActiveProjectId(out string projectId))
         {
             return;
         }
 
         await RunBusyAsync("Generating plan variants", async cancellationToken =>
         {
+            if (!await CheckpointWorkspaceEditsAsync(projectId, cancellationToken))
+            {
+                return;
+            }
             string mode = GetSelectedPlanMode();
             var request = new PlanRequest(
                 NullIfWhiteSpace(PlanTitleTextBox.Text),
@@ -883,9 +894,10 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void ApplyCreativeDirectionButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits()) return;
+        if (!TryGetActiveProjectId(out string projectId)) return;
         await RunBusyAsync("Applying creative direction to timeline", async token =>
         {
+            if (!await CheckpointWorkspaceEditsAsync(projectId, token)) return;
             var request = new CreativeDirectionApplyRequest(
                 _session.SelectedVariantIndex, GetComboTag(CreativePresetComboBox, "cinematic"),
                 GetComboTag(CreativeDirectorModeComboBox, "narrative"), CreativeSensitivityNumberBox.Value,
@@ -1099,24 +1111,35 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private bool HasUnsavedWorkflowEdits() => _workflowDocument is not null && _workflowSavedDocument is not null &&
         !JsonNode.DeepEquals(BuildWorkflowDocument(), _workflowSavedDocument);
 
-    private bool ProtectUnsavedWorkflowEdits()
+    private async Task<bool> CheckpointWorkspaceEditsAsync(string projectId, CancellationToken cancellationToken)
     {
-        if (_directorDocument is not null && !WorkspaceDirectorInputsMatchDocument())
+        if (_directorProjectId == projectId && _directorDocument is not null && !WorkspaceDirectorInputsMatchDocument())
         {
-            ShowStatus("Save Director changes", "Save your advanced direction edits before changing the shared draft or project.", InfoBarSeverity.Warning);
-            return true;
+            JsonObject document = BuildWorkspaceDirectorDocument();
+            using JsonDocument payload = JsonDocument.Parse(document.ToJsonString());
+            JsonElement response = await App.Services.ApiClient.SaveDirectorDocumentAsync(
+                projectId,
+                new DirectorUpdateRequest(_directorRevision, payload.RootElement.Clone()),
+                cancellationToken);
+            ApplyDirectorWorkspaceDocument(response);
+            await RefreshProjectSnapshotAsync(projectId, cancellationToken);
+            await LoadWorkflowAsync(projectId, cancellationToken, discardLocalEdits: true);
         }
-        if (WorkspacePlannerFrame.Content is AiPlannerLabPage { HasUnsavedEdits: true } ||
-            WorkspaceReactiveFrame.Content is ReactiveLabPage { HasUnsavedEdits: true })
-        {
-            ShowStatus("Save editor changes", "Save your Planner and Reactive edits before changing the shared draft or project.", InfoBarSeverity.Warning);
-            return true;
-        }
-        if (!HasUnsavedWorkflowEdits())
+
+        if (!await PrepareWorkflowReviewPayloadAsync(projectId, cancellationToken))
         {
             return false;
         }
-        ShowStatus("Draft edits are unsaved", "Apply or discard your Workspace draft edits before replacing this draft.", InfoBarSeverity.Warning);
+        if (_workflowStatus == "draft" && _workflowDraftId is string draftId && HasUnsavedWorkflowEdits())
+        {
+            using JsonDocument payload = JsonDocument.Parse(BuildWorkflowDocument().ToJsonString());
+            JsonElement response = await App.Services.ApiClient.ReviewDirectorWorkflowAsync(
+                projectId,
+                new DirectorWorkflowReviewRequest(_workflowRevision, draftId, payload.RootElement.Clone()),
+                cancellationToken);
+            ApplyWorkflowResponse(projectId, response);
+            await RefreshProjectSnapshotAsync(projectId, cancellationToken);
+        }
         return true;
     }
 
@@ -1282,12 +1305,16 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void PrepareWorkflowButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits())
+        if (!TryGetActiveProjectId(out string projectId))
         {
             return;
         }
         await RunBusyAsync("Preparing Workspace direction and reactive schedule", async token =>
         {
+            if (!await CheckpointWorkspaceEditsAsync(projectId, token))
+            {
+                return;
+            }
             await RefreshProjectSnapshotAsync(projectId, token);
             token.ThrowIfCancellationRequested();
             if (_session.ActiveProjectId != projectId)
@@ -1590,10 +1617,11 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     {
         bool hasProject = !string.IsNullOrWhiteSpace(_directorProjectId);
         bool saved = hasProject && WorkspaceDirectorInputsMatchDocument();
+        bool hasScenes = hasProject && _directorDocument?["scenes"]?.AsArray().Count > 0;
         UseWorkspaceStoryboardButton.IsEnabled = hasProject && CurrentVariants.Count > 0;
         SaveWorkspaceDirectorButton.IsEnabled = hasProject && !saved;
-        PrepareWorkspacePromptsButton.IsEnabled = hasProject && saved && _directorDocument?["scenes"]?.AsArray().Count > 0;
-        GenerateWorkspaceDirectorButton.IsEnabled = hasProject && saved && _directorDocument?["scenes"]?.AsArray().Count > 0;
+        PrepareWorkspacePromptsButton.IsEnabled = hasScenes;
+        GenerateWorkspaceDirectorButton.IsEnabled = hasScenes;
         ReviewWorkspaceDirectorButton.IsEnabled = hasProject && !string.IsNullOrWhiteSpace(_session.SelectedJobId);
         CancelWorkspaceDirectorButton.IsEnabled = hasProject &&
             !string.IsNullOrWhiteSpace(_directorDraftJobId) && _directorDraftJobId == _session.SelectedJobId &&
@@ -1676,7 +1704,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             WorkspaceDirectorStyleTextBox.Text = "Cinematic continuity";
         }
-        WorkspaceDirectorStatusText.Text = $"{scenes.Count} storyboard scene(s) staged for Director. Save direction to commit them.";
+        WorkspaceDirectorStatusText.Text = $"{scenes.Count} storyboard scene(s) staged for Director. They will checkpoint automatically when needed.";
         UpdateDirectorWorkspaceAvailability();
     }
 
@@ -1709,14 +1737,12 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             return;
         }
-        if (!WorkspaceDirectorInputsMatchDocument())
-        {
-            ShowStatus("Save direction first", "Preparing prompts uses the saved project document. Save your current Workspace edits first.", InfoBarSeverity.Warning);
-            return;
-        }
-
         await RunBusyAsync("Preparing Director prompts", async cancellationToken =>
         {
+            if (!await CheckpointWorkspaceEditsAsync(projectId, cancellationToken))
+            {
+                return;
+            }
             string engine = (WorkspaceDirectorEngineComboBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "hunyuan_video15";
             JsonElement response = await App.Services.ApiClient.GetDirectorPromptsAsync(projectId, engine, cancellationToken);
             WorkspaceDirectorPromptPreviewTextBox.Text = response.TryGetProperty("packages", out JsonElement packages)
@@ -1733,11 +1759,6 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             return;
         }
-        if (!WorkspaceDirectorInputsMatchDocument())
-        {
-            ShowStatus("Save direction first", "Generation requires a stable saved Workspace revision.", InfoBarSeverity.Warning);
-            return;
-        }
         string instruction = WorkspaceDirectorInstructionTextBox.Text.Trim();
         if (instruction.Length == 0)
         {
@@ -1747,6 +1768,10 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         await RunBusyAsync("Generating Director draft", async cancellationToken =>
         {
+            if (!await CheckpointWorkspaceEditsAsync(projectId, cancellationToken))
+            {
+                return;
+            }
             string mode = SelectedDirectorMode();
             string rendererEngine = SelectedDirectorReadinessEngine();
             string? startSample = App.Services.Session.TimelineSelectionStartSample?.ToString(CultureInfo.InvariantCulture);

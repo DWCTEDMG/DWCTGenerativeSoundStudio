@@ -93,6 +93,7 @@ public sealed partial class WorkspacePage
                         await using var stream = System.IO.File.OpenRead(_pendingAudioPath);
                         await App.Services.ApiClient.UploadAudioAsync(projectId, stream,
                             System.IO.Path.GetFileName(_pendingAudioPath), GetAudioContentType(_pendingAudioPath), token);
+                        App.Services.Session.NotifyProjectContentChanged(projectId);
                         _pendingAudioPath = null;
                         PendingAudioText.Text = "Project audio selected";
                         await RefreshProjectSnapshotAsync(projectId, token);
@@ -204,22 +205,14 @@ public sealed partial class WorkspacePage
             {
                 await UseCommandProposalAsync(projectId, token);
             }
-            if (!await PrepareWorkflowReviewPayloadAsync(projectId, token))
+            if (!await CheckpointWorkspaceEditsAsync(projectId, token))
             {
                 return;
             }
-
-            if (!HasUnsavedWorkflowEdits()) await LoadWorkflowAsync(projectId, token);
-            if (_workflowStatus == "draft" && _workflowDraftId is string draftId)
+            if (_workflowStatus is not ("draft" or "applied"))
             {
-                using JsonDocument document = JsonDocument.Parse(BuildWorkflowDocument().ToJsonString());
-                JsonElement response = await App.Services.ApiClient.ApplyDirectorWorkflowAsync(projectId,
-                    new DirectorWorkflowReviewRequest(_workflowRevision, draftId, document.RootElement.Clone()), token);
-                ApplyWorkflowResponse(projectId, response);
-                await RefreshProjectSnapshotAsync(projectId, token);
-            }
-            else if (_workflowStatus != "applied")
                 throw new InvalidOperationException("Create or recover a shared draft before opening Render.");
+            }
             token.ThrowIfCancellationRequested();
             _session.SetRenderContext("workspace-engine:" + GetComboTag(CommandRenderer, "auto"));
             NavigateTo("render");

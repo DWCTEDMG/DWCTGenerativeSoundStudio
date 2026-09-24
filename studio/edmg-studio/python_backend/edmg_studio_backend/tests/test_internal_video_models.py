@@ -311,6 +311,92 @@ def test_hunyuan_worker_failure_preserves_complete_diagnostics(tmp_path: Path, m
     assert (failed_run / "worker.stderr.log").read_text(encoding="utf-8") == "terminal failure\n"
 
 
+def test_hunyuan_distributed_cuda_failure_retries_on_primary_gpu(tmp_path: Path, monkeypatch) -> None:
+    model_dir = tmp_path / "hunyuan"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}', encoding="utf-8"
+    )
+    env = {
+        "EDMG_HUNYUAN15_RUNNER": "wsl", "EDMG_HUNYUAN15_WSL_DISTRO": "Ubuntu",
+        "EDMG_HUNYUAN15_PYTHON": "/opt/hunyuan/bin/python", "EDMG_HUNYUAN15_REPO": "/opt/HunyuanVideo-1.5",
+        "EDMG_HUNYUAN15_MODEL_PATH": "/models/hunyuan",
+        "EDMG_HUNYUAN15_LLM_PATH": "/models/qwen", "EDMG_HUNYUAN15_BYT5_PATH": "/models/byt5",
+        "EDMG_HUNYUAN15_GLYPH_PATH": "/models/glyph", "EDMG_HUNYUAN15_VISION_PATH": "/models/siglip",
+        "EDMG_HUNYUAN15_GPUS": "0,1",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ivm, "_wsl_path", lambda path, _config: "/mnt/c/" + Path(path).name)
+    monkeypatch.setattr(ivm, "_decode_video", lambda *_args, **_kwargs: [Image.new("RGB", (32, 32))] * 5)
+    monkeypatch.setattr(ivm.uuid, "uuid4", lambda: SimpleNamespace(hex="retry-run"))
+    calls: list[tuple[list[str], dict]] = []
+
+    class Proc:
+        def __init__(self, command, **kwargs):
+            self.command = command
+            self.returncode = 1 if not calls else 0
+            calls.append((command, kwargs))
+            if self.returncode:
+                kwargs["stderr"].write(
+                    "torch.distributed.DistBackendError: NCCL error\n"
+                    "ncclUnhandledCudaError: Call to CUDA function failed.\n"
+                    "Cuda failure 999 'unknown error'\n"
+                )
+                kwargs["stderr"].flush()
+            else:
+                (tmp_path / ".hunyuan-runs" / "retry-run" / "output.mp4").write_bytes(b"mp4")
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return (None, None)
+
+    monkeypatch.setattr(ivm.subprocess, "Popen", Proc)
+
+    frames = ivm.generate_video_model_frames(
+        engine="hunyuan_video15", video_model_dir=model_dir, base_model_dir=tmp_path,
+        init_image=None, prompt="p", negative_prompt="n", width=32, height=32,
+        num_frames=2, fps=24, steps=3, cfg=4.0, seed=7, device="cuda:0", workspace=tmp_path,
+    )
+
+    assert len(frames) == 2
+    assert len(calls) == 2
+    first_command, first_kwargs = calls[0]
+    second_command, second_kwargs = calls[1]
+    assert first_command[first_command.index("--nproc_per_node") + 1] == "2"
+    assert first_kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "0,1"
+    assert second_command[second_command.index("--nproc_per_node") + 1] == "1"
+    assert second_kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "0"
+    diagnostic = tmp_path / ".hunyuan-runs" / "retry-run" / "worker.distributed.stderr.log"
+    assert "Cuda failure 999" in diagnostic.read_text(encoding="utf-8")
+
+
+def test_hunyuan_output_decoder_uses_available_core_video_stack(tmp_path: Path) -> None:
+    import av
+
+    output = tmp_path / "worker-output.mp4"
+    with av.open(str(output), mode="w") as container:
+        stream = container.add_stream("mpeg4", rate=2)
+        stream.width = 16
+        stream.height = 16
+        stream.pix_fmt = "yuv420p"
+        for color in ("red", "blue"):
+            frame = av.VideoFrame.from_image(Image.new("RGB", (16, 16), color=color))
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+    frames = ivm._decode_video(output, width=8, height=10)
+
+    assert len(frames) == 2
+    assert [frame.size for frame in frames] == [(8, 10), (8, 10)]
+    assert frames[0].getpixel((4, 5))[0] > frames[0].getpixel((4, 5))[2]
+    assert frames[1].getpixel((4, 5))[2] > frames[1].getpixel((4, 5))[0]
+
+
 def test_hunyuan_runner_fails_closed_without_explicit_configuration(monkeypatch) -> None:
     for name in ("RUNNER", "PYTHON", "REPO", "MODEL_PATH", "WSL_DISTRO", "LLM_PATH", "BYT5_PATH", "GLYPH_PATH", "VISION_PATH"):
         monkeypatch.delenv(f"EDMG_HUNYUAN15_{name}", raising=False)
@@ -531,6 +617,48 @@ def test_svd_uses_native_conditioning_and_preserves_whole_pil_frames(tmp_path: P
     assert [frame.size for frame in frames] == [(64, 40), (64, 40)]
     assert frames[0].getpixel((0, 0)) == (255, 0, 0)
     assert frames[1].getpixel((0, 0)) == (0, 255, 0)
+
+
+def test_svd_normalizes_bfloat16_to_float16_on_cuda(tmp_path: Path, monkeypatch) -> None:
+    model_dir = tmp_path / "svd"
+    model_dir.mkdir()
+    (model_dir / "model_index.json").write_text(
+        '{"_class_name": "StableVideoDiffusionPipeline"}',
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class FakePipe:
+        def __call__(self, **_kwargs):
+            return SimpleNamespace(frames=[[Image.new("RGB", (64, 40), color="white")]])
+
+    def load_pipeline(_model_dir, *, device, dtype, cpu_offload):
+        captured.update(device=device, dtype=dtype, cpu_offload=cpu_offload)
+        return FakePipe()
+
+    monkeypatch.setattr(ivm, "_load_svd_pipeline", load_pipeline)
+    monkeypatch.setattr(ivm, "_seeded_generator", lambda seed, _device: (object(), int(seed or 0)))
+
+    frames = ivm.generate_video_model_frames(
+        engine="svd",
+        video_model_dir=model_dir,
+        base_model_dir=tmp_path / "base",
+        init_image=Image.new("RGB", (64, 40), color="white"),
+        prompt="single subject",
+        negative_prompt="",
+        width=64,
+        height=40,
+        num_frames=1,
+        fps=3,
+        steps=8,
+        cfg=7.0,
+        seed=123,
+        device="cuda",
+        dtype="bfloat16",
+    )
+
+    assert len(frames) == 1
+    assert captured == {"device": "cuda", "dtype": "float16", "cpu_offload": False}
 
 
 def test_video_model_rejects_incomplete_frame_sequences(tmp_path: Path, monkeypatch) -> None:

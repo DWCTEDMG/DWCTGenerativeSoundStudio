@@ -484,6 +484,50 @@ def test_adding_clip_preserves_audio_track_and_batch_undo(editor):
     assert len(store.get(pid).meta["timeline"]["tracks"]) == 1
 
 
+def test_add_clip_accepts_exact_samples_and_preserves_media_asset_on_undo(editor):
+    store, pid, _ = editor
+    project = store.get(pid)
+    project.meta["timeline"]["media_pool"] = [{"id": "audio-asset", "path": "assets/audio/source.wav"}]
+    store.save(project)
+
+    response = submit(
+        editor,
+        operations=[
+            {"kind": "add_track", "track_type": "audio", "new_id": "audio"},
+            {
+                "kind": "add_clip", "track_id": "audio", "new_id": "audio-clip",
+                "start_sample": "17", "end_sample": "48017", "media_asset_id": "audio-asset",
+            },
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["timeline"]["tracks"][-1]["clips"][0]["start_sample"] == "17"
+    assert submit(editor, action="undo").status_code == 200
+    assert store.get(pid).meta["timeline"]["media_pool"][0]["id"] == "audio-asset"
+
+
+@pytest.mark.parametrize(
+    "clip",
+    [
+        {"start_sample": "01", "end_sample": "2"},
+        {"start_sample": 1, "end_sample": 2},
+        {"start_sample": "1", "end_sample": "2", "start_seconds": 0},
+        {"start_sample": "1", "end_sample": "2", "media_asset_id": "missing"},
+    ],
+)
+def test_add_clip_rejects_invalid_exact_samples_and_unknown_media(editor, clip):
+    response = submit(
+        editor,
+        operations=[
+            {"kind": "add_track", "track_type": "audio", "new_id": "audio"},
+            {"kind": "add_clip", "track_id": "audio", "new_id": "audio-clip", **clip},
+        ],
+    )
+
+    assert response.status_code == 422
+
+
 def test_track_order_and_professional_state_are_persistent_and_reversible(editor):
     response = submit(
         editor,
