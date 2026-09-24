@@ -48,6 +48,8 @@ cuda = [
   "tensorrt-cu13==10.15.1.29",
   "tensorrt-cu13-bindings==10.15.1.29",
   "tensorrt-cu13-libs==10.15.1.29",
+  "nvidia-modelopt==0.47.0",
+  "triton-windows==3.8.0.post28 ; sys_platform == 'win32'",
 ]
 core = [
   "numpy>=1.26,<2",

@@ -3,6 +3,30 @@ using System.Text.Json;
 
 namespace EdmgStudio.Core.Models;
 
+public sealed record TensorRtRoutePresentation(string RouteLabel, string State, string Detail)
+{
+    public static TensorRtRoutePresentation From(RuntimeComponentStatus status)
+    {
+        string label = status.SelectedRoute switch
+        {
+            "onnx_parser" => "ONNX via TensorRT parser",
+            "torch_tensorrt" => "PyTorch via Torch-TensorRT",
+            "torch_compile_tensorrt" => "PyTorch via torch.compile TensorRT",
+            "huggingface_torch_tensorrt" => "Hugging Face via Torch-TensorRT",
+            "prebuilt_engine" => "Prebuilt TensorRT engine",
+            "llama_cpp" => "GGUF via llama.cpp (non-TensorRT)",
+            _ => "Existing model runtime",
+        };
+        string state = status.Accelerating ? "Accelerating now"
+            : status.Validated ? "Validated, not active"
+            : status.RouteSupported ? "Supported, validation required"
+            : "Unsupported";
+        string detail = status.RouteReason
+            ?? (status.Compiler is not null ? $"Compiler: {status.Compiler}." : $"Fallback: {status.FallbackRuntime}.");
+        return new TensorRtRoutePresentation(label, state, detail);
+    }
+}
+
 /// <summary>
 /// User-facing projection of the backend's render hardware report. The backend remains the
 /// authority; this type deliberately avoids inferring that an installed runtime is active for

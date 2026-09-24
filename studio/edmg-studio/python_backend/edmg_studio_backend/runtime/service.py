@@ -10,6 +10,8 @@ from .manager import RuntimeRegistry
 from .package import discover
 from .policy import load_policy
 from .process import RuntimeProcess
+from .routes import discover_compilers, resolve_runtime_route
+from .sources import classify_model_source
 
 
 def _component_runtime_status(
@@ -20,6 +22,8 @@ def _component_runtime_status(
     package_available: bool,
     compatible: bool,
     model_installed: bool,
+    source=None,
+    route=None,
 ) -> dict:
     model_family = str(declared["model_family"])
     component = str(declared["component"])
@@ -63,8 +67,21 @@ def _component_runtime_status(
         display_state = latest.get("state", "adapter_available")
     else:
         display_state = "adapter_available"
+    route_fields = {
+        "source_kind": source.kind.value if source else None,
+        "architecture": source.architecture if source else None,
+        "requested_route": route.requested_runtime if route else "tensorrt",
+        "selected_route": route.selected_route if route else "existing_runtime",
+        "compiler": route.compiler if route else None,
+        "compiler_available": bool(route and route.compiler),
+        "route_supported": bool(route and route.supported),
+        "route_reason": route.reason if route else (declared.get("reason") or reason),
+        "validated": bool(ready_engines),
+        "accelerating": False,
+    }
     return {
         **declared,
+        **route_fields,
         "adapter_status": declared["status"],
         "status": display_state,
         "optimization_eligible": eligible,
@@ -96,10 +113,19 @@ def runtime_status(data_dir: Path, hardware: dict, models_dir: Path | None = Non
     receipt_state = report.get("status") if report else None
     state = "disabled" if not policy.enabled else receipt_state or package["status"]
     adapter_registry = ComponentAdapterRegistry()
+    compilers = discover_compilers()
     components = []
     for component in RuntimeRegistry().component_status():
         adapter = adapter_registry.get(component["model_family"], component["component"])
         model_dir = adapter.model_dir(models_dir) if adapter and models_dir else None
+        source = None
+        route = None
+        if adapter and model_dir and model_dir.is_dir():
+            source = classify_model_source(
+                model_dir, model_id=adapter.model_id or "", model_family=component["model_family"],
+                component=component["component"], hash_content=False,
+            )
+            route = resolve_runtime_route(source, adapter, compilers)
         components.append(_component_runtime_status(
             component,
             engines,
@@ -107,6 +133,8 @@ def runtime_status(data_dir: Path, hardware: dict, models_dir: Path | None = Non
             package_available=installed,
             compatible=compatible,
             model_installed=bool(model_dir and model_dir.is_dir()),
+            source=source,
+            route=route,
         ))
     return {
         "settings": policy.model_dump(),

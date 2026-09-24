@@ -877,6 +877,36 @@ public sealed record RuntimeComponentStatus
 
     [JsonPropertyName("last_failure")]
     public string? LastFailure { get; init; }
+
+    [JsonPropertyName("source_kind")]
+    public string? SourceKind { get; init; }
+
+    [JsonPropertyName("architecture")]
+    public string? Architecture { get; init; }
+
+    [JsonPropertyName("requested_route")]
+    public string RequestedRoute { get; init; } = "tensorrt";
+
+    [JsonPropertyName("selected_route")]
+    public string SelectedRoute { get; init; } = "existing_runtime";
+
+    [JsonPropertyName("compiler")]
+    public string? Compiler { get; init; }
+
+    [JsonPropertyName("compiler_available")]
+    public bool CompilerAvailable { get; init; }
+
+    [JsonPropertyName("route_supported")]
+    public bool RouteSupported { get; init; }
+
+    [JsonPropertyName("route_reason")]
+    public string? RouteReason { get; init; }
+
+    [JsonPropertyName("validated")]
+    public bool Validated { get; init; }
+
+    [JsonPropertyName("accelerating")]
+    public bool Accelerating { get; init; }
 }
 
 public sealed record RuntimeStatusResponse

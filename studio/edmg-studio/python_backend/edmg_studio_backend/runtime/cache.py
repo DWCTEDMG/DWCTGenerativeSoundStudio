@@ -25,6 +25,28 @@ def engine_key(identity: dict) -> str:
                                      separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+def build_engine_identity(*, source, route: str, compiler: str | None,
+                          versions: dict, precision: str, profile: dict,
+                          device: dict, build: dict | None = None) -> dict:
+    """Build a canonical identity while omitting route-irrelevant null fields."""
+    identity = {
+        "model": source.model_family,
+        "model_id": source.model_id,
+        "component": source.component,
+        **source.identity_fields(),
+        "route": route,
+        "versions": {key: value for key, value in sorted(versions.items()) if value is not None},
+        "precision": precision,
+        "profile": profile,
+        "device": {key: value for key, value in sorted(device.items()) if value is not None},
+    }
+    if compiler:
+        identity["compiler"] = compiler
+    if build:
+        identity["build"] = {key: value for key, value in sorted(build.items()) if value is not None}
+    return identity
+
+
 def atomic_write(path: Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".pending-", dir=path.parent)

@@ -168,3 +168,31 @@ The existing `services/tensorrt_standalone.py` implementation remains a separate
 verified external-bundle SD1.5 UNet route. The managed component runtime can now also
 replace the ordinary Diffusers UNet after its own build and validation; diagnostics
 report the standalone and managed capabilities separately.
+
+## Multi-source routing
+
+The component registry now classifies managed model sources before selecting a runtime.
+It distinguishes ONNX graphs, PyTorch `.pt`/`.pth` checkpoints, Hugging Face layouts
+with complete safetensors/config metadata, prebuilt `.engine`/`.plan` files, GGUF, and
+unknown or ambiguous directories. Recognition is not a success claim: the status API
+reports source kind, architecture, selected route, compiler, support reason, validation,
+fallback, and active acceleration separately.
+
+- ONNX selects the existing TensorRT parser route for registered components.
+- Registered PyTorch checkpoints select Torch-TensorRT, or an explicitly available
+  `torch.compile` TensorRT backend. Unknown architectures fail or use the configured
+  existing-runtime fallback.
+- Hugging Face safetensors require readable architecture config and every indexed shard
+  before the Torch-TensorRT route is offered.
+- Prebuilt TensorRT engines require registered binding contracts plus deserialization
+  and execution validation before atomic cache publication.
+- GGUF always remains on llama.cpp and is labeled non-TensorRT.
+
+Cache identities include source hashes, route/compiler and versions, precision, profile,
+and device compatibility fields while retaining legacy identity lookup. WinUI consumes
+the backend decision and never infers support from a filename. `accelerating` remains
+false until a validated execution receipt proves that TensorRT ran.
+
+The CUDA dependency lane pins Torch-TensorRT and TensorRT and now also includes NVIDIA
+Model Optimizer plus the Windows Triton package. Their presence enables compatible
+compiler/operator paths; it does not make an unregistered model architecture supported.

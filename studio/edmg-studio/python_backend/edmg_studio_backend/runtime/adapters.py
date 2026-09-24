@@ -18,6 +18,10 @@ class ComponentAdapter:
     model_id: str | None = None
     builder_module: str | None = None
     builder_function: str | None = None
+    source_kinds: tuple[str, ...] = ()
+    architectures: tuple[str, ...] = ()
+    compiler_routes: tuple[str, ...] = ()
+    loader_id: str | None = None
 
     def status(self) -> dict:
         value = asdict(self)
@@ -95,6 +99,10 @@ class ComponentAdapterRegistry:
                     model_id=registration[0] if registration else None,
                     builder_module=registration[1] if registration else None,
                     builder_function=registration[2] if registration else None,
+                    source_kinds=("onnx", "pytorch_checkpoint", "huggingface", "tensorrt_engine") if registration else (("gguf",) if family == "qwen" else ()),
+                    architectures=("UNet2DConditionModel",) if component == "unet" else (("AutoencoderKL",) if component == "vae_decoder" else ()),
+                    compiler_routes=("onnx_parser", "torch_tensorrt", "torch_compile_tensorrt", "prebuilt_engine") if registration else (("llama_cpp",) if family == "qwen" else ()),
+                    loader_id=(f"{family}_{component}" if registration else None),
                 )
 
     def get(self, model_family: str, component: str) -> ComponentAdapter | None:
