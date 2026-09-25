@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
+from ..execution.contracts import JobExecutionMetadata
+
 CONTRACT_SCHEMA_VERSION = "1.0"
 
 
@@ -658,6 +660,7 @@ class JobContract(VersionedDocument):
     result: dict[str, JsonValue] | None = None
     error: str | None = Field(default=None, max_length=8000)
     progress: dict[str, JsonValue] | None = None
+    execution: JobExecutionMetadata | None = None
 
 
 class CueContract(VersionedDocument):

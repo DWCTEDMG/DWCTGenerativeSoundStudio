@@ -7832,12 +7832,84 @@ def _job_attempt_active(job) -> bool:
     )
 
 
+def _resolve_job_execution(job) -> None:
+    """Resolve and persist the attempt's execution plane before worker admission."""
+
+    from .execution.contracts import ExecutionPreference, JobExecutionMetadata
+    from .execution.dispatcher import DispatchContext, ExecutionDispatcher
+    from .execution.policy import ExecutionCapabilities, ExecutionSettings
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    raw_preference = payload.get("execution_preference")
+    preference = ExecutionPreference.model_validate(raw_preference or {})
+    engine = str(
+        payload.get("video_model_engine")
+        or payload.get("engine")
+        or ("hunyuan_video15" if str(payload.get("video_model_id") or "") == HUNYUAN_MODEL_ID else job.type)
+    ).strip()
+    execution_config = render_settings.get().get("execution") or {}
+    selected_settings = ExecutionSettings.model_validate(execution_config)
+    supported: set[str] = {"windows"}
+    worker_runtime = "windows-native"
+    if engine == "hunyuan_video15":
+        try:
+            runner = internal_video_models.hunyuan_runner_config()
+        except (ValueError, TypeError):
+            runner = None
+        if runner is not None and runner.mode == "wsl" and runner.distro:
+            supported.add("wsl")
+    dispatcher = ExecutionDispatcher(
+        settings_provider=lambda: selected_settings,
+        capabilities_provider=lambda: ExecutionCapabilities(
+            supported_environments={engine: frozenset(supported)},
+            gpu_environments=frozenset(supported),
+        ),
+        adapters={},
+    )
+    resolution = dispatcher.resolve(
+        DispatchContext(
+            project_root=store.project_dir(job.project_id),
+            project_id=job.project_id,
+            job_id=job.id,
+            attempt=job.attempt,
+            engine=engine,
+            preference=preference,
+            publication_guard=jobs.publication_guard,
+        )
+    )
+    if resolution.blocked or resolution.resolved_environment is None:
+        raise UserFacingError(
+            "The requested execution environment is unavailable.",
+            hint=f"Execution blocker: {resolution.reason_code}",
+            code=resolution.reason_code,
+            status_code=409,
+        )
+    if resolution.resolved_environment == "wsl":
+        worker_runtime = str(getattr(runner, "distro", None) or "wsl")
+    job.execution = JobExecutionMetadata(
+        requested_environment=resolution.requested_environment,
+        resolved_environment=resolution.resolved_environment,
+        physical_gpu_device_ids=[],
+        worker_runtime=worker_runtime,
+        resolution_reason=resolution.reason_code,
+        fallback_applied=resolution.fallback_applied,
+    ).model_dump(mode="json")
+    jobs.save(job)
+
+
 def _dispatch_job(job) -> None:
     """Serialize local model jobs through their complete child-process lifetime."""
     from .services.model_load_coordinator import ModelLoadCanceled, model_load_lock
 
     with jobs.maintain_lease(job):
         if not _job_attempt_active(job):
+            return
+        try:
+            _resolve_job_execution(job)
+        except Exception as exc:
+            job.status = "failed"
+            job.error = _public_render_job_error(exc)
+            jobs.save(job)
             return
         if job.type not in _LOCAL_MODEL_JOB_TYPES:
             _dispatch_admitted_job(job)

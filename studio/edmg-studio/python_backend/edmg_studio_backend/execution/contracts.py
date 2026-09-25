@@ -54,6 +54,24 @@ class ExecutionPreference(FrozenContract):
     allow_environment_fallback: bool = True
 
 
+class JobExecutionMetadata(FrozenContract):
+    """Additive, attempt-specific record of the control-plane decision."""
+
+    requested_environment: ExecutionEnvironment
+    resolved_environment: ResolvedExecutionEnvironment
+    physical_gpu_device_ids: list[Identifier] = Field(default_factory=list, max_length=16)
+    worker_runtime: str = Field(min_length=1, max_length=512)
+    resolution_reason: str = Field(min_length=1, max_length=160)
+    fallback_applied: bool = False
+
+    @field_validator("physical_gpu_device_ids")
+    @classmethod
+    def validate_unique_devices(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("physical_gpu_device_ids must be unique")
+        return value
+
+
 class ManifestArtifact(FrozenContract):
     relative_path: str
     sha256: Sha256

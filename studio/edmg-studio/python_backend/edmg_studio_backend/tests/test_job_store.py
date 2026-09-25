@@ -177,14 +177,17 @@ def test_job_store_migrates_existing_database_priority_column(tmp_path: Path) ->
         ledger = store._conn.execute(
             "SELECT migration_id, name FROM schema_migrations ORDER BY migration_id"
         ).fetchall()
-        assert [tuple(row) for row in ledger] == [(1, "jobs-priority-and-queue-order")]
+        assert [tuple(row) for row in ledger] == [
+            (1, "jobs-priority-and-queue-order"),
+            (2, "jobs-execution-resolution"),
+        ]
     finally:
         store.close()
 
     reopened = JobStore(tmp_path / "projects", db_path=db_path)
     try:
         count = reopened._conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-        assert count == 1
+        assert count == 2
     finally:
         reopened.close()
 
@@ -429,3 +432,28 @@ def test_old_attempt_cannot_renew_publish_or_overwrite_a_retry(tmp_path):
         assert saved.progress["stage"] == "loading_model"
     finally:
         store.close()
+def test_job_store_persists_execution_resolution_and_retry_clears_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "jobs.sqlite"
+    store = JobStore(tmp_path / "projects", db_path=db_path)
+    job = store.create("execution-project", "internal_video", {})
+    job.execution = {
+        "requested_environment": "auto",
+        "resolved_environment": "wsl",
+        "physical_gpu_device_ids": ["GPU-physical-1"],
+        "worker_runtime": "Ubuntu-24.04",
+        "resolution_reason": "LINUX_FIRST_ENGINE",
+    }
+    store.save(job)
+    job.status = "failed"
+    store.save(job)
+    store.close()
+
+    reopened = JobStore(tmp_path / "projects", db_path=db_path)
+    persisted = reopened.get(job.project_id, job.id)
+    assert persisted is not None
+    assert persisted.execution == job.execution
+
+    retried = reopened.retry(job.project_id, job.id)
+    assert retried is not None
+    assert retried.execution is None
+    reopened.close()

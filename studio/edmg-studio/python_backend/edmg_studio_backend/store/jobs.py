@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempt INTEGER NOT NULL DEFAULT 0,
     priority INTEGER NOT NULL DEFAULT 0,
     idempotency_key TEXT,
+    execution_json TEXT,
     PRIMARY KEY (project_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at, id);
@@ -86,7 +87,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 """
 
-_JOB_SCHEMA_MIGRATIONS = ((1, "jobs-priority-and-queue-order"),)
+_JOB_SCHEMA_MIGRATIONS = (
+    (1, "jobs-priority-and-queue-order"),
+    (2, "jobs-execution-resolution"),
+)
 
 
 @dataclass
@@ -104,6 +108,7 @@ class Job:
     attempt: int = 0
     priority: int = 0
     idempotency_key: str | None = None
+    execution: dict[str, Any] | None = None
 
 
 @dataclass
@@ -176,6 +181,13 @@ class JobStore:
                     ON jobs(status, priority DESC, created_at ASC, id ASC)
                     """
                 )
+            elif migration_id == 2:
+                columns = {
+                    str(row["name"])
+                    for row in self._conn.execute("PRAGMA table_info(jobs)").fetchall()
+                }
+                if "execution_json" not in columns:
+                    self._conn.execute("ALTER TABLE jobs ADD COLUMN execution_json TEXT")
             self._conn.execute(
                 "INSERT INTO schema_migrations(migration_id, name, applied_at) VALUES (?, ?, ?)",
                 (migration_id, name, self._now()),
@@ -204,6 +216,11 @@ class JobStore:
             attempt=int(row["attempt"] or 0),
             priority=int(row["priority"] or 0),
             idempotency_key=row["idempotency_key"],
+            execution=(
+                json.loads(row["execution_json"])
+                if "execution_json" in row.keys() and row["execution_json"]
+                else None
+            ),
         )
 
     def _record_event(self, project_id: str, job_id: str, event_type: str, detail: dict[str, Any]) -> None:
@@ -221,8 +238,9 @@ class JobStore:
             INSERT INTO jobs(
                 id, project_id, type, status, created_at, updated_at,
                 payload_json, result_json, error, progress_json,
-                lease_owner, lease_expires_at, attempt, priority, idempotency_key
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+                lease_owner, lease_expires_at, attempt, priority, idempotency_key,
+                execution_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
             ON CONFLICT(project_id, id) DO UPDATE SET
                 type=excluded.type,
                 status=excluded.status,
@@ -234,6 +252,7 @@ class JobStore:
                 attempt=excluded.attempt,
                 priority=excluded.priority,
                 idempotency_key=excluded.idempotency_key
+                ,execution_json=excluded.execution_json
             WHERE jobs.status IN ('queued', 'paused', 'running')
               AND jobs.attempt = excluded.attempt
             """,
@@ -251,6 +270,7 @@ class JobStore:
                 int(job.attempt or 0),
                 int(job.priority or 0),
                 job.idempotency_key,
+                json.dumps(job.execution, ensure_ascii=False) if job.execution is not None else None,
             ),
         )
 
@@ -303,6 +323,7 @@ class JobStore:
                         error=data.get("error"),
                         progress=data.get("progress"),
                         attempt=int(data.get("attempt") or 0),
+                        execution=(dict(data["execution"]) if isinstance(data.get("execution"), dict) else None),
                         priority=int(data.get("priority") or 0),
                         idempotency_key=data.get("idempotency_key"),
                     )
@@ -698,6 +719,7 @@ class JobStore:
                     result_json = NULL,
                     error = NULL,
                     progress_json = NULL,
+                    execution_json = NULL,
                     lease_owner = NULL,
                     lease_expires_at = NULL,
                     attempt = attempt + 1
