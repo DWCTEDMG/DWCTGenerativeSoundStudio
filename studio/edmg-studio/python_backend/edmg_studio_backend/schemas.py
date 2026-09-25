@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .execution.contracts import ExecutionPreference
 from .version import STUDIO_VERSION
 from .runtime.policy import OperationRuntimePolicy
 
@@ -279,6 +280,7 @@ class InternalVideoRenderRequest(BaseModel):
     """
     variant_index: int = 0
     runtime: OperationRuntimePolicy | None = None
+    execution_preference: ExecutionPreference | None = None
 
     fps_output: int = Field(default=24, ge=1, le=60)
     fps_render: int = Field(default=2, ge=1, le=30)
