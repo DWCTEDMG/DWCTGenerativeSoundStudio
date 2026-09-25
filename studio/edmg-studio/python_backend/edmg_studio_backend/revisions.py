@@ -48,6 +48,25 @@ def published_media_path(path: Path) -> Path:
     return published
 
 
+def execution_publication_artifacts(admitted, project_root: Path) -> list[tuple[Path, Path]]:
+    """Map admitted execution files into the existing staged publication mechanism."""
+
+    from .execution.staging import AdmittedExecutionResult
+
+    if not isinstance(admitted, AdmittedExecutionResult):
+        raise TypeError("admitted must be an AdmittedExecutionResult")
+    root = Path(project_root).resolve(strict=True)
+    publications: list[tuple[Path, Path]] = []
+    for item in (*admitted.artifacts, *admitted.receipts):
+        published = root / item.contract.relative_path
+        try:
+            published.resolve(strict=False).relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Execution publication target escapes the project root") from exc
+        publications.append((item.staged_path, published))
+    return publications
+
+
 @contextmanager
 def staged_media_publication(
     artifacts: list[tuple[Path, Path]],
