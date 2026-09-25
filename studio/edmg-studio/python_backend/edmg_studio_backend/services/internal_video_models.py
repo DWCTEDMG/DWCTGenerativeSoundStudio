@@ -16,7 +16,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..errors import UserFacingError
+from ..execution.staging import PreparedExecutionAttempt
+from ..execution.wsl import CancellationToken, ExecutionProcessResult, WslExecutionTransport
 from .launcher_environment import update_launcher_environment
+from .model_load_coordinator import gpu_execution_lease
 from .model_weights import diffusers_weight_load_kwargs
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,73 @@ class HunyuanRunnerConfig:
     timeout_s: float
     gpus: str
     companions: Mapping[str, str]
+
+
+class WslHunyuanExecutionAdapter:
+    """Dispatch Hunyuan through immutable attempt staging and the shared WSL transport."""
+
+    def __init__(
+        self,
+        config: HunyuanRunnerConfig,
+        *,
+        transport: WslExecutionTransport | None = None,
+    ):
+        required_companions = {"llm", "byt5", "glyph", "vision"}
+        if (
+            config.mode != "wsl"
+            or not config.distro
+            or not config.python
+            or not config.repo
+            or not config.model_path
+            or not math.isfinite(config.timeout_s)
+            or config.timeout_s <= 0
+            or any(not config.companions.get(name) for name in required_companions)
+        ):
+            raise ValueError("A complete WSL Hunyuan runner configuration is required")
+        gpu_indices = tuple(part.strip() for part in config.gpus.split(",") if part.strip())
+        if not gpu_indices or len(gpu_indices) != len(set(gpu_indices)) or any(
+            not item.isdecimal() for item in gpu_indices
+        ):
+            raise ValueError("WSL Hunyuan GPU indices must be unique nonnegative integers")
+        self.config = config
+        self.gpu_indices = gpu_indices
+        self.transport = transport or WslExecutionTransport(
+            config.distro,
+            timeout_seconds=config.timeout_s,
+        )
+
+    def _command(self) -> list[str]:
+        backend_root = Path(__file__).resolve().parents[2]
+        python_path = ":".join(
+            (self.config.repo, _wsl_path(backend_root, self.config))
+        )
+        return [
+            "env",
+            f"CUDA_VISIBLE_DEVICES={','.join(self.gpu_indices)}",
+            "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
+            f"PYTHONPATH={python_path}",
+            self.config.python,
+            "-m",
+            "edmg_studio_backend.services.hunyuan_execution_worker",
+            "--config-from-manifest",
+        ]
+
+    def execute(
+        self,
+        prepared: PreparedExecutionAttempt,
+        *,
+        cancellation: CancellationToken,
+    ) -> ExecutionProcessResult:
+        if prepared.manifest.engine != "hunyuan_video15" or prepared.manifest.environment != "wsl":
+            raise ValueError("WSL Hunyuan adapter requires a WSL Hunyuan execution manifest")
+        with gpu_execution_lease(
+            prepared.manifest.physical_gpu_device_ids,
+            job_id=prepared.manifest.job_id,
+            attempt=prepared.manifest.attempt,
+            cancel_check=cancellation.is_canceled,
+            timeout_seconds=self.config.timeout_s,
+        ):
+            return self.transport.execute(prepared, self._command(), cancellation)
 
 
 def hunyuan_runner_config(environ: Mapping[str, str] | None = None) -> HunyuanRunnerConfig:
