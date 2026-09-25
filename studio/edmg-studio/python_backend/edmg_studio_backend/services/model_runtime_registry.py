@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ..execution.inventory import GpuObservation, reconcile_physical_gpus
 from .video_motion_quality import MIN_VIDEO_MODEL_NATIVE_FRAMES
 
 ValidationState = Literal[
@@ -34,6 +35,19 @@ ValidationState = Literal[
 RUNTIME_RECEIPT = "runtime-validation.json"
 REGISTRY_VERSION = 1
 _VIDEO_RUNTIME_PACKAGES = {"hf_hunyuan_video15_internal", "hf_ltx_25_distilled_internal"}
+
+
+def execution_inventory_status(
+    windows: list[GpuObservation],
+    wsl: list[GpuObservation],
+) -> dict[str, Any]:
+    """Return separately observed and reconciled GPU identities for runtime status APIs."""
+
+    return {
+        "windows_observations": [asdict(item) for item in windows],
+        "wsl_observations": [asdict(item) for item in wsl],
+        "physical_gpus": [item.model_dump(mode="json") for item in reconcile_physical_gpus(windows, wsl)],
+    }
 
 
 def _valid_video_motion_evidence(value: Any) -> bool:
