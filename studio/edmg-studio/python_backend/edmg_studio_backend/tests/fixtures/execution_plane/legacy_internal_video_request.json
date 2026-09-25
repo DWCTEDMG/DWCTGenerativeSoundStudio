@@ -1,0 +1,22 @@
+{
+  "variant_index": 0,
+  "fps_output": 24,
+  "fps_render": 2,
+  "width": 768,
+  "height": 432,
+  "steps": 15,
+  "cfg": 7.0,
+  "sampler": "euler",
+  "keyframe_continuity_mode": "scene",
+  "model_id": "auto",
+  "render_mode": "auto",
+  "render_tier": "auto",
+  "device_preference": "auto",
+  "temporal_mode": "video_model",
+  "video_model_engine": "hunyuan_video15",
+  "hunyuan_generation_mode": "auto",
+  "hunyuan_low_vram_mode": false,
+  "hunyuan_chunk_frames": 25,
+  "hunyuan_chunk_overlap": 2,
+  "allow_hosted_fallback": true
+}
