@@ -432,7 +432,12 @@ public sealed partial class RenderPage : Page
     HunyuanLowVramPanel.Visibility = hunyuanVisibility;
     HunyuanChunkSizePanel.Visibility = hunyuanVisibility;
     HunyuanChunkOverlapPanel.Visibility = hunyuanVisibility;
-    LtxRenderGuidanceText.Visibility = ltx ? Visibility.Visible : Visibility.Collapsed;
+    Visibility ltxVisibility = ltx ? Visibility.Visible : Visibility.Collapsed;
+    LtxRenderGuidanceText.Visibility = ltxVisibility;
+    LtxExecutionModePanel.Visibility = ltxVisibility;
+    LtxCudaDevicesPanel.Visibility = ltxVisibility;
+    LtxWorkerCapPanel.Visibility = ltxVisibility;
+    LtxFallbackPanel.Visibility = ltxVisibility;
 
     string currentModel = VideoModelBox.Text.Trim();
     if (ltx && (currentModel.Length == 0 || currentModel == HunyuanModelId))
@@ -627,6 +632,10 @@ public sealed partial class RenderPage : Page
       StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
       VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
       VideoModelId = EmptyToNull(VideoModelBox.Text),
+      LtxExecutionMode = Selected(LtxExecutionModeComboBox, "auto"),
+      LtxCudaDevices = LtxCudaDevicesBox.Text,
+      LtxSceneWorkerCap = Number(LtxSceneWorkerCapBox, 3),
+      LtxAllowModeFallback = LtxAllowModeFallbackToggle.IsOn,
       VideoModelMaxFramesPerScene = Number(FramesBox, 8),
       VideoModelMotionBucketId = Number(MotionBucketBox, 127),
       VideoModelNoiseAugStrength = Number(NoiseAugBox, 0.02),

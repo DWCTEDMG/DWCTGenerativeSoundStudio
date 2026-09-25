@@ -317,6 +317,10 @@ class InternalVideoRenderRequest(BaseModel):
     storyboard_shot_max_s: float = Field(default=4.0, ge=1.0, le=12.0)
     video_model_engine: Literal["auto","svd","animatediff","hunyuan_video15","ltx_25"] = "auto"
     video_model_id: str | None = None
+    ltx_execution_mode: Literal["auto","single","scene_parallel","model_parallel"] = "auto"
+    ltx_cuda_devices: list[int] = Field(default_factory=list, max_length=16)
+    ltx_scene_worker_cap: int = Field(default=3, ge=1, le=16)
+    ltx_allow_mode_fallback: bool = True
     hunyuan_generation_mode: Literal["auto","t2v","i2v"] = "auto"
     hunyuan_low_vram_mode: bool = False
     hunyuan_chunk_frames: int = Field(default=25, ge=2, le=96)
@@ -360,12 +364,18 @@ class InternalVideoRenderRequest(BaseModel):
     deforum_denoise_schedule: str | dict[str, float] | None = None
 
     @model_validator(mode="after")
-    def validate_hunyuan_chunk_geometry(self) -> InternalVideoRenderRequest:
+    def validate_video_model_settings(self) -> InternalVideoRenderRequest:
         if (
             self.video_model_engine == "hunyuan_video15"
             and self.hunyuan_chunk_overlap >= self.hunyuan_chunk_frames
         ):
             raise ValueError("Hunyuan chunk overlap must be smaller than the chunk size")
+        if len(set(self.ltx_cuda_devices)) != len(self.ltx_cuda_devices):
+            raise ValueError("LTX CUDA device IDs must be unique")
+        if any(device < 0 or device > 63 for device in self.ltx_cuda_devices):
+            raise ValueError("LTX CUDA device IDs must be between 0 and 63")
+        if self.ltx_execution_mode == "scene_parallel" and self.keyframe_continuity_mode == "project":
+            raise ValueError("LTX scene-parallel rendering requires scene continuity")
         return self
 
 

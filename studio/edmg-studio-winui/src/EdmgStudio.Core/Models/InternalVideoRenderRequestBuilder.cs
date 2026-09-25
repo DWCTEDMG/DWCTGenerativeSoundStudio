@@ -45,6 +45,10 @@ public sealed record InternalVideoRenderSettings
     public double StoryboardShotMaxSeconds { get; init; } = 4.0;
     public string VideoModelEngine { get; init; } = "auto";
     public string? VideoModelId { get; init; }
+    public string LtxExecutionMode { get; init; } = "auto";
+    public string LtxCudaDevices { get; init; } = string.Empty;
+    public int LtxSceneWorkerCap { get; init; } = 3;
+    public bool LtxAllowModeFallback { get; init; } = true;
     public int VideoModelMaxFramesPerScene { get; init; } = 8;
     public int VideoModelMotionBucketId { get; init; } = 127;
     public double VideoModelNoiseAugStrength { get; init; } = 0.02;
@@ -135,6 +139,10 @@ public static class InternalVideoRenderRequestBuilder
             ["storyboard_shot_max_s"] = settings.StoryboardShotMaxSeconds,
             ["video_model_engine"] = settings.VideoModelEngine,
             ["video_model_id"] = Optional(settings.VideoModelId),
+            ["ltx_execution_mode"] = settings.LtxExecutionMode,
+            ["ltx_cuda_devices"] = ParseCudaDevices(settings.LtxCudaDevices),
+            ["ltx_scene_worker_cap"] = settings.LtxSceneWorkerCap,
+            ["ltx_allow_mode_fallback"] = settings.LtxAllowModeFallback,
             ["video_model_max_frames_per_scene"] = settings.VideoModelMaxFramesPerScene,
             ["video_model_motion_bucket_id"] = settings.VideoModelMotionBucketId,
             ["video_model_noise_aug_strength"] = settings.VideoModelNoiseAugStrength,
@@ -215,6 +223,17 @@ public static class InternalVideoRenderRequestBuilder
         Range(settings.AnchorStrength, 0.0, 1.0, "Anchor strength");
         Range(settings.StoryboardShotMaxSeconds, 1.0, 12.0, "Storyboard shot maximum");
         Range(settings.VideoModelMaxFramesPerScene, 8, 96, "Video model frames per scene");
+        Range(settings.LtxSceneWorkerCap, 1, 16, "LTX scene worker cap");
+        Enum(settings.LtxExecutionMode, ["auto", "single", "scene_parallel", "model_parallel"], "LTX execution mode");
+        int[] ltxDevices = ParseCudaDeviceValues(settings.LtxCudaDevices);
+        if (ltxDevices.Distinct().Count() != ltxDevices.Length)
+        {
+            throw new InvalidOperationException("LTX CUDA device IDs must be unique.");
+        }
+        if (settings.LtxExecutionMode == "scene_parallel" && settings.KeyframeContinuityMode == "project")
+        {
+            throw new InvalidOperationException("LTX scene-parallel rendering requires scene continuity.");
+        }
         Range(settings.VideoModelMotionBucketId, 1, 255, "Video model motion bucket");
         Range(settings.VideoModelNoiseAugStrength, 0.0, 1.0, "Video model noise augmentation");
         Range(settings.VideoModelDecodeChunkSize, 1, 64, "Video model decode chunk size");
@@ -266,6 +285,24 @@ public static class InternalVideoRenderRequestBuilder
                 ["steps"] = settings.RefinerSteps,
             }
             : null;
+
+    private static JsonArray ParseCudaDevices(string value)
+    {
+        var result = new JsonArray();
+        foreach (int device in ParseCudaDeviceValues(value))
+        {
+            result.Add(device);
+        }
+        return result;
+    }
+
+    private static int[] ParseCudaDeviceValues(string value) =>
+        value.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(entry => int.TryParse(entry, NumberStyles.None, CultureInfo.InvariantCulture, out int device)
+                && device is >= 0 and <= 63
+                    ? device
+                    : throw new InvalidOperationException("LTX CUDA devices must be comma-separated IDs between 0 and 63."))
+            .ToArray();
 
     private static JsonArray ParseLoras(string value)
     {

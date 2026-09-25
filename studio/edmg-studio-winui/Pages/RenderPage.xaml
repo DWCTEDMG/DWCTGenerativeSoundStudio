@@ -691,6 +691,9 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <StackPanel Spacing="4">
                                         <TextBlock Text="Motion bucket ID" Style="{StaticResource FieldLabelStyle}" />
@@ -781,7 +784,33 @@
                                                       AutomationProperties.AutomationId="RenderTimelineCameraToggle" />
                                         </StackPanel>
                                     </StackPanel>
-                                    <StackPanel x:Name="HunyuanGenerationPanel" Grid.Row="6" Spacing="4">
+                                    <StackPanel x:Name="LtxExecutionModePanel" Grid.Row="6" Spacing="4" Visibility="Collapsed">
+                                        <TextBlock Text="LTX GPU execution" Style="{StaticResource FieldLabelStyle}" />
+                                        <ComboBox x:Name="LtxExecutionModeComboBox" SelectedIndex="0"
+                                                  AutomationProperties.AutomationId="RenderLtxExecutionModeComboBox">
+                                            <ComboBoxItem Content="Automatic" Tag="auto" />
+                                            <ComboBoxItem Content="Single GPU" Tag="single" />
+                                            <ComboBoxItem Content="Scene parallel" Tag="scene_parallel" />
+                                            <ComboBoxItem Content="Model parallel" Tag="model_parallel" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel x:Name="LtxCudaDevicesPanel" Grid.Row="6" Grid.Column="1" Spacing="4" Visibility="Collapsed">
+                                        <TextBlock Text="CUDA device IDs" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBox x:Name="LtxCudaDevicesBox" PlaceholderText="Automatic (for example: 0,1,2)"
+                                                 AutomationProperties.AutomationId="RenderLtxCudaDevicesBox" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="LtxWorkerCapPanel" Grid.Row="7" Spacing="4" Visibility="Collapsed">
+                                        <TextBlock Text="Scene worker cap" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="LtxSceneWorkerCapBox" Value="3" Minimum="1" Maximum="16"
+                                                   AutomationProperties.AutomationId="RenderLtxSceneWorkerCapBox" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="LtxFallbackPanel" Grid.Row="7" Grid.Column="1" Spacing="4" Visibility="Collapsed">
+                                        <ToggleSwitch x:Name="LtxAllowModeFallbackToggle" Header="Allow safe mode fallback" IsOn="True"
+                                                      AutomationProperties.AutomationId="RenderLtxAllowModeFallbackToggle" />
+                                        <TextBlock Text="Scene parallel runs independent authored scenes on separate GPUs. Model parallel remains unavailable until the native distributed runtime is integrated and qualified; safe fallback requires at least two GPUs."
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="HunyuanGenerationPanel" Grid.Row="9" Spacing="4">
                                         <TextBlock Text="Hunyuan generation mode" Style="{StaticResource FieldLabelStyle}" />
                                         <ComboBox x:Name="VideoGenerationModeComboBox" SelectedIndex="0"
                                                   AutomationProperties.AutomationId="RenderVideoGenerationModeComboBox">
@@ -792,17 +821,17 @@
                                         <TextBlock Text="I2V requires a source image or video in Motion refinement → Source asset."
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <StackPanel x:Name="HunyuanLowVramPanel" Grid.Row="6" Grid.Column="1">
+                                    <StackPanel x:Name="HunyuanLowVramPanel" Grid.Row="9" Grid.Column="1">
                                         <ToggleSwitch x:Name="VideoLowVramToggle"
                                                       Header="Deterministic low-VRAM mode"
                                                       AutomationProperties.AutomationId="RenderVideoLowVramToggle" />
                                     </StackPanel>
-                                    <StackPanel x:Name="HunyuanChunkSizePanel" Grid.Row="7" Spacing="4">
+                                    <StackPanel x:Name="HunyuanChunkSizePanel" Grid.Row="10" Spacing="4">
                                         <TextBlock Text="Generation chunk size (frames)" Style="{StaticResource FieldLabelStyle}" />
                                         <NumberBox x:Name="GenerationChunkSizeBox" Value="8" Minimum="2" Maximum="96"
                                                    AutomationProperties.AutomationId="RenderGenerationChunkSizeBox" />
                                     </StackPanel>
-                                    <StackPanel x:Name="HunyuanChunkOverlapPanel" Grid.Row="7" Grid.Column="1" Spacing="4">
+                                    <StackPanel x:Name="HunyuanChunkOverlapPanel" Grid.Row="10" Grid.Column="1" Spacing="4">
                                         <TextBlock Text="Generation chunk overlap (frames)" Style="{StaticResource FieldLabelStyle}" />
                                         <NumberBox x:Name="GenerationChunkOverlapBox" Value="2" Minimum="0" Maximum="16"
                                                    AutomationProperties.AutomationId="RenderGenerationChunkOverlapBox" />

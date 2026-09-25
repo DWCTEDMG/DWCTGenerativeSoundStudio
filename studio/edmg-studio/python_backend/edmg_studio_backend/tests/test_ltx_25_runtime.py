@@ -36,6 +36,7 @@ def test_build_command_uses_exact_components_and_official_flags(tmp_path: Path) 
         fps=24,
         seed=123,
         image_path=image,
+        image_strength=0.2,
         offload="cpu",
         fp8=True,
     )
@@ -45,7 +46,7 @@ def test_build_command_uses_exact_components_and_official_flags(tmp_path: Path) 
         assert command[command.index(flag) + 1] == str((root / relative).resolve())
     assert command[command.index("--prompt") + 1] == "subject; no shell expansion"
     assert command[command.index("--frame-rate") + 1] == "24.0"
-    assert command[command.index("--image") + 2:] == ["0", "1.0", "--quantization", "fp8-cast"]
+    assert command[command.index("--image") + 2:] == ["0", "0.2", "--quantization", "fp8-cast"]
     assert "--offload" in command and command[command.index("--offload") + 1] == "cpu"
 
 
@@ -124,6 +125,24 @@ def test_runtime_probe_requires_exact_qualified_version(monkeypatch) -> None:
     assert "Expected ltx-pipelines==1.3.0" in " ".join(status["issues"])
 
 
+def test_runtime_probe_reports_model_parallel_prerequisite_separately(monkeypatch) -> None:
+    monkeypatch.setenv("EDMG_LTX25_PYTHON", str(Path(ltx.sys.executable)))
+    monkeypatch.setattr(
+        ltx,
+        "runtime_identity",
+        lambda: {"python": str(Path(ltx.sys.executable)), "ltx_pipelines_version": ltx.LTX_PIPELINES_VERSION},
+    )
+    monkeypatch.setattr(ltx, "validate_runtime_version", lambda: None)
+    monkeypatch.setattr(ltx, "_probe_module", lambda _executable, module: module != ltx.LTX_MULTI_GPU_PREREQUISITE)
+
+    status = ltx.ltx_runtime_status(probe=True)
+
+    assert status["ready"] is True
+    assert status["multi_gpu"]["scene_parallel_ready"] is True
+    assert status["multi_gpu"]["model_parallel_ready"] is False
+    assert status["multi_gpu"]["missing_prerequisite"] == "ltx_kernels"
+
+
 def test_generate_runs_isolated_cli_and_cleans_files(tmp_path: Path, monkeypatch) -> None:
     root = _package(tmp_path / "model")
     captured: dict = {}
@@ -152,6 +171,7 @@ def test_generate_runs_isolated_cli_and_cleans_files(tmp_path: Path, monkeypatch
         seed=7,
         device="cuda:2",
         init_image=Image.new("RGB", (64, 64)),
+        init_image_strength=0.2,
         cpu_offload=True,
         fp8=True,
         timeout_s=12,
@@ -160,6 +180,8 @@ def test_generate_runs_isolated_cli_and_cleans_files(tmp_path: Path, monkeypatch
     assert len(frames) == 1
     assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "2"
     assert captured["timeout_s"] == 12
+    command = captured["command"]
+    assert command[command.index("--image") + 3] == "0.2"
     assert not list((tmp_path / "work").glob("ltx25-*"))
 
 
@@ -220,6 +242,37 @@ def test_decode_rejects_missing_or_empty_mp4(tmp_path: Path) -> None:
         ltx.decode_mp4(empty)
 
 
+def test_decode_uses_pyav_video_stream(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    expected = Image.new("RGB", (64, 64), "blue")
+    frame = SimpleNamespace(to_image=lambda: expected)
+
+    class FakeContainer:
+        streams = [SimpleNamespace(type="audio"), SimpleNamespace(type="video")]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def decode(self, stream):
+            return [frame]
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "av",
+        SimpleNamespace(open=lambda path, mode: FakeContainer()),
+    )
+
+    frames = ltx.decode_mp4(output)
+
+    assert len(frames) == 1
+    assert frames[0].mode == "RGB"
+    assert frames[0].size == (64, 64)
+
+
 def test_registry_exposes_real_ltx_smoke_callback() -> None:
     adapter = create_default_registry().adapter("hf_ltx_25_distilled_internal")
     assert adapter.descriptor.adapter_ready is True
@@ -245,11 +298,13 @@ def test_internal_video_dispatches_ltx_and_trims_legal_frame_count(tmp_path: Pat
         init_image=None, prompt="test", negative_prompt="", width=64, height=64,
         num_frames=10, fps=8, steps=4, cfg=1, seed=5, device="cuda:0",
         workspace=tmp_path / "work", cancel_check=lambda: False,
+        image_conditioning_strength=0.2,
     )
     assert result == expected[:10]
     assert captured["num_frames"] == 17
     assert captured["device"] == "cuda:0"
     assert captured["workspace"] == tmp_path / "work"
+    assert captured["init_image_strength"] == 0.2
 
 
 def test_internal_video_normalizes_ltx_working_dimensions_and_restores_requested_size(

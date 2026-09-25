@@ -9620,6 +9620,10 @@ def _internal_settings_from_payload(
         video_model_engine=str(payload.get("video_model_engine") or "auto"),
         video_model_id=(str(payload.get("video_model_id")).strip() or None) if payload.get("video_model_id") is not None else None,
         video_model_path=(str(payload.get("video_model_path")).strip() or None) if payload.get("video_model_path") is not None else None,
+        ltx_execution_mode=str(payload.get("ltx_execution_mode") or "auto").strip().lower(),
+        ltx_cuda_devices=tuple(int(device) for device in (payload.get("ltx_cuda_devices") or ())),
+        ltx_scene_worker_cap=max(1, min(16, int(payload.get("ltx_scene_worker_cap", 3)))),
+        ltx_allow_mode_fallback=bool(payload.get("ltx_allow_mode_fallback", True)),
         hunyuan_generation_mode=str(payload.get("hunyuan_generation_mode") or "auto").strip().lower(),
         hunyuan_low_vram_mode=bool(payload.get("hunyuan_low_vram_mode", False)),
         hunyuan_chunk_frames=int(payload.get("hunyuan_chunk_frames", 25)),
@@ -9671,6 +9675,31 @@ def _apply_storyboard_full_motion_settings(
             float(settings_obj.storyboard_shot_max_s),
         ),
     )
+
+
+def _applied_director_variant(proj: Any, variant_index: int) -> dict[str, Any] | None:
+    if variant_index != 0 or not isinstance(getattr(proj, "meta", None), dict):
+        return None
+    document_raw = proj.meta.get("director_document")
+    if not isinstance(document_raw, dict) or not document_raw.get("scenes"):
+        return None
+
+    from .domain.director_scene import DirectorDocument
+    from .domain.director_workflow import variant_from_document
+    from .domain.project_time import ProjectClock
+
+    document = DirectorDocument.model_validate(document_raw)
+    workflow = proj.meta.get("director_workflow")
+    source_variant = workflow.get("source_variant") if isinstance(workflow, dict) else {}
+    variant = variant_from_document(
+        document,
+        source_variant if isinstance(source_variant, dict) else {},
+        ProjectClock.from_timeline(proj.meta.get("timeline") or {}),
+    )
+    variant["index"] = 0
+    variant["duration_s"] = max(float(scene.get("end_s") or 0.0) for scene in variant["scenes"])
+    variant["_render_plan_source"] = "applied_director_document"
+    return variant
 
 
 def _creative_direction_fallback_variant(proj: Any, variant_index: int) -> dict[str, Any] | None:
@@ -9733,6 +9762,10 @@ def _creative_direction_fallback_variant(proj: Any, variant_index: int) -> dict[
 
 
 def _internal_render_variant_or_fallback(proj: Any, variant_index: int) -> tuple[dict[str, Any], bool]:
+    applied_director = _applied_director_variant(proj, variant_index)
+    if applied_director:
+        return applied_director, False
+
     plan = proj.meta.get("last_plan") if isinstance(getattr(proj, "meta", None), dict) else None
     variants = list(plan.get("variants") or []) if isinstance(plan, dict) else []
     if variants:

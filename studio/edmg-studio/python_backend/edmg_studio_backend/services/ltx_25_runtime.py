@@ -17,6 +17,8 @@ from .launcher_environment import update_launcher_environment
 
 LTX_PIPELINES_VERSION = "1.3.0"
 LTX_PIPELINE_MODULE = "ltx_pipelines.distilled"
+LTX_MULTI_GPU_MODULE = "ltx_pipelines.distilled_mgpu"
+LTX_MULTI_GPU_PREREQUISITE = "ltx_kernels"
 LTX_ENV_PREFIX = "EDMG_LTX25_"
 _COMPONENT_FLAGS = (
     ("--transformer-path", "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"),
@@ -55,6 +57,20 @@ def ltx_runtime_config(environ: Mapping[str, str] | None = None) -> LtxRuntimeCo
     )
 
 
+def _probe_module(executable: Path, module: str) -> bool:
+    try:
+        result = subprocess.run(
+            [str(executable), "-c", f"import importlib.util; raise SystemExit(0 if importlib.util.find_spec('{module}') else 1)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 def ltx_runtime_status(*, probe: bool = False) -> dict[str, Any]:
     config = ltx_runtime_config()
     issues: list[str] = []
@@ -66,12 +82,17 @@ def ltx_runtime_status(*, probe: bool = False) -> dict[str, Any]:
     if not 0 < config.smoke_timeout_s <= 86400:
         issues.append("Smoke-test timeout must be between 1 and 86400 seconds.")
     identity: dict[str, str] | None = None
+    multi_gpu_module_ready = False
+    model_parallel_prerequisite_ready = False
     if probe and not issues:
         try:
             identity = runtime_identity()
             validate_runtime_version()
+            multi_gpu_module_ready = _probe_module(executable, LTX_MULTI_GPU_MODULE)
+            model_parallel_prerequisite_ready = _probe_module(executable, LTX_MULTI_GPU_PREREQUISITE)
         except UserFacingError as exc:
             issues.append(f"{exc.message} {exc.hint or ''}".strip())
+    model_parallel_ready = multi_gpu_module_ready and model_parallel_prerequisite_ready
     return {
         "config": {
             "python": config.python,
@@ -83,6 +104,16 @@ def ltx_runtime_status(*, probe: bool = False) -> dict[str, Any]:
         "ready": not issues,
         "probe_requested": probe,
         "required_version": LTX_PIPELINES_VERSION,
+        "multi_gpu": {
+            "scene_parallel_ready": not issues,
+            "model_parallel_ready": model_parallel_ready,
+            "module": LTX_MULTI_GPU_MODULE,
+            "module_ready": multi_gpu_module_ready,
+            "missing_prerequisite": (
+                None if model_parallel_ready else LTX_MULTI_GPU_PREREQUISITE
+                if multi_gpu_module_ready else LTX_MULTI_GPU_MODULE
+            ),
+        },
     }
 
 
@@ -175,6 +206,7 @@ def _device_environment(device: str) -> dict[str, str]:
 def build_command(
     *, package_root: Path, output_path: Path, prompt: str, width: int, height: int,
     num_frames: int, fps: float, seed: int, image_path: Path | None = None,
+    image_strength: float = 1.0,
     image_conditions: Sequence[tuple[Path, int, float]] | None = None,
     offload: str = "none", fp8: bool = False,
 ) -> list[str]:
@@ -200,14 +232,14 @@ def build_command(
     ))
     conditions: list[tuple[Path, int, float]] = []
     if image_path is not None:
-        conditions.append((image_path, 0, 1.0))
+        conditions.append((image_path, 0, max(0.0, min(1.0, float(image_strength)))))
     conditions.extend(image_conditions or ())
     for condition_path, frame_index, strength in conditions:
         command.extend((
             "--image",
             str(condition_path.resolve()),
             str(int(frame_index)),
-            str(float(strength)),
+            str(max(0.0, min(1.0, float(strength)))),
         ))
     if fp8:
         command.extend(("--quantization", "fp8-cast"))
@@ -266,22 +298,24 @@ def decode_mp4(path: Path) -> list[Any]:
     if path.suffix.lower() != ".mp4" or not path.is_file() or path.stat().st_size <= 0:
         raise _runtime_error("LTX-2.5 did not produce a valid MP4", "The output file is missing or empty.")
     try:
-        import cv2
-        from PIL import Image
+        import av  # type: ignore
     except ImportError as exc:
         raise _runtime_error("MP4 validation is unavailable", "Install the Studio core video dependencies.") from exc
-    capture = cv2.VideoCapture(str(path))
     frames: list[Any] = []
     try:
-        if not capture.isOpened():
-            raise _runtime_error("LTX-2.5 produced an unreadable MP4", "OpenCV could not open the generated video stream.")
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
-    finally:
-        capture.release()
+        with av.open(str(path), mode="r") as container:
+            video_stream = next((stream for stream in container.streams if stream.type == "video"), None)
+            if video_stream is None:
+                raise _runtime_error("LTX-2.5 produced an invalid MP4", "The generated file contains no video stream.")
+            for frame in container.decode(video_stream):
+                frames.append(frame.to_image().convert("RGB"))
+    except UserFacingError:
+        raise
+    except Exception as exc:
+        raise _runtime_error(
+            "LTX-2.5 produced an unreadable MP4",
+            "The generated video stream could not be decoded.",
+        ) from exc
     if not frames:
         raise _runtime_error("LTX-2.5 produced an invalid MP4", "The generated file contains no decodable video frames.")
     return frames
@@ -290,6 +324,7 @@ def decode_mp4(path: Path) -> list[Any]:
 def generate_ltx_frames(
     *, package_root: Path, workspace: Path, prompt: str, width: int, height: int,
     num_frames: int, fps: float, seed: int, device: str, init_image: Any | None = None,
+    init_image_strength: float = 1.0,
     conditioning_images: Sequence[tuple[Any, int, float]] | None = None,
     cpu_offload: bool = False, fp8: bool = False, timeout_s: float | None = None,
     cancel_check: Callable[[], Any] | None = None,
@@ -311,7 +346,8 @@ def generate_ltx_frames(
         command = build_command(
             package_root=package_root, output_path=output_path, prompt=prompt,
             width=width, height=height, num_frames=num_frames, fps=fps, seed=seed,
-            image_path=image_path, image_conditions=image_conditions,
+            image_path=image_path, image_strength=init_image_strength,
+            image_conditions=image_conditions,
             offload="cpu" if cpu_offload else "none", fp8=fp8,
         )
         _run(

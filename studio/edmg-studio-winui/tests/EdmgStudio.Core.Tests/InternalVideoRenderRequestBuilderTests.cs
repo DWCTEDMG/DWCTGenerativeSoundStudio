@@ -219,6 +219,57 @@ public sealed class InternalVideoRenderRequestBuilderTests
     }
 
     [TestMethod]
+    public void Build_SerializesExplicitLtxMultiGpuSettings()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            VideoModelEngine = "ltx_25",
+            LtxExecutionMode = "scene_parallel",
+            LtxCudaDevices = "0, 1; 2",
+            LtxSceneWorkerCap = 3,
+            LtxAllowModeFallback = false,
+        });
+
+        Assert.AreEqual("scene_parallel", request.GetProperty("ltx_execution_mode").GetString());
+        CollectionAssert.AreEqual(
+            new[] { 0, 1, 2 },
+            request.GetProperty("ltx_cuda_devices").EnumerateArray().Select(value => value.GetInt32()).ToArray());
+        Assert.AreEqual(3, request.GetProperty("ltx_scene_worker_cap").GetInt32());
+        Assert.IsFalse(request.GetProperty("ltx_allow_mode_fallback").GetBoolean());
+    }
+
+    [TestMethod]
+    public void Build_LeavesLtxCudaDevicesEmptyForAutomaticDiscovery()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            VideoModelEngine = "ltx_25",
+        });
+
+        Assert.AreEqual(0, request.GetProperty("ltx_cuda_devices").GetArrayLength());
+    }
+
+    [TestMethod]
+    public void Build_RejectsUnsafeOrDuplicateLtxMultiGpuSettings()
+    {
+        InvalidOperationException duplicate = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+            {
+                LtxCudaDevices = "0,1,0",
+            }));
+        InvalidOperationException continuity = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+            {
+                LtxExecutionMode = "scene_parallel",
+                LtxCudaDevices = "0,1",
+                KeyframeContinuityMode = "project",
+            }));
+
+        StringAssert.Contains(duplicate.Message, "must be unique");
+        StringAssert.Contains(continuity.Message, "requires scene continuity");
+    }
+
+    [TestMethod]
     public void Build_RequiresSourceForI2vAndRejectsOverlappingWholeChunk()
     {
         InvalidOperationException sourceException = Assert.ThrowsExactly<InvalidOperationException>(() =>

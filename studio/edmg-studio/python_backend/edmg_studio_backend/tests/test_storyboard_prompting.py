@@ -119,7 +119,10 @@ def test_ltx_uses_compiled_director_prompt_without_overriding_user_edits() -> No
         duration_s=2.0,
     )
     assert scene_plan is not None
-    assert scene_plan["shots"][0]["prompt"] == "LTX chronological action prompt"
+    planned_prompt = scene_plan["shots"][0]["prompt"]
+    assert planned_prompt.startswith("LTX chronological action prompt")
+    assert "Temporal execution:" in planned_prompt
+    assert "slow pan" in planned_prompt
 
     split_end_s = 7.0 + (1.0 / 44_100.0)
     split_scene = {**scene, "end_s": split_end_s}
@@ -138,7 +141,8 @@ def test_ltx_uses_compiled_director_prompt_without_overriding_user_edits() -> No
     )
     assert split_plan is not None
     assert split_plan["shot_count"] == 2
-    assert all(shot["prompt"] == "LTX chronological action prompt" for shot in split_plan["shots"])
+    assert all(shot["prompt"].startswith("LTX chronological action prompt") for shot in split_plan["shots"])
+    assert all("Temporal execution:" in shot["prompt"] for shot in split_plan["shots"])
 
     timeline = {
         "tracks": [
@@ -163,7 +167,9 @@ def test_ltx_uses_compiled_director_prompt_without_overriding_user_edits() -> No
         duration_s=2.0,
     )
     assert timeline_plan is not None
-    assert timeline_plan["shots"][0]["prompt"] == "Hunyuan source prompt"
+    timeline_prompt = timeline_plan["shots"][0]["prompt"]
+    assert timeline_prompt.startswith("Hunyuan source prompt")
+    assert "Temporal execution:" in timeline_prompt
 
     long_prompt = " ".join(f"word-{index}" for index in range(120))
     refined = internal_video._refine_video_model_prompt(  # noqa: SLF001 - renderer prompt contract
@@ -173,7 +179,10 @@ def test_ltx_uses_compiled_director_prompt_without_overriding_user_edits() -> No
         scene=scene,
         engine="ltx_25",
     )
-    assert refined == long_prompt
+    assert refined.startswith(long_prompt)
+    assert "Temporal execution:" in refined
+    assert "no static hold" in refined
+    assert all(word in refined for word in long_prompt.split())
 
 
 def test_variant_save_reload_and_reorder_preserve_authored_contract(tmp_path, monkeypatch):

@@ -35,6 +35,55 @@ def _make_render_project(tmp_path: Path):
     return store, project
 
 
+def test_internal_render_prioritizes_applied_director_document(tmp_path: Path) -> None:
+    store, project = _make_render_project(tmp_path)
+    project.meta["timeline"] = {
+        "timebase": {"sample_rate": 48000, "frame_rate": 24},
+    }
+    project.meta["director_document"] = {
+        "version": 1,
+        "story_bible": {
+            "project_theme": "Cosmic road",
+            "visual_style": "living oil painting",
+            "continuity_rules": ["Keep the traveler moving left to right"],
+        },
+        "scenes": [
+            {
+                "scene_id": "reviewed-scene-1",
+                "start_sample": "0",
+                "end_sample": "192000",
+                "intent": "The traveler crosses the moonlit road.",
+                "actions": ["walks steadily while the coat and hair move"],
+                "camera": {"shot_type": "wide", "movement": "lateral dolly"},
+                "environment": {
+                    "location": "foggy rural town",
+                    "secondary_motion": ["fog and lantern light move at different depths"],
+                },
+            }
+        ],
+    }
+    project.meta["director_workflow"] = {"source_variant": {}}
+
+    variant, used_fallback = app_module._internal_render_variant_or_fallback(project, 0)
+
+    assert used_fallback is False
+    assert variant["_render_plan_source"] == "applied_director_document"
+    assert variant["duration_s"] == 4.0
+    scene = variant["scenes"][0]
+    ltx_package = scene["director_prompt_packages"]["ltx_25"]
+    assert scene["id"] == "reviewed-scene-1"
+    assert scene["start_s"] == 0.0
+    assert scene["end_s"] == 4.0
+    assert scene["director_scene"]["scene_id"] == "reviewed-scene-1"
+    assert scene["action"] == "walks steadily while the coat and hair move"
+    assert scene["camera"] == "lateral dolly"
+    assert scene["environment_motion"] == "fog and lantern light move at different depths"
+    assert ltx_package["engine"] == "ltx_25"
+    assert ltx_package["scene_source_hash"]
+    assert "walks steadily" in ltx_package["prompt"]
+    assert scene["prompt"] != "neon skyline"
+
+
 class _RunningJobs:
     def get(self, _project_id: str, _job_id: str):
         return SimpleNamespace(status="running", progress={})
@@ -149,6 +198,100 @@ def test_internal_video_request_rejects_invalid_hunyuan_chunk_overlap() -> None:
         hunyuan_chunk_overlap=2,
     )
     assert request.video_model_engine == "ltx_25"
+
+
+def test_internal_video_request_validates_ltx_multi_gpu_contract() -> None:
+    request = InternalVideoRenderRequest(
+        video_model_engine="ltx_25",
+        ltx_execution_mode="scene_parallel",
+        ltx_cuda_devices=[0, 1, 2],
+        ltx_scene_worker_cap=3,
+        ltx_allow_mode_fallback=False,
+    )
+
+    assert request.ltx_cuda_devices == [0, 1, 2]
+    with pytest.raises(ValueError, match="must be unique"):
+        InternalVideoRenderRequest(ltx_cuda_devices=[0, 0])
+    with pytest.raises(ValueError, match="requires scene continuity"):
+        InternalVideoRenderRequest(
+            ltx_execution_mode="scene_parallel",
+            keyframe_continuity_mode="project",
+        )
+
+
+def test_ltx_execution_resolution_is_explicit_and_safe() -> None:
+    settings = InternalVideoSettings(ltx_cuda_devices=(0, 1, 2), ltx_scene_worker_cap=3)
+    assert internal_video.resolve_ltx_execution(
+        settings,
+        available_cuda_devices=(0, 1, 2),
+        model_parallel_ready=False,
+    ) == ("scene_parallel", (0, 1, 2))
+
+    with pytest.raises(UserFacingError) as model_parallel_error:
+        internal_video.resolve_ltx_execution(
+            InternalVideoSettings(
+                ltx_execution_mode="model_parallel",
+                ltx_cuda_devices=(0, 1, 2),
+                ltx_allow_mode_fallback=False,
+            ),
+            available_cuda_devices=(0, 1, 2),
+            model_parallel_ready=False,
+        )
+    assert model_parallel_error.value.code == "LTX_MODEL_PARALLEL_UNAVAILABLE"
+
+    with pytest.raises(UserFacingError) as unqualified_model_parallel_error:
+        internal_video.resolve_ltx_execution(
+            InternalVideoSettings(
+                ltx_execution_mode="model_parallel",
+                ltx_cuda_devices=(0, 1, 2),
+                ltx_allow_mode_fallback=False,
+            ),
+            available_cuda_devices=(0, 1, 2),
+            model_parallel_ready=True,
+        )
+    assert unqualified_model_parallel_error.value.code == "LTX_MODEL_PARALLEL_UNAVAILABLE"
+
+    assert internal_video.resolve_ltx_execution(
+        InternalVideoSettings(
+            ltx_execution_mode="model_parallel",
+            ltx_cuda_devices=(0, 1, 2),
+            ltx_allow_mode_fallback=True,
+        ),
+        available_cuda_devices=(0, 1, 2),
+        model_parallel_ready=True,
+    ) == ("scene_parallel", (0, 1, 2))
+
+    with pytest.raises(UserFacingError) as single_gpu_model_parallel_error:
+        internal_video.resolve_ltx_execution(
+            InternalVideoSettings(
+                ltx_execution_mode="model_parallel",
+                ltx_cuda_devices=(1,),
+                ltx_allow_mode_fallback=True,
+            ),
+            available_cuda_devices=(0, 1),
+            model_parallel_ready=True,
+        )
+    assert single_gpu_model_parallel_error.value.code == "LTX_MODEL_PARALLEL_UNAVAILABLE"
+
+    assert internal_video.resolve_ltx_execution(
+        InternalVideoSettings(
+            ltx_execution_mode="scene_parallel",
+            ltx_cuda_devices=(0,),
+            ltx_allow_mode_fallback=True,
+        ),
+        available_cuda_devices=(0, 1, 2),
+        model_parallel_ready=False,
+    ) == ("single", (0,))
+
+    assert internal_video.resolve_ltx_execution(
+        InternalVideoSettings(
+            ltx_execution_mode="single",
+            ltx_cuda_devices=(1,),
+            ltx_allow_mode_fallback=False,
+        ),
+        available_cuda_devices=(0, 1, 2),
+        model_parallel_ready=False,
+    ) == ("single", (1,))
 
 
 def test_internal_settings_parse_keyframe_continuity_mode() -> None:
@@ -759,6 +902,39 @@ def test_video_model_motion_retry_is_bounded(tmp_path, monkeypatch, always_stati
     metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
     assert len(metadata["motion_validation"]["native_scenes"]) == 1
     assert metadata["motion_validation"]["native_scenes"][0]["generation_attempt"] == 2
+
+
+def test_ltx_motion_retry_changes_prompt_seed_and_conditioning() -> None:
+    prompt = "A dancer moves through a living oil painting."
+    first_prompt, first_strength = internal_video._video_model_motion_attempt_controls(  # noqa: SLF001
+        engine="ltx_25", prompt=prompt, anchor_strength=0.2, attempt_index=0,
+    )
+    retry_prompt, retry_strength = internal_video._video_model_motion_attempt_controls(  # noqa: SLF001
+        engine="ltx_25", prompt=prompt, anchor_strength=0.2, attempt_index=1,
+    )
+    final_prompt, final_strength = internal_video._video_model_motion_attempt_controls(  # noqa: SLF001
+        engine="ltx_25", prompt=prompt, anchor_strength=0.2, attempt_index=2,
+    )
+    first_seed, _, _ = internal_video._video_model_motion_attempt_parameters(  # noqa: SLF001
+        engine="ltx_25", seed=11, motion_bucket_id=127, noise_aug_strength=0.02, attempt_index=0,
+    )
+    retry_seed, _, _ = internal_video._video_model_motion_attempt_parameters(  # noqa: SLF001
+        engine="ltx_25", seed=11, motion_bucket_id=127, noise_aug_strength=0.02, attempt_index=1,
+    )
+
+    assert first_prompt == prompt
+    assert first_strength == pytest.approx(0.2)
+    assert retry_seed != first_seed
+    assert retry_strength == pytest.approx(0.14)
+    assert final_strength == pytest.approx(0.08)
+    assert "avoid static holds" in retry_prompt
+    assert "no frozen intervals" in final_prompt
+
+    unchanged_prompt, unchanged_strength = internal_video._video_model_motion_attempt_controls(  # noqa: SLF001
+        engine="svd", prompt=prompt, anchor_strength=0.2, attempt_index=2,
+    )
+    assert unchanged_prompt == prompt
+    assert unchanged_strength == pytest.approx(0.2)
 
 
 def test_internal_video_request_rejects_flux_still_model(tmp_path, monkeypatch) -> None:
@@ -1494,3 +1670,367 @@ def test_release_cached_internal_pipelines_moves_cuda_previews_to_cpu(monkeypatc
     assert inpaint.devices == ["cpu"]
     assert cleanup_devices == ["cuda"]
     assert internal_video._PipelineCache.get(("preview", "cuda", "video")) is None  # noqa: SLF001
+
+
+def test_group_ltx_scene_work_items_assigns_whole_scenes_per_device() -> None:
+    items = [
+        internal_video._VideoModelSceneWorkItem(
+            global_scene_index=index,
+            source_scene_index=source_scene_index,
+            shot_index=shot_index,
+            shot_count=2 if source_scene_index == 0 else 1,
+            start_s=float(index),
+            end_s=float(index + 1),
+            start_f=index * 2,
+            end_f=(index * 2) + 2,
+            scene_frame_count=2,
+            adapter_frames=9,
+            authored_scene_boundary=source_scene_index > 0 and shot_index == 0,
+            transition_kind="technical_continue" if shot_index else "opening",
+            continuity_scope="scene",
+            continuity_anchor_source="generated_keyframe",
+            schedule_frame=index * 2,
+            prompt=f"prompt-{index}",
+            negative_prompt="neg",
+            prompt_for_model=f"prompt-{index}",
+            score_info={"motion_score": 4},
+            motion_bucket_id=127,
+            seed=100 + index,
+            cfg_for_scene=7.0,
+            steps_for_scene=8,
+            scheduled_steps=8,
+            noise_aug_strength=0.02,
+            shot_anchor_strength=0.2,
+            adapter_w=512,
+            adapter_h=512,
+            adapter_note=None,
+            anchor_mode="start",
+            anchorless=False,
+            start_anchor_img=None,
+            end_anchor_img=None,
+            init_img=None,
+        )
+        for index, (source_scene_index, shot_index) in enumerate(((0, 0), (0, 1), (1, 0), (2, 0)))
+    ]
+
+    groups = internal_video._group_ltx_scene_work_items(items, device_ids=(0, 1))
+
+    assert [(group.source_scene_index, group.device_id) for group in groups] == [(0, 0), (1, 1), (2, 1)]
+    assert [item.global_scene_index for item in groups[0].items] == [0, 1]
+    assert [item.global_scene_index for item in groups[1].items] == [2]
+    assert [item.global_scene_index for item in groups[2].items] == [3]
+
+
+def test_generate_video_model_scene_result_uses_previous_frame_only_for_technical_continuity(monkeypatch) -> None:
+    base_anchor = Image.new("RGB", (32, 32), (10, 10, 10))
+    previous_frame = Image.new("RGB", (32, 32), (200, 10, 10))
+    captured_init_images: list[Image.Image | None] = []
+
+    def fake_generate_video_model_frames(**kwargs):
+        init_image = kwargs.get("init_image")
+        captured_init_images.append(init_image.copy() if init_image is not None else None)
+        return [Image.new("RGB", (32, 32), (0, 64, 128)) for _ in range(9)]
+
+    monkeypatch.setattr(internal_video, "generate_video_model_frames", fake_generate_video_model_frames)
+    monkeypatch.setattr(
+        internal_video,
+        "analyze_motion_images",
+        lambda images, fps: {
+            "status": "pass",
+            "perceptually_unique_frames": len(images),
+            "frame_count": len(images),
+            "meaningful_transition_count": max(1, len(images) - 1),
+            "frozen_pair_ratio": 0.0,
+        },
+    )
+
+    common = dict(
+        source_scene_index=0,
+        shot_index=0,
+        shot_count=1,
+        start_s=0.0,
+        end_s=4.0,
+        start_f=0,
+        end_f=8,
+        scene_frame_count=8,
+        adapter_frames=9,
+        continuity_scope="scene",
+        continuity_anchor_source="generated_keyframe",
+        schedule_frame=0,
+        prompt="prompt",
+        negative_prompt="neg",
+        prompt_for_model="prompt",
+        score_info={"motion_score": 4},
+        motion_bucket_id=127,
+        seed=123,
+        cfg_for_scene=7.0,
+        steps_for_scene=8,
+        scheduled_steps=8,
+        noise_aug_strength=0.02,
+        shot_anchor_strength=0.2,
+        adapter_w=32,
+        adapter_h=32,
+        adapter_note=None,
+        anchor_mode="start",
+        anchorless=False,
+        start_anchor_img=base_anchor,
+        end_anchor_img=base_anchor,
+        init_img=base_anchor,
+    )
+
+    technical = internal_video._VideoModelSceneWorkItem(
+        global_scene_index=0,
+        authored_scene_boundary=False,
+        transition_kind="technical_continue",
+        **common,
+    )
+    authored = internal_video._VideoModelSceneWorkItem(
+        global_scene_index=1,
+        authored_scene_boundary=True,
+        transition_kind="dissolve",
+        **common,
+    )
+    settings = InternalVideoSettings(video_model_dtype="auto")
+
+    first = internal_video._generate_video_model_scene_result(
+        work_item=technical,
+        engine="ltx_25",
+        video_model_path=Path("video-model"),
+        model_dir=Path("base-model"),
+        device="cuda:0",
+        settings=settings,
+        workspace=Path("workspace"),
+        cancel_check_fn=None,
+        initial_previous_frame=previous_frame,
+    )
+    second = internal_video._generate_video_model_scene_result(
+        work_item=authored,
+        engine="ltx_25",
+        video_model_path=Path("video-model"),
+        model_dir=Path("base-model"),
+        device="cuda:0",
+        settings=settings,
+        workspace=Path("workspace"),
+        cancel_check_fn=None,
+        initial_previous_frame=previous_frame,
+    )
+
+    assert captured_init_images[0] is not None
+    assert captured_init_images[0].getpixel((0, 0)) == previous_frame.getpixel((0, 0))
+    assert captured_init_images[1] is not None
+    assert captured_init_images[1].getpixel((0, 0)) == base_anchor.getpixel((0, 0))
+    assert first.native_motion_report["continuity_anchor_source"] == "previous_native_motion_frame"
+    assert second.native_motion_report["continuity_anchor_source"] == "generated_keyframe"
+
+
+def test_run_ltx_scene_group_preserves_in_group_anchor_chain(monkeypatch, tmp_path: Path) -> None:
+    seeds: list[int] = []
+    init_pixels: list[tuple[int, int, int] | None] = []
+
+    def fake_generate_video_model_frames(**kwargs):
+        seeds.append(kwargs["seed"])
+        init_image = kwargs.get("init_image")
+        init_pixels.append(None if init_image is None else init_image.getpixel((0, 0)))
+        color = (kwargs["seed"] % 255, 40, 90)
+        return [Image.new("RGB", (16, 16), color) for _ in range(kwargs["num_frames"])]
+
+    monkeypatch.setattr(internal_video, "generate_video_model_frames", fake_generate_video_model_frames)
+    monkeypatch.setattr(
+        internal_video,
+        "analyze_motion_images",
+        lambda images, fps: {
+            "status": "pass",
+            "perceptually_unique_frames": len(images),
+            "frame_count": len(images),
+            "meaningful_transition_count": max(1, len(images) - 1),
+            "frozen_pair_ratio": 0.0,
+        },
+    )
+
+    anchor = Image.new("RGB", (16, 16), (5, 5, 5))
+    item0 = internal_video._VideoModelSceneWorkItem(
+        global_scene_index=0,
+        source_scene_index=0,
+        shot_index=0,
+        shot_count=2,
+        start_s=0.0,
+        end_s=4.0,
+        start_f=0,
+        end_f=8,
+        scene_frame_count=8,
+        adapter_frames=9,
+        authored_scene_boundary=False,
+        transition_kind="opening",
+        continuity_scope="scene",
+        continuity_anchor_source="generated_keyframe",
+        schedule_frame=0,
+        prompt="prompt",
+        negative_prompt="neg",
+        prompt_for_model="prompt",
+        score_info={"motion_score": 4},
+        motion_bucket_id=127,
+        seed=11,
+        cfg_for_scene=7.0,
+        steps_for_scene=8,
+        scheduled_steps=8,
+        noise_aug_strength=0.02,
+        shot_anchor_strength=0.2,
+        adapter_w=16,
+        adapter_h=16,
+        adapter_note=None,
+        anchor_mode="start",
+        anchorless=False,
+        start_anchor_img=anchor,
+        end_anchor_img=anchor,
+        init_img=anchor,
+    )
+    item1 = internal_video._VideoModelSceneWorkItem(
+        global_scene_index=1,
+        source_scene_index=0,
+        shot_index=1,
+        shot_count=2,
+        start_s=4.0,
+        end_s=8.0,
+        start_f=8,
+        end_f=16,
+        scene_frame_count=8,
+        adapter_frames=9,
+        authored_scene_boundary=False,
+        transition_kind="technical_continue",
+        continuity_scope="scene",
+        continuity_anchor_source="generated_keyframe",
+        schedule_frame=8,
+        prompt="prompt",
+        negative_prompt="neg",
+        prompt_for_model="prompt",
+        score_info={"motion_score": 4},
+        motion_bucket_id=127,
+        seed=22,
+        cfg_for_scene=7.0,
+        steps_for_scene=8,
+        scheduled_steps=8,
+        noise_aug_strength=0.02,
+        shot_anchor_strength=0.2,
+        adapter_w=16,
+        adapter_h=16,
+        adapter_note=None,
+        anchor_mode="start",
+        anchorless=False,
+        start_anchor_img=anchor,
+        end_anchor_img=anchor,
+        init_img=anchor,
+    )
+    group = internal_video._LtxSceneGroup(source_scene_index=0, device_id=1, items=(item0, item1))
+
+    source_scene_index, results = internal_video._run_ltx_scene_group(
+        group,
+        engine="ltx_25",
+        video_model_path=tmp_path / "video_model",
+        model_dir=tmp_path / "base_model",
+        settings=InternalVideoSettings(video_model_dtype="auto"),
+        group_workspace=tmp_path / "workspace",
+        cancel_check_fn=None,
+    )
+
+    assert source_scene_index == 0
+    assert len(results) == 2
+    assert init_pixels[0] == anchor.getpixel((0, 0))
+    assert init_pixels[1] == results[0].last_frame.getpixel((0, 0))
+    assert results[1].native_motion_report["continuity_anchor_source"] == "previous_native_motion_frame"
+
+
+def test_run_ltx_scene_group_propagates_cancellation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        internal_video,
+        "generate_video_model_frames",
+        lambda **kwargs: [Image.new("RGB", (16, 16), (1, 2, 3)) for _ in range(kwargs["num_frames"])],
+    )
+    monkeypatch.setattr(
+        internal_video,
+        "analyze_motion_images",
+        lambda images, fps: {
+            "status": "pass",
+            "perceptually_unique_frames": len(images),
+            "frame_count": len(images),
+            "meaningful_transition_count": max(1, len(images) - 1),
+            "frozen_pair_ratio": 0.0,
+        },
+    )
+    item = internal_video._VideoModelSceneWorkItem(
+        global_scene_index=0,
+        source_scene_index=0,
+        shot_index=0,
+        shot_count=1,
+        start_s=0.0,
+        end_s=4.0,
+        start_f=0,
+        end_f=8,
+        scene_frame_count=8,
+        adapter_frames=9,
+        authored_scene_boundary=False,
+        transition_kind="opening",
+        continuity_scope="scene",
+        continuity_anchor_source="generated_keyframe",
+        schedule_frame=0,
+        prompt="prompt",
+        negative_prompt="neg",
+        prompt_for_model="prompt",
+        score_info={"motion_score": 4},
+        motion_bucket_id=127,
+        seed=11,
+        cfg_for_scene=7.0,
+        steps_for_scene=8,
+        scheduled_steps=8,
+        noise_aug_strength=0.02,
+        shot_anchor_strength=0.2,
+        adapter_w=16,
+        adapter_h=16,
+        adapter_note=None,
+        anchor_mode="start",
+        anchorless=False,
+        start_anchor_img=Image.new("RGB", (16, 16), (0, 0, 0)),
+        end_anchor_img=Image.new("RGB", (16, 16), (0, 0, 0)),
+        init_img=Image.new("RGB", (16, 16), (0, 0, 0)),
+    )
+    group = internal_video._LtxSceneGroup(source_scene_index=0, device_id=0, items=(item,))
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        internal_video._run_ltx_scene_group(
+            group,
+            engine="ltx_25",
+            video_model_path=tmp_path / "video_model",
+            model_dir=tmp_path / "base_model",
+            settings=InternalVideoSettings(video_model_dtype="auto"),
+            group_workspace=tmp_path / "workspace",
+            cancel_check_fn=lambda: (_ for _ in ()).throw(RuntimeError("cancelled")),
+        )
+
+
+def test_run_ltx_device_lane_serializes_groups_and_stops_after_failure(monkeypatch, tmp_path: Path) -> None:
+    groups = (
+        internal_video._LtxSceneGroup(source_scene_index=0, device_id=2, items=()),
+        internal_video._LtxSceneGroup(source_scene_index=1, device_id=2, items=()),
+        internal_video._LtxSceneGroup(source_scene_index=2, device_id=2, items=()),
+    )
+    started: list[int] = []
+
+    def fake_run_group(group, **kwargs):
+        started.append(group.source_scene_index)
+        if group.source_scene_index == 1:
+            raise RuntimeError("lane failure")
+        return group.source_scene_index, ()
+
+    monkeypatch.setattr(internal_video, "_run_ltx_scene_group", fake_run_group)
+
+    with pytest.raises(RuntimeError, match="lane failure"):
+        internal_video._run_ltx_device_lane(
+            groups,
+            engine="ltx_25",
+            video_model_path=tmp_path / "video_model",
+            model_dir=tmp_path / "base_model",
+            settings=InternalVideoSettings(video_model_dtype="auto"),
+            lane_workspace=tmp_path / "lane",
+            cancel_check_fn=None,
+        )
+
+    assert started == [0, 1]

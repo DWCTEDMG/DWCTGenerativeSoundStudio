@@ -777,6 +777,7 @@ def generate_video_model_frames(
     chunk_frames: int | None = None,
     chunk_overlap: int = 2,
     chunk_callback: Callable[[int, int], Any] | None = None,
+    image_conditioning_strength: float = 1.0,
 ) -> list[Any]:
     """Generate PIL frames with an internal video model.
 
@@ -822,6 +823,7 @@ def generate_video_model_frames(
             seed=int(seed if seed is not None else random.SystemRandom().randint(0, 2**31 - 1)),
             device=device,
             init_image=working_image,
+            init_image_strength=max(0.0, min(1.0, float(image_conditioning_strength))),
             cpu_offload=cpu_offload,
             fp8=str(dtype or "").strip().lower().startswith("fp8"),
             cancel_check=cancel_check,

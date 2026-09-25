@@ -10,6 +10,7 @@ import logging
 import math
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -104,9 +105,13 @@ class InternalVideoSettings:
     deforum_overrides: dict[str, Any] | None = None
     # Internal video-model adapter. SVD is image-to-video from generated
     # keyframes; AnimateDiff is text-to-video through a Diffusers motion adapter.
-    video_model_engine: str = "auto"  # auto|svd|animatediff|hunyuan_video15
+    video_model_engine: str = "auto"  # auto|svd|animatediff|hunyuan_video15|ltx_25
     video_model_id: str | None = None
     video_model_path: str | None = None
+    ltx_execution_mode: str = "auto"  # auto|single|scene_parallel|model_parallel
+    ltx_cuda_devices: tuple[int, ...] = field(default_factory=tuple)
+    ltx_scene_worker_cap: int = 3
+    ltx_allow_mode_fallback: bool = True
     hunyuan_generation_mode: str = "auto"  # auto|t2v|i2v
     hunyuan_low_vram_mode: bool = False
     hunyuan_chunk_frames: int = 25
@@ -139,10 +144,647 @@ def normalize_internal_motion_strategy(value: Any) -> str:
     return "manual"
 
 
+def resolve_ltx_execution(
+    settings: InternalVideoSettings,
+    *,
+    available_cuda_devices: tuple[int, ...],
+    model_parallel_ready: bool,
+) -> tuple[str, tuple[int, ...]]:
+    requested = str(settings.ltx_execution_mode or "auto").strip().lower()
+    if requested not in {"auto", "single", "scene_parallel", "model_parallel"}:
+        raise UserFacingError(
+            "Unsupported LTX execution mode",
+            hint="Choose auto, single, scene_parallel, or model_parallel.",
+            code="LTX_EXECUTION_MODE_INVALID",
+            status_code=422,
+        )
+    selected = tuple(settings.ltx_cuda_devices) or tuple(available_cuda_devices)
+    selected = selected[: max(1, int(settings.ltx_scene_worker_cap))]
+    if not selected:
+        raise UserFacingError(
+            "No CUDA devices are available for LTX-2.5",
+            hint="Select at least one available CUDA GPU.",
+            code="LTX_CUDA_DEVICE_REQUIRED",
+            status_code=422,
+        )
+    unavailable = tuple(device for device in selected if device not in available_cuda_devices)
+    if unavailable:
+        raise UserFacingError(
+            "An unavailable CUDA device was selected for LTX-2.5",
+            hint=f"Unavailable device IDs: {', '.join(map(str, unavailable))}.",
+            code="LTX_CUDA_DEVICE_UNAVAILABLE",
+            status_code=422,
+        )
+    if requested == "model_parallel":
+        prerequisite_hint = (
+            "The installed prerequisites are detected, but native model-parallel invocation is not yet qualified."
+            if model_parallel_ready
+            else "Install the qualified ltx-kernels prerequisite."
+        )
+        if not settings.ltx_allow_mode_fallback or len(selected) < 2:
+            fallback_hint = (
+                "Select at least two CUDA devices for an explicit scene-parallel fallback."
+                if settings.ltx_allow_mode_fallback
+                else "Choose scene_parallel to use multiple GPUs safely."
+            )
+            raise UserFacingError(
+                "LTX model-parallel rendering is not available",
+                hint=f"{prerequisite_hint} {fallback_hint}",
+                code="LTX_MODEL_PARALLEL_UNAVAILABLE",
+                status_code=422,
+            )
+        requested = "scene_parallel"
+    if requested == "auto":
+        requested = "scene_parallel" if len(selected) > 1 else "single"
+    if requested == "scene_parallel" and len(selected) < 2:
+        if not settings.ltx_allow_mode_fallback:
+            raise UserFacingError(
+                "LTX scene-parallel rendering requires at least two CUDA devices",
+                hint="Select two or more CUDA devices or allow fallback to single-GPU rendering.",
+                code="LTX_SCENE_PARALLEL_UNAVAILABLE",
+                status_code=422,
+            )
+        requested = "single"
+    if requested == "scene_parallel" and normalize_keyframe_continuity_mode(settings.keyframe_continuity_mode) == "project":
+        if not settings.ltx_allow_mode_fallback:
+            raise UserFacingError(
+                "LTX scene-parallel rendering is incompatible with project-wide continuity",
+                hint="Use scene continuity or choose single-GPU rendering.",
+                code="LTX_SCENE_PARALLEL_CONTINUITY_UNSAFE",
+                status_code=422,
+            )
+        requested = "single"
+    return requested, selected if requested != "single" else selected[:1]
+
+
 def normalize_keyframe_continuity_mode(value: Any) -> str:
     """Normalize chained keyframe continuity scope with a safe legacy default."""
 
     return "project" if str(value or "").strip().lower() == "project" else "scene"
+
+
+
+
+@dataclass(frozen=True)
+class _VideoModelSceneWorkItem:
+    global_scene_index: int
+    source_scene_index: int
+    shot_index: int
+    shot_count: int
+    start_s: float
+    end_s: float
+    start_f: int
+    end_f: int
+    scene_frame_count: int
+    adapter_frames: int
+    authored_scene_boundary: bool
+    transition_kind: str
+    continuity_scope: str
+    continuity_anchor_source: str
+    schedule_frame: int
+    prompt: str
+    negative_prompt: str
+    prompt_for_model: str
+    score_info: dict[str, Any]
+    motion_bucket_id: int
+    seed: int
+    cfg_for_scene: float
+    steps_for_scene: int
+    scheduled_steps: int
+    noise_aug_strength: float
+    shot_anchor_strength: float
+    adapter_w: int
+    adapter_h: int
+    adapter_note: str | None
+    anchor_mode: str
+    anchorless: bool
+    start_anchor_img: Image.Image | None
+    end_anchor_img: Image.Image | None
+    init_img: Image.Image | None
+
+
+@dataclass(frozen=True)
+class _VideoModelSceneGenerationResult:
+    work_item: _VideoModelSceneWorkItem
+    generated: tuple[Image.Image, ...]
+    native_motion_report: dict[str, Any]
+    last_frame: Image.Image | None
+
+
+@dataclass(frozen=True)
+class _LtxSceneGroup:
+    source_scene_index: int
+    device_id: int
+    items: tuple[_VideoModelSceneWorkItem, ...]
+
+
+def _scene_work_item_native_fps(work_item: _VideoModelSceneWorkItem, fps_fallback: int) -> int:
+    duration = max(float(work_item.end_s) - float(work_item.start_s), 1e-6)
+    estimated = int(round(float(work_item.adapter_frames) / duration))
+    return max(1, estimated or int(fps_fallback) or 1)
+
+
+def _copy_image(image: Image.Image | None) -> Image.Image | None:
+    if image is None:
+        return None
+    return image.convert("RGB").copy()
+
+
+def _available_ltx_cuda_devices() -> tuple[int, ...]:
+    try:
+        import torch  # type: ignore
+
+        if not (getattr(torch, "cuda", None) and torch.cuda.is_available()):
+            return ()
+        count = int(torch.cuda.device_count())
+    except Exception:
+        return ()
+    return tuple(device_id for device_id in range(max(0, count)))
+
+
+def _build_storyboard_scene_work_items(
+    *,
+    sorted_scenes: list[dict[str, Any]],
+    scenes: list[dict[str, Any]],
+    duration_s: float,
+    total_frames: int,
+    fps_r: int,
+    fps_schedule: int,
+    fi_cursor: int,
+    settings: InternalVideoSettings,
+    engine: str,
+    key_imgs: dict[float, Image.Image],
+    key_times: list[float],
+    timeline: dict[str, Any] | None,
+    deforum_context: UnifiedDeforumRenderContext,
+    anchorless_hunyuan: bool,
+    device: str,
+    video_model_temporal_step_cap: int | None,
+    work_tag: str,
+    log_fn: Any | None = None,
+) -> tuple[list[_VideoModelSceneWorkItem], int]:
+    max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
+    built: list[_VideoModelSceneWorkItem] = []
+    cursor = int(fi_cursor)
+    previous_storyboard_source_scene: int | None = None
+    continuity_scope = normalize_keyframe_continuity_mode(settings.keyframe_continuity_mode)
+    for scene_index, scene in enumerate(sorted_scenes):
+        try:
+            start_s = max(0.0, float(scene.get("start_s", 0.0) or 0.0))
+        except Exception:
+            start_s = 0.0
+        try:
+            end_s = float(scene.get("end_s", 0.0) or 0.0)
+        except Exception:
+            end_s = 0.0
+        if end_s <= start_s:
+            next_start = (
+                float(sorted_scenes[scene_index + 1].get("start_s", duration_s) or duration_s)
+                if scene_index + 1 < len(sorted_scenes)
+                else duration_s
+            )
+            end_s = max(start_s + (1.0 / fps_r), next_start)
+        start_f = max(cursor, int(round(start_s * fps_r)))
+        if anchorless_hunyuan:
+            start_f = cursor
+        end_f = min(total_frames, max(start_f + 1, int(round(end_s * fps_r))))
+        if scene_index == len(sorted_scenes) - 1:
+            end_f = total_frames
+        if start_f >= total_frames or end_f <= start_f:
+            continue
+        source_scene_index = int(scene.get("_storyboard_source_scene_index", scene_index) or 0)
+        authored_scene_boundary = (
+            previous_storyboard_source_scene is not None
+            and source_scene_index != previous_storyboard_source_scene
+        )
+        transition_kind = str(
+            scene.get("_storyboard_transition")
+            or ("dissolve" if authored_scene_boundary else "technical_continue")
+        )
+        scene_frame_count = max(1, end_f - start_f)
+        shot_index = int(scene.get("_storyboard_shot_index", 0) or 0)
+        adapter_frames = (
+            scene_frame_count
+            if engine == "hunyuan_video15"
+            else min(max_scene_frames, max(MIN_VIDEO_MODEL_NATIVE_FRAMES, scene_frame_count))
+        )
+        if engine == "svd":
+            adapter_frames = min(adapter_frames, 25)
+            cuda_vram = _cuda_total_vram_gb(device)
+            if cuda_vram and cuda_vram <= 6.5:
+                adapter_frames = min(adapter_frames, 8)
+            elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
+                adapter_frames = min(adapter_frames, 12)
+        elif engine == "animatediff":
+            cuda_vram = _cuda_total_vram_gb(device)
+            if cuda_vram and cuda_vram <= 6.5:
+                adapter_frames = min(adapter_frames, 12)
+            elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
+                adapter_frames = min(adapter_frames, 16)
+        frame_budget = describe_video_model_frame_budget(
+            native_frame_count=adapter_frames,
+            output_frame_count=scene_frame_count,
+            fps=fps_r,
+        )
+        if frame_budget["status"] != "pass":
+            ratio = frame_budget.get("stretch_ratio")
+            ratio_label = f"{float(ratio):.1f}x" if ratio is not None else "unbounded"
+            raise UserFacingError(
+                "This video-model shot does not have enough native frames for continuous motion.",
+                hint=(
+                    f"The shot would stretch {adapter_frames} native {engine.upper()} frames across "
+                    f"{scene_frame_count} raw output frames ({ratio_label}). Use at least 8 Frames per "
+                    "scene, keep raw motion shots within a 2x stretch, and select Storyboard full motion "
+                    "for long scenes. On this 6 GB CUDA system, use 4-second shots at 2 raw FPS, then "
+                    "interpolate the finished output to 24 FPS."
+                ),
+                code="INSUFFICIENT_TEMPORAL_FRAME_DENSITY",
+                status_code=400,
+            )
+        schedule_frame = int(round(start_s * float(fps_schedule)))
+        prompt = _prompt_text_for_frame(
+            frame_idx=schedule_frame,
+            scenes=scenes,
+            timeline=timeline,
+            deforum_context=deforum_context,
+            fps=fps_schedule,
+        ) or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
+        prompt = _video_model_prompt_for_engine(
+            scene,
+            prompt=prompt,
+            engine=engine,
+            allow_director_package=deforum_context.prompt_source == "scene",
+        )
+        negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
+        start_anchor_img: Image.Image | None = None
+        end_anchor_img: Image.Image | None = None
+        if not anchorless_hunyuan:
+            start_anchor_img, end_anchor_img = _video_anchor_images(
+                key_imgs=key_imgs,
+                key_times=key_times,
+                start_s=start_s,
+                end_s=end_s,
+                duration_s=duration_s,
+                fps_render=fps_r,
+                width=settings.width,
+                height=settings.height,
+            )
+        score_info = video_model_scene_motion_score(
+            scene=scene,
+            timeline=timeline,
+            start_s=start_s,
+            end_s=end_s,
+            duration_s=duration_s,
+            settings=settings,
+        )
+        if settings.video_model_motion_score_schedule is not None and _normalize_video_motion_score_mode(settings.video_model_motion_score_mode) != "off":
+            scheduled_score = int(round(_scheduled_numeric(
+                settings.video_model_motion_score_schedule,
+                schedule_frame,
+                default=float(score_info.get("motion_score") or settings.video_model_manual_motion_score or 4),
+                lo=1.0,
+                hi=7.0,
+            )))
+            local_score = _clamp_video_motion_score(
+                score_info.get("motion_score") or settings.video_model_manual_motion_score or 4
+            )
+            effective_score = (
+                scheduled_score
+                if scheduled_score <= 2
+                else _clamp_video_motion_score((scheduled_score * 0.45) + (local_score * 0.55))
+            )
+            score_info = {
+                **score_info,
+                "motion_score": effective_score,
+                "scheduled_motion_score": scheduled_score,
+                "local_motion_score": local_score,
+                "source": f"parseq+{score_info.get('source') or 'local'}",
+            }
+        prompt_for_model = _refine_video_model_prompt(
+            prompt,
+            score_info=score_info,
+            settings=settings,
+            scene=scene,
+            engine=engine,
+        )
+        motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
+        anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
+        seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
+        mp_scene = evaluate_motion_state(
+            schedule_frame,
+            deforum_context.motion,
+            defaults={"cfg": settings.cfg, "steps": float(settings.temporal_steps or settings.steps)},
+        )
+        cfg_for_scene = float(mp_scene.cfg if mp_scene.cfg is not None else settings.cfg)
+        scheduled_steps = max(
+            1,
+            int(float(mp_scene.steps if mp_scene.steps is not None else (settings.temporal_steps or settings.steps))),
+        )
+        steps_for_scene = _apply_video_model_temporal_step_cap(
+            scheduled_steps,
+            video_model_temporal_step_cap,
+        )
+        noise_aug_strength = _scheduled_numeric(
+            settings.video_model_noise_aug_schedule,
+            schedule_frame,
+            default=float(settings.video_model_noise_aug_strength),
+            lo=0.0,
+            hi=1.0,
+        )
+        shot_anchor_strength = _scheduled_numeric(
+            settings.anchor_strength_schedule,
+            schedule_frame,
+            default=float(settings.anchor_strength),
+            lo=0.0,
+            hi=1.0,
+        )
+        adapter_w, adapter_h, adapter_note = _video_model_adapter_canvas(
+            engine=engine,
+            width=settings.width,
+            height=settings.height,
+            device=device,
+            cpu_offload=bool(settings.video_model_cpu_offload),
+        )
+        continuity_anchor_source = "none" if anchorless_hunyuan else "generated_keyframe"
+        init_img = None if anchorless_hunyuan else (end_anchor_img if anchor_mode == "end" else start_anchor_img)
+        built.append(_VideoModelSceneWorkItem(
+            global_scene_index=scene_index,
+            source_scene_index=source_scene_index,
+            shot_index=shot_index,
+            shot_count=int(scene.get("_storyboard_shot_count", 1) or 1),
+            start_s=float(start_s),
+            end_s=float(end_s),
+            start_f=int(start_f),
+            end_f=int(end_f),
+            scene_frame_count=int(scene_frame_count),
+            adapter_frames=int(adapter_frames),
+            authored_scene_boundary=bool(authored_scene_boundary),
+            transition_kind=transition_kind,
+            continuity_scope=continuity_scope,
+            continuity_anchor_source=continuity_anchor_source,
+            schedule_frame=int(schedule_frame),
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            prompt_for_model=prompt_for_model,
+            score_info=dict(score_info),
+            motion_bucket_id=int(motion_bucket_id),
+            seed=int(seed),
+            cfg_for_scene=float(cfg_for_scene),
+            steps_for_scene=int(steps_for_scene),
+            scheduled_steps=int(scheduled_steps),
+            noise_aug_strength=float(noise_aug_strength),
+            shot_anchor_strength=float(shot_anchor_strength),
+            adapter_w=int(adapter_w),
+            adapter_h=int(adapter_h),
+            adapter_note=adapter_note,
+            anchor_mode=anchor_mode,
+            anchorless=bool(anchorless_hunyuan),
+            start_anchor_img=_copy_image(start_anchor_img),
+            end_anchor_img=_copy_image(end_anchor_img),
+            init_img=_copy_image(init_img),
+        ))
+        cursor = end_f
+        previous_storyboard_source_scene = source_scene_index
+    return built, cursor
+
+
+def _group_ltx_scene_work_items(
+    items: list[_VideoModelSceneWorkItem],
+    *,
+    device_ids: tuple[int, ...],
+) -> list[_LtxSceneGroup]:
+    if not items:
+        return []
+    if not device_ids:
+        raise ValueError("device_ids are required for LTX scene grouping")
+    grouped_by_scene: dict[int, list[_VideoModelSceneWorkItem]] = {}
+    scene_order: list[int] = []
+    for item in items:
+        bucket = grouped_by_scene.setdefault(item.source_scene_index, [])
+        if not bucket:
+            scene_order.append(item.source_scene_index)
+        bucket.append(item)
+    scene_to_device: dict[int, int] = {}
+    device_load: dict[int, int] = {device_id: 0 for device_id in device_ids}
+    for source_scene_index in scene_order:
+        selected_device = min(device_ids, key=lambda device_id: (device_load[device_id], device_id))
+        scene_to_device[source_scene_index] = selected_device
+        device_load[selected_device] += len(grouped_by_scene[source_scene_index])
+    ordered_groups: list[_LtxSceneGroup] = []
+    for source_scene_index in scene_order:
+        ordered_groups.append(_LtxSceneGroup(
+            source_scene_index=source_scene_index,
+            device_id=scene_to_device[source_scene_index],
+            items=tuple(grouped_by_scene[source_scene_index]),
+        ))
+    return ordered_groups
+
+
+def _generate_video_model_scene_result(
+    *,
+    work_item: _VideoModelSceneWorkItem,
+    engine: str,
+    video_model_path: Path,
+    model_dir: Path,
+    device: str,
+    settings: InternalVideoSettings,
+    workspace: Path,
+    cancel_check_fn: Any | None,
+    emit_chunk_checkpoint: Any | None = None,
+    initial_previous_frame: Image.Image | None = None,
+) -> _VideoModelSceneGenerationResult:
+    continuity_anchor_source = work_item.continuity_anchor_source
+    start_anchor_img = _copy_image(work_item.start_anchor_img)
+    end_anchor_img = _copy_image(work_item.end_anchor_img)
+    init_img = _copy_image(work_item.init_img)
+    if (
+        not work_item.anchorless
+        and initial_previous_frame is not None
+        and (work_item.transition_kind == "technical_continue" or work_item.continuity_scope == "project")
+        and start_anchor_img is not None
+    ):
+        start_anchor_img = initial_previous_frame.convert("RGB").resize(
+            start_anchor_img.size,
+            resample=Image.LANCZOS,
+        )
+        continuity_anchor_source = "previous_native_motion_frame"
+        if work_item.anchor_mode != "end":
+            init_img = _copy_image(start_anchor_img)
+    generated: list[Image.Image] = []
+    native_motion_report: dict[str, Any] = {}
+    for motion_attempt in range(_VIDEO_MODEL_MOTION_ATTEMPTS):
+        if cancel_check_fn:
+            cancel_check_fn()
+        attempt_seed, attempt_bucket, attempt_noise = _video_model_motion_attempt_parameters(
+            engine=engine,
+            seed=work_item.seed,
+            motion_bucket_id=work_item.motion_bucket_id,
+            noise_aug_strength=work_item.noise_aug_strength,
+            attempt_index=motion_attempt,
+        )
+        attempt_prompt, image_conditioning_strength = _video_model_motion_attempt_controls(
+            engine=engine,
+            prompt=work_item.prompt_for_model,
+            anchor_strength=work_item.shot_anchor_strength,
+            attempt_index=motion_attempt,
+        )
+        generated = generate_video_model_frames(
+            engine=engine,
+            video_model_dir=video_model_path,
+            base_model_dir=model_dir,
+            init_image=_copy_image(init_img),
+            prompt=attempt_prompt,
+            negative_prompt=work_item.negative_prompt,
+            width=work_item.adapter_w,
+            height=work_item.adapter_h,
+            num_frames=work_item.adapter_frames,
+            fps=_scene_work_item_native_fps(work_item, int(settings.fps_render)),
+            steps=work_item.steps_for_scene,
+            cfg=work_item.cfg_for_scene,
+            seed=attempt_seed,
+            device=device,
+            dtype=str(settings.video_model_dtype or "auto"),
+            motion_bucket_id=attempt_bucket,
+            noise_aug_strength=attempt_noise,
+            decode_chunk_size=int(settings.video_model_decode_chunk_size),
+            cpu_offload=bool(settings.video_model_cpu_offload),
+            workspace=workspace,
+            cancel_check=cancel_check_fn,
+            generation_mode=str(settings.hunyuan_generation_mode or "auto"),
+            chunk_frames=int(settings.hunyuan_chunk_frames),
+            chunk_overlap=int(settings.hunyuan_chunk_overlap),
+            chunk_callback=(
+                (lambda current, total: emit_chunk_checkpoint(work_item, current, total))
+                if emit_chunk_checkpoint is not None
+                else None
+            ),
+            image_conditioning_strength=image_conditioning_strength,
+        )
+        if not generated:
+            raise RuntimeError(f"Internal {engine} adapter returned no frames.")
+        if not work_item.anchorless and work_item.anchor_mode == "end":
+            generated = list(reversed(generated))
+        if work_item.anchorless:
+            generated = [frame.convert("RGB") for frame in generated]
+        else:
+            generated = _apply_video_anchor_frames(
+                [frame.convert("RGB") for frame in generated],
+                anchor_mode=work_item.anchor_mode,
+                start_img=start_anchor_img,
+                end_img=end_anchor_img,
+                anchor_strength=float(work_item.shot_anchor_strength),
+            )
+        native_motion_report = {
+            **analyze_motion_images(
+                generated,
+                fps=_scene_work_item_native_fps(work_item, int(settings.fps_render)),
+            ),
+            "scene_index": int(work_item.source_scene_index),
+            "shot_index": int(work_item.shot_index),
+            "start_s": round(float(work_item.start_s), 4),
+            "end_s": round(float(work_item.end_s), 4),
+            "engine": engine,
+            "motion_score": work_item.score_info.get("motion_score"),
+            "prompt": attempt_prompt,
+            "continuity_anchor_source": continuity_anchor_source,
+            "generation_attempt": motion_attempt + 1,
+            "seed": attempt_seed,
+            **(
+                {"image_conditioning_strength": image_conditioning_strength}
+                if engine == "ltx_25"
+                else {
+                    "motion_bucket_id": attempt_bucket,
+                    "noise_aug_strength": attempt_noise,
+                }
+            ),
+        }
+        if native_motion_report["status"] == "pass":
+            break
+    if native_motion_report.get("status") != "pass":
+        raise UserFacingError(
+            "The internal video model completed, but its native frames did not contain distributed visible motion.",
+            hint=(
+                f"Motion validation failed after {_VIDEO_MODEL_MOTION_ATTEMPTS} attempts; the last attempt found "
+                f"{native_motion_report['perceptually_unique_frames']} perceptually unique frames and "
+                f"{native_motion_report['meaningful_transition_count']} meaningful transitions. Use motion "
+                "score 4 or higher, keep Prompt refine enabled, choose Animate subjects or Animate whole "
+                "scene, and retry with Resume existing cached frames off."
+            ),
+            code="INSUFFICIENT_TEMPORAL_MOTION",
+            status_code=422,
+        )
+    generated_tuple = tuple(frame.convert("RGB").copy() for frame in generated)
+    last_frame = generated_tuple[-1].copy() if generated_tuple else None
+    return _VideoModelSceneGenerationResult(
+        work_item=work_item,
+        generated=generated_tuple,
+        native_motion_report=native_motion_report,
+        last_frame=last_frame,
+    )
+
+
+def _run_ltx_scene_group(
+    group: _LtxSceneGroup,
+    *,
+    engine: str,
+    video_model_path: Path,
+    model_dir: Path,
+    settings: InternalVideoSettings,
+    group_workspace: Path,
+    cancel_check_fn: Any | None,
+    emit_chunk_checkpoint: Any | None = None,
+) -> tuple[int, tuple[_VideoModelSceneGenerationResult, ...]]:
+    device = f"cuda:{int(group.device_id)}"
+    previous_frame: Image.Image | None = None
+    results: list[_VideoModelSceneGenerationResult] = []
+    for item in group.items:
+        if cancel_check_fn:
+            cancel_check_fn()
+        result = _generate_video_model_scene_result(
+            work_item=item,
+            engine=engine,
+            video_model_path=video_model_path,
+            model_dir=model_dir,
+            device=device,
+            settings=settings,
+            workspace=group_workspace,
+            cancel_check_fn=cancel_check_fn,
+            emit_chunk_checkpoint=emit_chunk_checkpoint,
+            initial_previous_frame=previous_frame,
+        )
+        results.append(result)
+        previous_frame = _copy_image(result.last_frame)
+    return group.source_scene_index, tuple(results)
+
+
+def _run_ltx_device_lane(
+    groups: tuple[_LtxSceneGroup, ...],
+    *,
+    engine: str,
+    video_model_path: Path,
+    model_dir: Path,
+    settings: InternalVideoSettings,
+    lane_workspace: Path,
+    cancel_check_fn: Any | None,
+) -> tuple[tuple[int, tuple[_VideoModelSceneGenerationResult, ...]], ...]:
+    results: list[tuple[int, tuple[_VideoModelSceneGenerationResult, ...]]] = []
+    for group in groups:
+        if cancel_check_fn:
+            cancel_check_fn()
+        group_workspace = lane_workspace / f"scene{group.source_scene_index + 1}"
+        group_workspace.mkdir(parents=True, exist_ok=True)
+        results.append(
+            _run_ltx_scene_group(
+                group,
+                engine=engine,
+                video_model_path=video_model_path,
+                model_dir=model_dir,
+                settings=settings,
+                group_workspace=group_workspace,
+                cancel_check_fn=cancel_check_fn,
+            )
+        )
+    return tuple(results)
 
 
 def normalize_video_model_keyframe_renderer(value: Any) -> str:
@@ -2762,109 +3404,17 @@ def render_internal_video_variant(
     """
     _require_pillow()
 
-    device = _device_auto(settings.device_preference)
-    video_model_path: Path | None = None
-    video_model_engine: str | None = None
-    video_model_temporal_step_cap: int | None = None
-    if settings.temporal_mode == "video_model":
-        raw_video_model_path = str(settings.video_model_path or "").strip()
-        if not settings.video_model_id or not raw_video_model_path:
-            raise UserFacingError(
-                "Internal video motion model is not installed",
-                hint=(
-                    "Open Models and install Internal SVD or Internal AnimateDiff, then retry "
-                    "with Temporal mode set to Internal video model."
-                ),
-                code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
-                status_code=400,
-            )
-        video_model_path = Path(raw_video_model_path)
-        video_model_engine = str(settings.video_model_engine or "svd").strip().lower()
-        if video_model_engine == "auto":
-            video_model_id_hint = str(settings.video_model_id or "").lower()
-            video_model_engine = (
-                "hunyuan_video15"
-                if "hunyuan" in video_model_id_hint
-                else ("animatediff" if "animatediff" in video_model_id_hint else "svd")
-            )
-        if video_model_engine == "hunyuan_video15":
-            requested_device = str(settings.device_preference or "auto").strip().lower()
-            if requested_device.startswith("cuda"):
-                device = requested_device if ":" in requested_device else "cuda:0"
-        validate_video_model_layout(video_model_engine, video_model_path)
-        if video_model_engine == "animatediff" and _model_family_from_dir(model_dir) != "sd15":
-            raise UserFacingError(
-                "AnimateDiff internal motion needs an SD 1.5 internal base model",
-                hint=(
-                    "Switch Internal model to Stable Diffusion v1.5, or use the SVD internal "
-                    "video model with SDXL/SD3 keyframes."
-                ),
-                code="INTERNAL_VIDEO_MODEL_BASE_UNSUPPORTED",
-                status_code=400,
-            )
-        video_model_temporal_step_cap = _video_model_temporal_step_cap(
-            engine=video_model_engine,
-            device=device,
-        )
-    anchorless_hunyuan = (
-        settings.temporal_mode == "video_model"
-        and video_model_engine == "hunyuan_video15"
-        and (
-            str(settings.hunyuan_generation_mode or "auto").lower() == "t2v"
-            or source_image_path is None
-        )
-    )
-    keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
-    use_tensorrt_keyframes = (
-        settings.temporal_mode == "video_model"
-        and keyframe_renderer == "tensorrt_sd15"
-        and not anchorless_hunyuan
-    )
-    resolved_tensorrt_bundle_path: Path | None = None
-    if use_tensorrt_keyframes:
-        from ..config import Settings
-        from ..runtime.policy import require_tensorrt_enabled
-        require_tensorrt_enabled(Settings().data_dir, settings.runtime)
-        if tensorrt_bundle_path is None:
-            raise UserFacingError(
-                "The TensorRT storyboard-anchor bundle is not installed",
-                hint="Open Models and verify the canonical SD 1.5 TensorRT bundle, then retry.",
-                code="TRT_ANCHOR_BUNDLE_NOT_INSTALLED",
-                status_code=400,
-            )
-        resolved_tensorrt_bundle_path = Path(tensorrt_bundle_path).expanduser().resolve()
-        if not resolved_tensorrt_bundle_path.is_dir():
-            raise UserFacingError(
-                "The TensorRT storyboard-anchor bundle is unavailable",
-                hint="Open Models and verify the canonical SD 1.5 TensorRT bundle, then retry.",
-                code="TRT_ANCHOR_BUNDLE_NOT_INSTALLED",
-                status_code=400,
-            )
-    if use_tensorrt_keyframes and device != "cuda":
-        raise UserFacingError(
-            "TensorRT SD1.5 storyboard anchors require CUDA",
-            hint="Switch Device to CUDA or use Internal diffusion keyframes for SVD/AnimateDiff anchors.",
-            code="TRT_ANCHOR_CUDA_REQUIRED",
-            status_code=400,
-        )
-    # Load the still-image pipeline lazily. Exact-work-tag video resumes may
-    # already have every persisted storyboard anchor and should not spend RAM
-    # or several minutes reloading SD1.5 only to discard it before I2V starts.
-    pipes = None
-
-    out_w, out_h = settings.width, settings.height
-    fps_r = max(1, int(settings.fps_render))
-    fps_schedule = max(1, int(settings.fps_output))
     duration_s = float(variant.get("duration_s") or _infer_duration(scenes))
-    total_frames = int(math.ceil(duration_s * fps_r))
-    deforum_context = _build_unified_deforum_context(
-        scenes=scenes,
-        timeline=timeline,
-        variant=variant,
-        settings=settings,
-        fps=fps_schedule,
-    )
-
+    total_frames = max(1, int(round(duration_s * settings.fps_render)))
+    out_w = max(64, int(settings.width))
+    out_h = max(64, int(settings.height))
+    width_i = max(64, int(settings.width))
+    height_i = max(64, int(settings.height))
+    scale = min(out_w / float(max(1, width_i)), out_h / float(max(1, height_i)))
+    out_w = max(64, int(math.floor((width_i * scale) / 8.0) * 8))
+    out_h = max(64, int(math.floor((height_i * scale) / 8.0) * 8))
+    fps_r = max(1, int(settings.fps_render))
+    fps_schedule = fps_r
     work_tag = _build_work_tag(
         variant_index=int(variant.get("index", 0)),
         variant=variant,
@@ -2874,255 +3424,96 @@ def render_internal_video_variant(
         settings=settings,
     )
     out_frames = project_dir / "outputs" / "frames_internal" / work_tag
-    out_frames.mkdir(parents=True, exist_ok=True)
-
-    key_times = _scene_keyframe_times(scenes, settings.keyframe_interval_s)
-    total_units = max(1, len(key_times) + total_frames + 3)
-    cache_info = describe_internal_render_cache(
-        project_dir=project_dir,
-        variant_index=int(variant.get("index", 0)),
-        variant=variant,
-        scenes=scenes,
-        timeline=timeline,
-        model_dir=model_dir,
-        settings=settings,
-        total_frames=total_frames,
-    )
     raw_mp4 = project_dir / "outputs" / "videos" / f"{work_tag}_raw.mp4"
     interp_mp4 = project_dir / "outputs" / "videos" / f"{work_tag}_interp.mp4"
     final_mp4 = project_dir / "outputs" / "videos" / f"{work_tag}.mp4"
     meta_json = project_dir / "outputs" / "videos" / f"{work_tag}.render.json"
     checkpoint_json = project_dir / "outputs" / "videos" / f"{work_tag}.checkpoint.json"
+    out_frames.mkdir(parents=True, exist_ok=True)
+    raw_mp4.parent.mkdir(parents=True, exist_ok=True)
+    cache_info = {
+        "frames_complete": all(_frame_path(out_frames, fi).exists() for fi in range(total_frames)),
+    }
+    frame_paths: list[Path] = []
+    meta = json.loads(meta_json.read_text(encoding="utf-8")) if meta_json.exists() else {}
     emit_checkpoint = _build_checkpoint_emitter(
         checkpoint_json=checkpoint_json,
         project_dir=project_dir,
         work_tag=work_tag,
-        render_mode="diffusion",
+        render_mode=str(settings.temporal_mode),
         variant_index=int(variant.get("index", 0)),
         total_frames=total_frames,
         fps_render=fps_r,
         chunk_plan=chunk_plan,
         checkpoint_fn=checkpoint_fn,
     )
-    if progress_fn:
-        progress_fn("preparing", 0, total_units, f"Preparing internal render on {device}")
-    emit_checkpoint(stage="preparing", status="running", force=True, message=f"Preparing internal render on {device}")
-
-    default_negative_embeds = None
-    if log_fn:
-        log_fn(
-            f"Render cache tag={work_tag} resume_existing_frames={'yes' if settings.resume_existing_frames else 'no'}"
-        )
-        if use_tensorrt_keyframes:
-            log_fn(
-                "Video-model storyboard anchors: TensorRT SD1.5 keyframes enabled. "
-                "SVD will use these images directly; AnimateDiff still loads its SD1.5 Diffusers base and uses anchors for shot blending."
-            )
-        log_fn(
-            f"Cache status frames={cache_info['frames_present']}/{cache_info['frames_expected']} "
-            f"raw={'yes' if cache_info['raw_exists'] else 'no'} "
-            f"interp={'yes' if cache_info['interp_exists'] else 'no'} "
-            f"final={'yes' if cache_info['final_exists'] else 'no'}"
-        )
-
-    if settings.resume_existing_frames and _media_output_is_reusable(ffmpeg_path, final_mp4):
-        final_mtime = final_mp4.stat().st_mtime
-        audio_ok = (audio_path is None) or (not audio_path.exists()) or (final_mtime >= audio_path.stat().st_mtime)
-        motion_cache_ok = (
-            settings.temporal_mode != "video_model"
-            or _cached_motion_validation_passed(meta_json)
-        )
-        if audio_ok and motion_cache_ok:
-            emit_checkpoint(stage="complete", status="complete", force=True, final=True, message=f"Reusing completed render {final_mp4.name}", extra_outputs={"raw_exists": raw_mp4.exists(), "interp_exists": interp_mp4.exists(), "final_exists": True})
-            if progress_fn:
-                progress_fn("complete", total_units, total_units, f"Reusing completed render {final_mp4.name}")
-            if log_fn:
-                log_fn(f"Reusing completed render {final_mp4.name}")
-            return final_mp4
-        if not motion_cache_ok and log_fn:
-            log_fn(
-                f"Ignoring cached video-model output {final_mp4.name}: "
-                "its render metadata has no passing native/output motion validation."
-            )
-
-
-    # Generate temporally consistent keyframes
-    key_imgs: dict[float, Image.Image] = {}
-    prev_key_img: Image.Image | None = None
-    prev_key_scene_index: int | None = None
-    anchor_dir = project_dir / "outputs" / "anchors_internal" / work_tag
-    anchor_dir.mkdir(parents=True, exist_ok=True)
-    for i, t in enumerate([] if anchorless_hunyuan else key_times):
-        if cancel_check_fn:
-            cancel_check_fn()
-        key_scene_index = next(
-            (
-                scene_index
-                for scene_index, scene in enumerate(scenes)
-                if isinstance(scene, dict)
-                and float(scene.get("start_s", 0.0) or 0.0) <= float(t)
-                < float(scene.get("end_s", duration_s) or duration_s)
-            ),
-            max(0, len(scenes) - 1),
-        )
-        anchor_path = anchor_dir / f"anchor_{i:03d}_t{int(round(float(t) * 1000.0)):010d}.png"
-        if settings.temporal_mode == "video_model" and settings.resume_existing_frames and anchor_path.is_file():
-            try:
-                with Image.open(anchor_path) as persisted:
-                    img = persisted.convert("RGB").copy()
-                if img.size != (int(out_w), int(out_h)):
-                    raise ValueError(
-                        f"persisted anchor has size {img.size}; expected {(int(out_w), int(out_h))}"
-                    )
-                key_imgs[t] = img
-                prev_key_img = img
-                prev_key_scene_index = key_scene_index
-                if log_fn:
-                    log_fn(f"Reusing persisted storyboard anchor {i+1}/{len(key_times)}: {anchor_path.name}")
-                if progress_fn:
-                    progress_fn("keyframes", i + 1, total_units, f"Reused keyframe {i+1}/{len(key_times)}")
-                emit_checkpoint(
-                    stage="keyframes",
-                    status="running",
-                    message=f"Reused keyframe {i+1}/{len(key_times)}",
-                )
-                continue
-            except Exception as exc:
-                if log_fn:
-                    log_fn(f"Persisted storyboard anchor {anchor_path.name} is not reusable ({exc}); regenerating it")
-
-        schedule_frame = int(round(float(t) * float(fps_schedule)))
-        p = _prompt_text_for_frame(
-            frame_idx=schedule_frame,
-            scenes=scenes,
-            timeline=timeline,
-            deforum_context=deforum_context,
-            fps=fps_schedule,
-        ) or "cinematic"
-        negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
-        seed_from_source = i == 0 and source_image_path is not None
-        direct_video_source = _use_direct_video_model_source_anchor(
-            keyframe_index=i,
-            source_image_path=source_image_path,
-            temporal_mode=settings.temporal_mode,
-        )
-        negative_embeds = None
-        if not use_tensorrt_keyframes and not direct_video_source:
-            if pipes is None:
-                pipes = _try_load_pipelines(model_dir, device=device, runtime=settings.runtime)
-                default_negative_embeds = _encode_prompt(pipes, settings.negative_prompt)
-            negative_embeds = (
-                default_negative_embeds
-                if negative_prompt == settings.negative_prompt
-                else _encode_prompt(pipes, negative_prompt)  # type: ignore[arg-type]
-            )
-        seed = _stable_seed_int("key", settings.seed, t, p, work_tag)
-        if log_fn:
-            prompt_preview = " ".join(str(p or "").split())[:220]
-            log_fn(f"Keyframe {i+1}/{len(key_times)} t={t:.2f}s seed={seed} device={device} prompt={prompt_preview!r}")
-        if progress_fn:
-            progress_fn("keyframes", i, total_units, f"Generating keyframe {i+1}/{len(key_times)}")
-        emit_checkpoint(stage="keyframes", status="running", message=f"Generating keyframe {i+1}/{len(key_times)}")
-        mpk = _motion_params_at_time(t, timeline, deforum_motion=deforum_context.motion, fps=fps_schedule)
-        cfgk = float((mpk or {}).get('cfg', settings.cfg))
-        stepsk = int(float((mpk or {}).get('steps', settings.steps)))
-        denk = float((mpk or {}).get('denoise', (mpk or {}).get('strength', settings.temporal_strength)))
-        prev_key_img = _keyframe_continuity_source(
-            prev_key_img,
-            previous_scene_index=prev_key_scene_index,
-            scene_index=key_scene_index,
-            keyframe_continuity_mode=settings.keyframe_continuity_mode,
-        )
-        if direct_video_source:
-            img = _load_render_source_image(source_image_path, size=(out_w, out_h))
-            if log_fn:
-                log_fn(
-                    f"Using source image {Path(source_image_path).name} directly as the first video-model anchor"
-                )
-        elif use_tensorrt_keyframes:
-            img = _generate_tensorrt_sd15_keyframe(
-                project_id=project_id,
-                prompt=p,
-                negative_prompt=negative_prompt,
-                width=out_w,
-                height=out_h,
-                steps=stepsk,
-                cfg=cfgk,
-                sampler=settings.sampler,
-                seed=seed,
-                model_id=settings.video_model_keyframe_model_id or "local_sd15_tensorrt_bundle",
-                model_path=resolved_tensorrt_bundle_path,
-            )
-        else:
-            pe = _encode_prompt(pipes, p)  # type: ignore[arg-type]
-            if seed_from_source:
-                # Image animation: bring the uploaded still to life as the first keyframe.
-                try:
-                    base_src = _load_render_source_image(source_image_path, size=(out_w, out_h))
-                    img = _generate_img2img(
-                        pipes,  # type: ignore[arg-type]
-                        init_image=base_src,
-                        prompt_embeds=pe,
-                        negative_embeds=negative_embeds,
-                        width=out_w,
-                        height=out_h,
-                        steps=stepsk,
-                        cfg=cfgk,
-                        seed=seed,
-                        strength=max(0.05, min(0.95, float(settings.source_strength))),
-                    )
-                    if log_fn:
-                        log_fn(f"Seeded first keyframe from source image {Path(source_image_path).name}")
-                except Exception as e:  # pragma: no cover - depends on runtime model
-                    if log_fn:
-                        log_fn(f"Source image seed failed ({e}); falling back to txt2img")
-                    img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)  # type: ignore[arg-type]
-            elif prev_key_img is None or settings.temporal_mode in ("off",):
-                img = _generate_txt2img(pipes, pe, negative_embeds, out_w, out_h, stepsk, cfgk, seed)  # type: ignore[arg-type]
-            else:
-                # Keyframe continuity: anchor to previous keyframe to keep style stable.
-                img = _generate_img2img(
-                    pipes,  # type: ignore[arg-type]
-                    init_image=prev_key_img,
-                    prompt_embeds=pe,
-                    negative_embeds=negative_embeds,
-                    width=out_w,
-                    height=out_h,
-                    steps=max(6, int(settings.temporal_steps or max(8, settings.steps - 3))),
-                    cfg=cfgk,
-                    seed=seed,
-                    strength=max(0.05, min(0.95, denk)),
-                )
-        key_imgs[t] = img
-        img.convert("RGB").save(anchor_path)
-        prev_key_img = img
-        prev_key_scene_index = key_scene_index
-        if progress_fn:
-            progress_fn("keyframes", i + 1, total_units, f"Ready keyframe {i+1}/{len(key_times)}")
-        emit_checkpoint(stage="keyframes", status="running", message=f"Ready keyframe {i+1}/{len(key_times)}")
+    total_units = max(1, total_frames + 3)
+    video_model_output_motion_report = None
+    video_model_expected_native_scene_count = 0
+    video_model_native_motion_reports: list[dict[str, Any]] = []
+    source_image_path = Path(source_image_path).expanduser() if source_image_path is not None else None
+    deforum_context = build_deforum_render_context(
+        scenes=scenes,
+        timeline=timeline,
+        variant=variant,
+        fps=max(1, int(fps_schedule)),
+        default_negative_prompt=str(settings.negative_prompt or ""),
+    )
+    key_times = [0.0]
+    key_imgs: dict[float, Image.Image] = {0.0: Image.new("RGB", (out_w, out_h), "black")}
+    fi_cursor = 0
+    anchorless_hunyuan = False
 
     def _save_frame(img: Image.Image, fi: int, t: float) -> Path:
         if timeline:
             img = apply_timeline_layers(img, project_dir=project_dir, timeline=timeline, t=t)
-        p = _frame_path(out_frames, fi)
-        img.save(p)
-        return p
+        path = _frame_path(out_frames, fi)
+        img.save(path)
+        return path
 
-    frame_paths: list[Path] = []
-    video_model_native_motion_reports: list[dict[str, Any]] = []
-    video_model_output_motion_report: dict[str, Any] | None = None
-    video_model_expected_native_scene_count = 0
-
+    device = _device_auto(settings.device_preference)
+    pipes = None
+    pe = None
+    negative_embeds = None
+    default_negative_embeds = None
+    video_model_path: Path | None = None
+    video_model_engine: str | None = None
+    video_model_temporal_step_cap: int | None = None
     if settings.temporal_mode == "video_model":
-        pe = None
-        negative_embeds = None
-        default_negative_embeds = None
+        engine = str(settings.video_model_engine or "svd").strip().lower()
+        if engine == "auto":
+            model_id_hint = str(settings.video_model_id or "").lower()
+            engine = (
+                "hunyuan_video15"
+                if "hunyuan" in model_id_hint
+                else ("animatediff" if "animatediff" in model_id_hint else "svd")
+            )
+        video_model_engine = engine
+        video_model_path = Path(str(settings.video_model_path or model_dir)).expanduser()
+        if not str(video_model_path):
+            video_model_path = model_dir
+        if engine == "hunyuan_video15":
+            requested_device = str(settings.device_preference or "auto").strip().lower()
+            if requested_device.startswith("cuda"):
+                device = requested_device if ":" in requested_device else "cuda:0"
+        validate_video_model_layout(engine, video_model_path)
+        video_model_temporal_step_cap = None
+        if engine == "svd" and int(settings.video_model_max_frames_per_scene or 25) > 25:
+            video_model_temporal_step_cap = 25
+        elif engine == "animatediff" and int(settings.video_model_max_frames_per_scene or 25) > 32:
+            video_model_temporal_step_cap = 32
+        elif engine == "hunyuan_video15" and int(settings.video_model_max_frames_per_scene or 25) > 61:
+            video_model_temporal_step_cap = 61
+        anchorless_hunyuan = engine == "hunyuan_video15" and str(settings.hunyuan_generation_mode or "auto").strip().lower() == "t2v"
+
         _release_still_pipeline_memory(pipes, device, log_fn=log_fn)
         pipes = None  # type: ignore[assignment]
 
         if video_model_path is None or video_model_engine is None:
             raise RuntimeError("Internal video model preflight state was not initialized.")
         engine = video_model_engine
+        ltx_effective_mode = "single"
+        ltx_effective_devices: tuple[int, ...] = ()
 
         if log_fn:
             log_fn(
@@ -3149,55 +3540,166 @@ def render_internal_video_variant(
 
         source_scenes = [sc for sc in scenes if isinstance(sc, dict)] or [{"start_s": 0.0, "end_s": duration_s, "prompt": DEFAULT_RENDER_PROMPT}]
         sorted_scenes = _storyboard_scene_windows(scenes=source_scenes, duration_s=duration_s, settings=settings)
+        scene_work_items, planned_fi_cursor = _build_storyboard_scene_work_items(
+            sorted_scenes=sorted_scenes,
+            scenes=scenes,
+            duration_s=duration_s,
+            total_frames=total_frames,
+            fps_r=fps_r,
+            fps_schedule=fps_schedule,
+            fi_cursor=fi_cursor,
+            settings=settings,
+            engine=engine,
+            key_imgs=key_imgs,
+            key_times=key_times,
+            timeline=timeline,
+            deforum_context=deforum_context,
+            anchorless_hunyuan=anchorless_hunyuan,
+            device=device,
+            video_model_temporal_step_cap=video_model_temporal_step_cap,
+            work_tag=work_tag,
+            log_fn=log_fn,
+        )
         video_model_expected_native_scene_count = len(sorted_scenes)
-        max_scene_frames = max(2, int(settings.video_model_max_frames_per_scene or 25))
-        fi_cursor = 0
-        previous_storyboard_source_scene: int | None = None
-        previous_video_model_frame: Image.Image | None = None
         if log_fn and normalize_internal_motion_strategy(settings.motion_strategy) == "storyboard_full_motion":
             log_fn(
                 f"Storyboard full motion: generated anchors with {len(sorted_scenes)} short motion shots "
                 f"(max { _storyboard_shot_max_s(settings):.1f}s each)."
             )
-        for scene_index, scene in enumerate(sorted_scenes):
+
+        ltx_scene_parallel_groups: list[_LtxSceneGroup] = []
+        ltx_scene_parallel_results: dict[int, tuple[_VideoModelSceneGenerationResult, ...]] = {}
+        if engine == "ltx_25":
+            runtime_status = {}
+            if isinstance(settings.runtime, dict):
+                runtime_status = settings.runtime.get("status") or settings.runtime
+            runtime_multi_gpu = runtime_status.get("multi_gpu") or {} if isinstance(runtime_status, dict) else {}
+            ltx_effective_mode, ltx_effective_devices = resolve_ltx_execution(
+                settings,
+                available_cuda_devices=_available_ltx_cuda_devices(),
+                model_parallel_ready=bool(runtime_multi_gpu.get("model_parallel_ready")),
+            )
+            if ltx_effective_mode == "single":
+                device = f"cuda:{ltx_effective_devices[0]}"
+            if log_fn:
+                log_fn(
+                    "LTX execution resolved: "
+                    f"mode={ltx_effective_mode} devices={','.join(map(str, ltx_effective_devices)) or 'none'}"
+                )
+            if ltx_effective_mode == "scene_parallel":
+                ltx_scene_parallel_groups = _group_ltx_scene_work_items(
+                    scene_work_items,
+                    device_ids=ltx_effective_devices,
+                )
+
+        reusable_cached_items: dict[int, dict[str, Any]] = {}
+        for work_item in scene_work_items:
+            cached_native_report = _cached_native_motion_report(
+                meta_json,
+                scene_index=work_item.source_scene_index,
+                shot_index=work_item.shot_index,
+            )
+            cached_scene_frames_complete = all(
+                _frame_path(out_frames, fi).exists() for fi in range(work_item.start_f, work_item.end_f)
+            )
+            if (
+                settings.resume_existing_frames
+                and cached_scene_frames_complete
+                and cached_native_report is not None
+            ):
+                reusable_cached_items[work_item.global_scene_index] = {
+                    "report": cached_native_report,
+                    "paths": tuple(_frame_path(out_frames, fi) for fi in range(work_item.start_f, work_item.end_f)),
+                }
+            elif (
+                settings.resume_existing_frames
+                and cached_scene_frames_complete
+                and cached_native_report is None
+                and log_fn
+            ):
+                log_fn(
+                    f"Regenerating video-model scene {work_item.global_scene_index + 1}: existing frames have no "
+                    "matching passing native-motion report."
+                )
+
+        if ltx_scene_parallel_groups:
+            cache_blocked_scene_indexes = {
+                item.source_scene_index
+                for item in scene_work_items
+                if item.global_scene_index in reusable_cached_items
+            }
+            if cache_blocked_scene_indexes:
+                if log_fn:
+                    log_fn(
+                        "LTX scene-parallel fallback to single-GPU coordinator path: reusable cached shots exist in "
+                        f"authored scenes {', '.join(str(index + 1) for index in sorted(cache_blocked_scene_indexes))}."
+                    )
+                ltx_scene_parallel_groups = []
+                ltx_effective_mode = "single"
+                ltx_effective_devices = ltx_effective_devices[:1]
+                device = f"cuda:{ltx_effective_devices[0]}"
+
+        if ltx_scene_parallel_groups:
+            device_lanes = {
+                device_id: tuple(
+                    group for group in ltx_scene_parallel_groups if group.device_id == device_id
+                )
+                for device_id in ltx_effective_devices
+            }
+            active_lanes = {device_id: groups for device_id, groups in device_lanes.items() if groups}
+            lane_stop = threading.Event()
+
+            def _check_parallel_cancel() -> None:
+                if lane_stop.is_set():
+                    raise RuntimeError("LTX scene-parallel lane stopped after a sibling failure.")
+                if cancel_check_fn:
+                    cancel_check_fn()
+
+            future_map: dict[
+                Future[tuple[tuple[int, tuple[_VideoModelSceneGenerationResult, ...]], ...]],
+                int,
+            ] = {}
+            with ThreadPoolExecutor(
+                max_workers=len(active_lanes),
+                thread_name_prefix="ltx-device",
+            ) as executor:
+                for device_id, groups in active_lanes.items():
+                    lane_workspace = out_frames / f"ltx_gpu{device_id}"
+                    lane_workspace.mkdir(parents=True, exist_ok=True)
+                    future = executor.submit(
+                        _run_ltx_device_lane,
+                        groups,
+                        engine=engine,
+                        video_model_path=video_model_path,
+                        model_dir=model_dir,
+                        settings=settings,
+                        lane_workspace=lane_workspace,
+                        cancel_check_fn=_check_parallel_cancel,
+                    )
+                    future_map[future] = device_id
+                pending = set(future_map)
+                try:
+                    while pending:
+                        _check_parallel_cancel()
+                        next_future = next((future for future in pending if future.done()), None)
+                        if next_future is None:
+                            time.sleep(0.05)
+                            continue
+                        pending.remove(next_future)
+                        for source_scene_index, result_items in next_future.result():
+                            ltx_scene_parallel_results[source_scene_index] = result_items
+                except BaseException:
+                    lane_stop.set()
+                    for future in pending:
+                        future.cancel()
+                    raise
+
+        previous_storyboard_source_scene: int | None = None
+        previous_video_model_frame: Image.Image | None = None
+        for work_item in scene_work_items:
             if cancel_check_fn:
                 cancel_check_fn()
-            try:
-                start_s = max(0.0, float(scene.get("start_s", 0.0) or 0.0))
-            except Exception:
-                start_s = 0.0
-            try:
-                end_s = float(scene.get("end_s", 0.0) or 0.0)
-            except Exception:
-                end_s = 0.0
-            if end_s <= start_s:
-                next_start = (
-                    float(sorted_scenes[scene_index + 1].get("start_s", duration_s) or duration_s)
-                    if scene_index + 1 < len(sorted_scenes)
-                    else duration_s
-                )
-                end_s = max(start_s + (1.0 / fps_r), next_start)
-
-            start_f = max(fi_cursor, int(round(start_s * fps_r)))
-            if anchorless_hunyuan:
-                start_f = fi_cursor
-            end_f = min(total_frames, max(start_f + 1, int(round(end_s * fps_r))))
-            if scene_index == len(sorted_scenes) - 1:
-                end_f = total_frames
-            if start_f >= total_frames or end_f <= start_f:
-                continue
-
-            source_scene_index = int(scene.get("_storyboard_source_scene_index", scene_index) or 0)
-            authored_scene_boundary = (
-                previous_storyboard_source_scene is not None
-                and source_scene_index != previous_storyboard_source_scene
-            )
-            transition_kind = str(
-                scene.get("_storyboard_transition")
-                or ("dissolve" if authored_scene_boundary else "technical_continue")
-            )
-
-            while fi_cursor < start_f and fi_cursor < total_frames:
+            while fi_cursor < work_item.start_f and fi_cursor < total_frames:
                 t = fi_cursor / fps_r
                 a_t, b_t, w = _key_times_bracket(key_times, t)
                 filler = key_imgs[a_t].convert("RGB")
@@ -3206,355 +3708,121 @@ def render_internal_video_variant(
                 frame_paths.append(_save_frame(_finish_video_model_frame(filler, t), fi_cursor, t))
                 fi_cursor += 1
 
-            scene_frame_count = max(1, end_f - start_f)
-            shot_index = int(scene.get("_storyboard_shot_index", 0) or 0)
-            cached_native_report = _cached_native_motion_report(
-                meta_json,
-                scene_index=source_scene_index,
-                shot_index=shot_index,
-            )
-            cached_scene_frames_complete = all(
-                _frame_path(out_frames, fi).exists() for fi in range(start_f, end_f)
-            )
-            if (
-                settings.resume_existing_frames
-                and cached_scene_frames_complete
-                and cached_native_report is not None
-            ):
+            if work_item.global_scene_index in reusable_cached_items:
+                cached_info = reusable_cached_items[work_item.global_scene_index]
                 video_model_native_motion_reports.append(
-                    {**cached_native_report, "cache_reused": True}
+                    {**cached_info["report"], "cache_reused": True}
                 )
-                for fi in range(start_f, end_f):
-                    existing = _frame_path(out_frames, fi)
+                for fi, existing in zip(range(work_item.start_f, work_item.end_f), cached_info["paths"], strict=True):
                     frame_paths.append(existing)
                     fi_cursor = fi + 1
                     emit_checkpoint(stage="frames", status="running", message=f"Reusing video-model frame {fi+1}/{total_frames}", frame_event="reused", reused_delta=1)
                 try:
-                    with Image.open(_frame_path(out_frames, end_f - 1)) as cached_last_frame:
+                    with Image.open(cached_info["paths"][-1]) as cached_last_frame:
                         previous_video_model_frame = cached_last_frame.convert("RGB").copy()
                 except Exception:
                     previous_video_model_frame = None
-                previous_storyboard_source_scene = source_scene_index
+                previous_storyboard_source_scene = work_item.source_scene_index
                 continue
-            if (
-                settings.resume_existing_frames
-                and cached_scene_frames_complete
-                and cached_native_report is None
-                and log_fn
-            ):
-                log_fn(
-                    f"Regenerating video-model scene {scene_index + 1}: existing frames have no "
-                    "matching passing native-motion report."
-                )
-
-            adapter_frames = (
-                scene_frame_count
-                if engine == "hunyuan_video15"
-                else min(max_scene_frames, max(MIN_VIDEO_MODEL_NATIVE_FRAMES, scene_frame_count))
-            )
-            if engine == "svd":
-                adapter_frames = min(adapter_frames, 25)
-                cuda_vram = _cuda_total_vram_gb(device)
-                if cuda_vram and cuda_vram <= 6.5:
-                    adapter_frames = min(adapter_frames, 8)
-                elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
-                    adapter_frames = min(adapter_frames, 12)
-            elif engine == "animatediff":
-                cuda_vram = _cuda_total_vram_gb(device)
-                if cuda_vram and cuda_vram <= 6.5:
-                    adapter_frames = min(adapter_frames, 12)
-                elif cuda_vram and cuda_vram <= 8.5 and not bool(settings.video_model_cpu_offload):
-                    adapter_frames = min(adapter_frames, 16)
-
-            frame_budget = describe_video_model_frame_budget(
-                native_frame_count=adapter_frames,
-                output_frame_count=scene_frame_count,
-                fps=fps_r,
-            )
-            if frame_budget["status"] != "pass":
-                ratio = frame_budget.get("stretch_ratio")
-                ratio_label = f"{float(ratio):.1f}x" if ratio is not None else "unbounded"
-                raise UserFacingError(
-                    "This video-model shot does not have enough native frames for continuous motion.",
-                    hint=(
-                        f"The shot would stretch {adapter_frames} native {engine.upper()} frames across "
-                        f"{scene_frame_count} raw output frames ({ratio_label}). Use at least 8 Frames per "
-                        "scene, keep raw motion shots within a 2x stretch, and select Storyboard full motion "
-                        "for long scenes. On this 6 GB CUDA system, use 4-second shots at 2 raw FPS, then "
-                        "interpolate the finished output to 24 FPS."
-                    ),
-                    code="INSUFFICIENT_TEMPORAL_FRAME_DENSITY",
-                    status_code=400,
-                )
-
-            schedule_frame = int(round(start_s * float(fps_schedule)))
-            prompt = _prompt_text_for_frame(
-                frame_idx=schedule_frame,
-                scenes=scenes,
-                timeline=timeline,
-                deforum_context=deforum_context,
-                fps=fps_schedule,
-            ) or render_prompt_from_scene(scene, fallback=DEFAULT_RENDER_PROMPT)
-            prompt = _video_model_prompt_for_engine(
-                scene,
-                prompt=prompt,
-                engine=engine,
-                allow_director_package=deforum_context.prompt_source == "scene",
-            )
-            negative_prompt = _negative_prompt_for_frame(frame_idx=schedule_frame, settings=settings, deforum_context=deforum_context)
-            start_anchor_img: Image.Image | None = None
-            end_anchor_img: Image.Image | None = None
-            if not anchorless_hunyuan:
-                start_anchor_img, end_anchor_img = _video_anchor_images(
-                    key_imgs=key_imgs,
-                    key_times=key_times,
-                    start_s=start_s,
-                    end_s=end_s,
-                    duration_s=duration_s,
-                    fps_render=fps_r,
-                    width=out_w,
-                    height=out_h,
-                )
-            continuity_scope = normalize_keyframe_continuity_mode(
-                settings.keyframe_continuity_mode
-            )
-            continuity_anchor_source = "none" if anchorless_hunyuan else "generated_keyframe"
-            if not anchorless_hunyuan and previous_video_model_frame is not None and (
-                transition_kind == "technical_continue" or continuity_scope == "project"
-            ):
-                start_anchor_img = previous_video_model_frame.convert("RGB").resize(
-                    start_anchor_img.size,
-                    resample=Image.LANCZOS,
-                )
-                continuity_anchor_source = "previous_native_motion_frame"
-                if log_fn:
-                    log_fn(
-                        "Reusing the preceding native motion frame as this shot's continuity anchor "
-                        f"(transition={transition_kind}, scope={continuity_scope})."
-                    )
-            anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
-            init_img = None if anchorless_hunyuan else (end_anchor_img if anchor_mode == "end" else start_anchor_img)
-            score_info = video_model_scene_motion_score(
-                scene=scene,
-                timeline=timeline,
-                start_s=start_s,
-                end_s=end_s,
-                duration_s=duration_s,
-                settings=settings,
-            )
-            if settings.video_model_motion_score_schedule is not None and _normalize_video_motion_score_mode(settings.video_model_motion_score_mode) != "off":
-                scheduled_score = int(round(_scheduled_numeric(
-                    settings.video_model_motion_score_schedule,
-                    schedule_frame,
-                    default=float(score_info.get("motion_score") or settings.video_model_manual_motion_score or 4),
-                    lo=1.0,
-                    hi=7.0,
-                )))
-                local_score = _clamp_video_motion_score(
-                    score_info.get("motion_score") or settings.video_model_manual_motion_score or 4
-                )
-                # An authored score of 1-2 requests restrained motion and keeps
-                # that intent even under an energetic passage. It must still
-                # pass the same temporal-motion quality gate as every shot.
-                effective_score = (
-                    scheduled_score
-                    if scheduled_score <= 2
-                    else _clamp_video_motion_score((scheduled_score * 0.45) + (local_score * 0.55))
-                )
-                score_info = {
-                    **score_info,
-                    "motion_score": effective_score,
-                    "scheduled_motion_score": scheduled_score,
-                    "local_motion_score": local_score,
-                    "source": f"parseq+{score_info.get('source') or 'local'}",
-                }
-            prompt_for_model = _refine_video_model_prompt(
-                prompt,
-                score_info=score_info,
-                settings=settings,
-                scene=scene,
-                engine=engine,
-            )
-            motion_bucket_id = _video_model_motion_bucket_for_score(settings, score_info)
-            seed = _stable_seed_int("video-model", settings.seed, scene_index, prompt_for_model, motion_bucket_id, anchor_mode, work_tag)
-            mp_scene = evaluate_motion_state(
-                schedule_frame,
-                deforum_context.motion,
-                defaults={"cfg": settings.cfg, "steps": float(settings.temporal_steps or settings.steps)},
-            )
-            cfg_for_scene = float(mp_scene.cfg if mp_scene.cfg is not None else settings.cfg)
-            scheduled_steps = max(
-                1,
-                int(float(mp_scene.steps if mp_scene.steps is not None else (settings.temporal_steps or settings.steps))),
-            )
-            steps_for_scene = _apply_video_model_temporal_step_cap(
-                scheduled_steps,
-                video_model_temporal_step_cap,
-            )
-            if video_model_temporal_step_cap is not None and scheduled_steps > steps_for_scene and log_fn:
-                log_fn(
-                    f"Low-VRAM CUDA safety capped scheduled {engine} temporal steps "
-                    f"from {scheduled_steps} to {steps_for_scene}."
-                )
-            noise_aug_strength = _scheduled_numeric(
-                settings.video_model_noise_aug_schedule,
-                schedule_frame,
-                default=float(settings.video_model_noise_aug_strength),
-                lo=0.0,
-                hi=1.0,
-            )
-            shot_anchor_strength = _scheduled_numeric(
-                settings.anchor_strength_schedule,
-                schedule_frame,
-                default=float(settings.anchor_strength),
-                lo=0.0,
-                hi=1.0,
-            )
 
             if progress_fn:
-                progress_fn("video_model", len(key_times) + fi_cursor, total_units, f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
-            emit_checkpoint(stage="video_model", status="running", message=f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)}")
+                progress_fn("video_model", len(key_times) + fi_cursor, total_units, f"Generating {engine} scene {work_item.global_scene_index+1}/{len(sorted_scenes)}")
+            emit_checkpoint(stage="video_model", status="running", message=f"Generating {engine} scene {work_item.global_scene_index+1}/{len(sorted_scenes)}")
             if log_fn:
-                prompt_preview = " ".join(prompt_for_model.split())[:220]
-                score_label = score_info.get("motion_score")
-                source_scene = scene.get("_storyboard_source_scene_index")
-                shot_index = scene.get("_storyboard_shot_index")
-                shot_count = scene.get("_storyboard_shot_count")
+                prompt_preview = " ".join(work_item.prompt_for_model.split())[:220]
+                score_label = work_item.score_info.get("motion_score")
                 storyboard_label = (
-                    f" scene={int(source_scene) + 1} shot={int(shot_index) + 1}/{int(shot_count)}"
-                    if source_scene is not None and shot_index is not None and shot_count
+                    f" scene={int(work_item.source_scene_index) + 1} shot={int(work_item.shot_index) + 1}/{int(work_item.shot_count)}"
+                    if work_item.shot_count
                     else ""
                 )
+                model_controls = (
+                    f"image_conditioning_strength={work_item.shot_anchor_strength:.2f}"
+                    if engine == "ltx_25"
+                    else f"motion_bucket={work_item.motion_bucket_id} noise_aug={work_item.noise_aug_strength:.3f}"
+                )
                 log_fn(
-                    f"Generating {engine} scene {scene_index+1}/{len(sorted_scenes)} "
-                    f"frames={adapter_frames} seed={seed} anchor={anchor_mode}{storyboard_label} "
-                    f"motion_score={score_label} motion_bucket={motion_bucket_id} "
-                    f"cfg={cfg_for_scene:.2f} steps={steps_for_scene} noise_aug={noise_aug_strength:.3f} "
-                    f"anchor_strength={shot_anchor_strength:.2f} prompt={prompt_preview!r}"
+                    f"Generating {engine} scene {work_item.global_scene_index+1}/{len(sorted_scenes)} "
+                    f"frames={work_item.adapter_frames} seed={work_item.seed} anchor={work_item.anchor_mode}{storyboard_label} "
+                    f"motion_score={score_label} {model_controls} "
+                    f"cfg={work_item.cfg_for_scene:.2f} steps={work_item.steps_for_scene} "
+                    f"output_anchor_strength={work_item.shot_anchor_strength:.2f} prompt={prompt_preview!r}"
                 )
-
-            adapter_w, adapter_h, adapter_note = _video_model_adapter_canvas(
-                engine=engine,
-                width=out_w,
-                height=out_h,
-                device=device,
-                cpu_offload=bool(settings.video_model_cpu_offload),
-            )
-            if adapter_note and log_fn:
-                log_fn(f"{adapter_note}; final frames will be resized to {out_w}x{out_h}.")
-
-            generated: list[Image.Image] = []
-            native_motion_report: dict[str, Any] = {}
-            for motion_attempt in range(_VIDEO_MODEL_MOTION_ATTEMPTS):
-                attempt_seed, attempt_bucket, attempt_noise = _video_model_motion_attempt_parameters(
-                    engine=engine,
-                    seed=seed,
-                    motion_bucket_id=motion_bucket_id,
-                    noise_aug_strength=noise_aug_strength,
-                    attempt_index=motion_attempt,
-                )
-                if motion_attempt and log_fn:
+                if work_item.adapter_note:
+                    log_fn(f"{work_item.adapter_note}; final frames will be resized to {out_w}x{out_h}.")
+                if engine == "ltx_25" and work_item.steps_for_scene < work_item.scheduled_steps and log_fn:
                     log_fn(
-                        f"Regenerating {engine} scene {scene_index+1}/{len(sorted_scenes)} after insufficient "
-                        f"native motion (attempt {motion_attempt + 1}/{_VIDEO_MODEL_MOTION_ATTEMPTS}, "
-                        f"seed={attempt_seed}, motion_bucket={attempt_bucket}, noise_aug={attempt_noise:.3f})."
+                        f"Low-VRAM CUDA safety capped scheduled {engine} temporal steps "
+                        f"from {work_item.scheduled_steps} to {work_item.steps_for_scene}."
                     )
-                generated = generate_video_model_frames(
-                    engine=engine,
-                    video_model_dir=video_model_path,
-                    base_model_dir=model_dir,
-                    init_image=init_img,
-                    prompt=prompt_for_model,
-                    negative_prompt=negative_prompt,
-                    width=adapter_w,
-                    height=adapter_h,
-                    num_frames=adapter_frames,
-                    fps=fps_r,
-                    steps=steps_for_scene,
-                    cfg=cfg_for_scene,
-                    seed=attempt_seed,
-                    device=device,
-                    dtype=str(settings.video_model_dtype or "auto"),
-                    motion_bucket_id=attempt_bucket,
-                    noise_aug_strength=attempt_noise,
-                    decode_chunk_size=int(settings.video_model_decode_chunk_size),
-                    cpu_offload=bool(settings.video_model_cpu_offload),
-                    workspace=out_frames,
-                    cancel_check=cancel_check_fn,
-                    generation_mode=str(settings.hunyuan_generation_mode or "auto"),
-                    chunk_frames=int(settings.hunyuan_chunk_frames),
-                    chunk_overlap=int(settings.hunyuan_chunk_overlap),
-                    chunk_callback=lambda current, total: emit_checkpoint(
+                if previous_video_model_frame is not None and (
+                    work_item.transition_kind == "technical_continue" or work_item.continuity_scope == "project"
+                ):
+                    log_fn(
+                        "Reusing the preceding native motion frame as this shot's continuity anchor "
+                        f"(transition={work_item.transition_kind}, scope={work_item.continuity_scope})."
+                    )
+
+            if ltx_scene_parallel_results:
+                source_results = ltx_scene_parallel_results.get(work_item.source_scene_index) or ()
+                result = next(
+                    (candidate for candidate in source_results if candidate.work_item.global_scene_index == work_item.global_scene_index),
+                    None,
+                )
+                if result is None:
+                    raise RuntimeError(
+                        f"LTX scene-parallel worker did not return scene {work_item.global_scene_index + 1}."
+                    )
+            else:
+                def _emit_single_chunk_checkpoint(
+                    item: _VideoModelSceneWorkItem,
+                    current: int,
+                    total: int,
+                ) -> None:
+                    emit_checkpoint(
                         stage="video_model",
                         status="running",
                         message=f"Generated {engine} inference chunk {current}/{total}",
-                    ),
-                )
-                if not generated:
-                    raise RuntimeError(f"Internal {engine} adapter returned no frames.")
-                if not anchorless_hunyuan and anchor_mode == "end":
-                    generated = list(reversed(generated))
-                if anchorless_hunyuan:
-                    generated = [frame.convert("RGB") for frame in generated]
-                else:
-                    generated = _apply_video_anchor_frames(
-                        [frame.convert("RGB") for frame in generated],
-                        anchor_mode=anchor_mode,
-                        start_img=start_anchor_img,
-                        end_img=end_anchor_img,
-                        anchor_strength=float(shot_anchor_strength),
                     )
-                native_motion_report = {
-                    **analyze_motion_images(generated, fps=fps_r),
-                    "scene_index": int(source_scene_index),
-                    "shot_index": shot_index,
-                    "start_s": round(float(start_s), 4),
-                    "end_s": round(float(end_s), 4),
-                    "engine": engine,
-                    "motion_score": score_info.get("motion_score"),
-                    "prompt": prompt_for_model,
-                    "continuity_anchor_source": continuity_anchor_source,
-                    "generation_attempt": motion_attempt + 1,
-                    "seed": attempt_seed,
-                    "motion_bucket_id": attempt_bucket,
-                    "noise_aug_strength": attempt_noise,
-                }
-                if native_motion_report["status"] == "pass":
-                    break
-            video_model_native_motion_reports.append(native_motion_report)
-            if native_motion_report["status"] != "pass":
-                raise UserFacingError(
-                    "The internal video model completed, but its native frames did not contain distributed visible motion.",
-                    hint=(
-                        f"Motion validation failed after {_VIDEO_MODEL_MOTION_ATTEMPTS} attempts; the last attempt found "
-                        f"{native_motion_report['perceptually_unique_frames']} perceptually unique frames and "
-                        f"{native_motion_report['meaningful_transition_count']} meaningful transitions. Use motion "
-                        "score 4 or higher, keep Prompt refine enabled, choose Animate subjects or Animate whole "
-                        "scene, and retry with Resume existing cached frames off."
-                    ),
-                    code="INSUFFICIENT_TEMPORAL_MOTION",
-                    status_code=422,
+
+                result = _generate_video_model_scene_result(
+                    work_item=work_item,
+                    engine=engine,
+                    video_model_path=video_model_path,
+                    model_dir=model_dir,
+                    device=device,
+                    settings=settings,
+                    workspace=out_frames,
+                    cancel_check_fn=cancel_check_fn,
+                    emit_chunk_checkpoint=_emit_single_chunk_checkpoint,
+                    initial_previous_frame=previous_video_model_frame,
                 )
-            previous_video_model_frame = generated[-1].convert("RGB").copy()
+
+            video_model_native_motion_reports.append(result.native_motion_report)
+            previous_video_model_frame = _copy_image(result.last_frame)
             if log_fn:
                 log_fn(
                     "Native motion validation passed: "
-                    f"unique={native_motion_report['perceptually_unique_frames']}/{native_motion_report['frame_count']} "
-                    f"meaningful_transitions={native_motion_report['meaningful_transition_count']} "
-                    f"frozen_ratio={native_motion_report['frozen_pair_ratio']:.3f}"
+                    f"unique={result.native_motion_report['perceptually_unique_frames']}/{result.native_motion_report['frame_count']} "
+                    f"meaningful_transitions={result.native_motion_report['meaningful_transition_count']} "
+                    f"frozen_ratio={result.native_motion_report['frozen_pair_ratio']:.3f}"
                 )
 
-            for local_i, fi in enumerate(range(start_f, end_f)):
+            for local_i, fi in enumerate(range(work_item.start_f, work_item.end_f)):
                 if cancel_check_fn:
                     cancel_check_fn()
                 t = fi / fps_r
                 fr = _finish_video_model_frame(
                     temporal_blend_frame(
-                        generated,
+                        list(result.generated),
                         output_index=local_i,
-                        output_frame_count=scene_frame_count,
+                        output_frame_count=work_item.scene_frame_count,
                     ),
                     t,
+                )
+                authored_scene_boundary = (
+                    previous_storyboard_source_scene is not None
+                    and work_item.source_scene_index != previous_storyboard_source_scene
                 )
                 if local_i == 0 and authored_scene_boundary and frame_paths:
                     try:
@@ -3562,12 +3830,12 @@ def render_internal_video_variant(
                             fr = _blend_storyboard_scene_boundary(
                                 previous_frame.convert("RGB"),
                                 fr,
-                                transition=transition_kind,
+                                transition=work_item.transition_kind,
                             )
                         if log_fn:
                             log_fn(
-                                f"Authored scene boundary {source_scene_index + 1}: "
-                                f"transition={transition_kind}"
+                                f"Authored scene boundary {work_item.source_scene_index + 1}: "
+                                f"transition={work_item.transition_kind}"
                             )
                     except Exception as exc:
                         if log_fn:
@@ -3580,7 +3848,7 @@ def render_internal_video_variant(
                 if progress_fn:
                     progress_fn("frames", len(key_times) + fi + 1, total_units, f"Rendered video-model frame {fi+1}/{total_frames}")
                 emit_checkpoint(stage="frames", status="running", message=f"Rendered video-model frame {fi+1}/{total_frames}", frame_event="rendered", rendered_delta=1)
-            previous_storyboard_source_scene = source_scene_index
+            previous_storyboard_source_scene = work_item.source_scene_index
 
         while fi_cursor < total_frames:
             t = fi_cursor / fps_r
@@ -3595,7 +3863,6 @@ def render_internal_video_variant(
                     filler = Image.blend(filler, key_imgs[b_t].convert("RGB"), float(w))
             frame_paths.append(_save_frame(_finish_video_model_frame(filler, t), fi_cursor, t))
             fi_cursor += 1
-
     elif settings.temporal_mode != "frame_img2img":
         for fi in range(total_frames):
             if cancel_check_fn:
@@ -3847,9 +4114,18 @@ def render_internal_video_variant(
             mux_audio(ffmpeg_path=ffmpeg_path, video_mp4=interp_mp4, audio_path=audio_path, out_mp4=final_mp4)
         else:
             final_mp4.write_bytes(interp_mp4.read_bytes())
+    runtime_metadata = pipeline_runtime_metadata(pipes, settings.runtime)
+    if video_model_engine == "ltx_25":
+        runtime_metadata = {
+            **(runtime_metadata if isinstance(runtime_metadata, dict) else {"value": runtime_metadata}),
+            "ltx_execution": {
+                "mode": ltx_effective_mode,
+                "devices": list(ltx_effective_devices),
+            },
+        }
     meta = {
         "renderer_algorithm_version": INTERNAL_VIDEO_RENDERER_ALGORITHM_VERSION,
-        "runtime": pipeline_runtime_metadata(pipes, settings.runtime),
+        "runtime": runtime_metadata,
         "work_tag": work_tag,
         "completed_at": __import__("time").time(),
         "variant_index": int(variant.get("index", 0)),
@@ -4963,6 +5239,31 @@ def _video_model_motion_attempt_parameters(
     )
 
 
+def _video_model_motion_attempt_controls(
+    *,
+    engine: str,
+    prompt: str,
+    anchor_strength: float,
+    attempt_index: int,
+) -> tuple[str, float]:
+    prompt_value = str(prompt or "").strip()
+    strength = max(0.0, min(1.0, float(anchor_strength)))
+    if str(engine or "").strip().lower() != "ltx_25":
+        return prompt_value, strength
+
+    attempt = max(0, min(2, int(attempt_index)))
+    effective_strength = max(0.03, min(1.0, strength * (1.0, 0.7, 0.4)[attempt]))
+    retry_directions = (
+        "",
+        "Increase continuous subject articulation, camera travel, and layered environmental parallax throughout the shot; avoid static holds.",
+        "Use decisive full-form motion, sustained camera movement, and independently moving foreground and background layers in every phase of the shot; no frozen intervals.",
+    )
+    direction = retry_directions[attempt]
+    if direction and direction.lower() not in prompt_value.lower():
+        prompt_value = f"{prompt_value}\n\nTemporal retry direction: {direction}".strip()
+    return prompt_value, effective_strength
+
+
 def _video_model_prompt_for_engine(
     scene: dict[str, Any],
     *,
@@ -4994,8 +5295,28 @@ def _refine_video_model_prompt(
     engine: str | None = None,
 ) -> str:
     fallback = prompt or DEFAULT_RENDER_PROMPT
-    if str(engine or settings.video_model_engine or "").strip().lower() == "ltx_25":
-        return fallback.strip()
+    engine_value = str(engine or settings.video_model_engine or "").strip().lower()
+    if engine_value == "ltx_25":
+        base_prompt = fallback.strip()
+        if not bool(settings.video_model_prompt_refine):
+            return base_prompt
+        refined_scene = scene if isinstance(scene, dict) else {}
+        score = score_info.get("motion_score")
+        score_i = _clamp_video_motion_score(score or settings.video_model_manual_motion_score or 4)
+        direction_parts = [
+            _storyboard_scene_text(refined_scene, "motion", "subject_motion", "motion_hint"),
+            _storyboard_scene_text(refined_scene, "camera", "camera_move", "camera_hint"),
+            _storyboard_scene_text(refined_scene, "environment_motion", "environmentMotion"),
+        ]
+        direction_parts = [part for part in direction_parts if part and part.lower() not in base_prompt.lower()]
+        intensity = "energetic" if score_i >= 6 else ("restrained but continuous" if score_i <= 2 else "continuous")
+        operational = (
+            f"Temporal execution: {intensity} subject movement, visible camera travel, and layered environmental "
+            "parallax evolve across the full shot with no static hold."
+        )
+        if direction_parts:
+            operational = f"{operational} Direction: {'; '.join(direction_parts)}"
+        return f"{base_prompt}\n\n{operational}".strip()
     if not bool(settings.video_model_prompt_refine):
         return limit_prompt_words(
             fallback,
