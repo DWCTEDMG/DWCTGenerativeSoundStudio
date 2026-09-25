@@ -49,6 +49,10 @@ VIDEO_GENERATION_PREFERENCES = (
 
 DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
     "runtime": RuntimePolicy().model_dump(),
+    "execution": {
+        "runtime_profile": "standard",
+        "model_environment_preferences": {},
+    },
     "video": {
         "preference": "auto",
         "auto_prefer_gpu": True,
@@ -166,7 +170,7 @@ class RenderSettingsStore:
     def update(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         current = self.get()
         incoming = payload if isinstance(payload, dict) else {}
-        for key in ("runtime", "video", "cosmos", "azure_foundry", "firefly", "stability", "imagineart", "cuda", "directml"):
+        for key in ("runtime", "execution", "video", "cosmos", "azure_foundry", "firefly", "stability", "imagineart", "cuda", "directml"):
             value = incoming.get(key)
             if isinstance(value, dict):
                 current[key].update(value)
@@ -177,6 +181,25 @@ class RenderSettingsStore:
     def _sanitize(self, payload: dict[str, Any]) -> dict[str, Any]:
         out = _clone_defaults()
         out["runtime"] = RuntimePolicy.model_validate(payload.get("runtime", {})).model_dump()
+
+        execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+        runtime_profile = str(
+            execution.get("runtime_profile") or out["execution"]["runtime_profile"]
+        ).strip().lower()
+        if runtime_profile not in {"standard", "hybrid_gpu", "external_linux"}:
+            runtime_profile = out["execution"]["runtime_profile"]
+        raw_preferences = execution.get("model_environment_preferences")
+        model_environment_preferences: dict[str, str] = {}
+        if isinstance(raw_preferences, dict):
+            for raw_model_id, raw_environment in raw_preferences.items():
+                model_id = str(raw_model_id).strip()
+                environment = str(raw_environment).strip().lower()
+                if model_id and len(model_id) <= 160 and environment in {"windows", "wsl"}:
+                    model_environment_preferences[model_id] = environment
+        out["execution"] = {
+            "runtime_profile": runtime_profile,
+            "model_environment_preferences": model_environment_preferences,
+        }
 
         video = payload.get("video") if isinstance(payload.get("video"), dict) else {}
         cosmos = payload.get("cosmos") if isinstance(payload.get("cosmos"), dict) else {}
