@@ -500,28 +500,35 @@ export function validateReleaseManifest(
   if (!Array.isArray(manifest.fingerprintInputs) || manifest.fingerprintInputs.length < 3) {
     errors.push("fingerprintInputs must include the Python and lock metadata");
   } else {
-    const requiredSuffixes = [
+    const normalizedFingerprintInputs = manifest.fingerprintInputs.map((entry) => ({
+      ...entry,
+      path: String(entry?.path ?? "").replaceAll("\\", "/"),
+    }));
+    const requiredPaths = [
       ".python-version",
-      "python_backend/pyproject.toml",
-      "python_backend/uv.lock",
-      "python_backend/hf_bucket_helper/pyproject.toml",
-      "python_backend/hf_bucket_helper/uv.lock",
-      "launcher_env.defaults.json",
-      ...(releasePlatform === "linux" ? REQUIRED_LINUX_SETUP_FILES : []),
+      "studio/edmg-studio/python_backend/pyproject.toml",
+      "studio/edmg-studio/python_backend/uv.lock",
+      "studio/edmg-studio/python_backend/hf_bucket_helper/pyproject.toml",
+      "studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock",
+      "studio/edmg-studio/launcher_env.defaults.json",
+      ...(releasePlatform === "linux"
+        ? REQUIRED_LINUX_SETUP_FILES.map((entryPoint) => `studio/edmg-studio/${entryPoint}`)
+        : []),
     ];
-    for (const suffix of requiredSuffixes) {
-      const entry = manifest.fingerprintInputs.find((candidate) => String(candidate?.path ?? "").replaceAll("\\", "/").endsWith(suffix));
-      if (!entry || !isSha256(entry.sha256)) errors.push(`fingerprintInputs is missing ${suffix}`);
+    const fingerprintByPath = new Map();
+    for (const entry of normalizedFingerprintInputs) {
+      if (fingerprintByPath.has(entry.path)) errors.push(`fingerprintInputs contains duplicate path ${entry.path}`);
+      else fingerprintByPath.set(entry.path, entry);
     }
-    const helperLock = manifest.fingerprintInputs.find((candidate) =>
-      String(candidate?.path ?? "").replaceAll("\\", "/").endsWith("python_backend/hf_bucket_helper/uv.lock")
-    );
+    for (const requiredPath of requiredPaths) {
+      const entry = fingerprintByPath.get(requiredPath);
+      if (!entry || !isSha256(entry.sha256)) errors.push(`fingerprintInputs is missing ${requiredPath}`);
+    }
+    const helperLock = fingerprintByPath.get("studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock");
     if (helperLock?.sha256 !== manifest.hfBucketHelper?.lockSha256) {
       errors.push("hfBucketHelper.lockSha256 does not match its fingerprint input");
     }
-    const launcherDefaults = manifest.fingerprintInputs.find((candidate) =>
-      String(candidate?.path ?? "").replaceAll("\\", "/").endsWith("launcher_env.defaults.json")
-    );
+    const launcherDefaults = fingerprintByPath.get("studio/edmg-studio/launcher_env.defaults.json");
     if (launcherDefaults?.sha256 !== manifest.launcherEnvDefaults?.sha256) {
       errors.push("launcherEnvDefaults.sha256 does not match its fingerprint input");
     }

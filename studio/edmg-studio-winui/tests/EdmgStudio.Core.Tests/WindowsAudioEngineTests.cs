@@ -46,6 +46,14 @@ public sealed class WindowsAudioEngineTests
   }
 
   [TestMethod]
+  public void FrameCapacityAccountsForGraphSampleRateConversionAndRounding()
+  {
+    Assert.AreEqual(481, WindowsAudioEngine.CalculateFrameCapacity(441, 44_100, 48_000));
+    Assert.AreEqual(441, WindowsAudioEngine.CalculateFrameCapacity(441, 44_100, 44_100));
+    Assert.AreEqual(442, WindowsAudioEngine.CalculateFrameCapacity(480, 48_000, 44_100));
+  }
+
+  [TestMethod]
   public void WorkerCompatibilityRequiresIdentityFormatAndCapacity()
   {
     var insert = new MixerInsert("insert", 0, PluginId: "plugin", ModulePath: @"C:\Plugins\effect.vst3");

@@ -470,6 +470,30 @@ test("schema-5 onedir manifest validation and reuse reject provenance drift", ()
   );
 });
 
+test("release fingerprint validation ignores colliding basenames and rejects duplicate canonical paths", () => {
+  const manifest = validManifest();
+  const withCollidingBasename = {
+    ...manifest,
+    fingerprintInputs: [
+      { path: "unrelated/launcher_env.defaults.json", sha256: "0".repeat(64) },
+      ...manifest.fingerprintInputs,
+    ],
+  };
+  assert.deepEqual(validateReleaseManifest(withCollidingBasename), []);
+
+  const duplicateCanonicalPath = {
+    ...manifest,
+    fingerprintInputs: [
+      ...manifest.fingerprintInputs,
+      manifest.fingerprintInputs.find((entry) => entry.path === "studio/edmg-studio/launcher_env.defaults.json"),
+    ],
+  };
+  assert.match(
+    validateReleaseManifest(duplicateCanonicalPath).join("; "),
+    /fingerprintInputs contains duplicate path studio\/edmg-studio\/launcher_env\.defaults\.json/,
+  );
+});
+
 test("Linux release manifests require bundled and fingerprinted sidecar setup assets", () => {
   const manifest = validManifest({ platform: "linux" });
   assert.deepEqual(validateReleaseManifest(manifest), []);
@@ -488,7 +512,10 @@ test("Linux release manifests require bundled and fingerprinted sidecar setup as
       ...manifest,
       fingerprintInputs: manifest.fingerprintInputs.filter((entry) => !entry.path.endsWith(entryPoint)),
     };
-    assert.match(validateReleaseManifest(withoutFingerprint).join("; "), new RegExp(`fingerprintInputs is missing ${entryPoint}`));
+    assert.match(
+      validateReleaseManifest(withoutFingerprint).join("; "),
+      new RegExp(`fingerprintInputs is missing studio/edmg-studio/${entryPoint}`),
+    );
     assert.equal(releaseProvenanceMatches(manifest, withoutFingerprint), false);
   }
 });
@@ -744,10 +771,18 @@ test("Director release stages a self-contained production hoisted install", () =
   assert.match(prepare, /load staged director entrypoint/);
   assert.match(prepare, /await import/);
   assert.doesNotMatch(prepare, /const copyEntries = \[[^\]]*"node_modules"/s);
-  assert.equal(directorPackage.pnpm?.overrides?.["fast-uri"], "3.1.5");
+  assert.equal(directorPackage.pnpm?.overrides?.["fast-uri"], "3.1.6");
   assert.equal(directorPackage.pnpm?.overrides?.["ip-address"], "10.3.1");
-  assert.equal(directorPackage.pnpm?.overrides?.hono, "4.12.34");
-  for (const resolution of ["fast-uri@3.1.5:", "ip-address@10.3.1:", "hono@4.12.34:"]) {
+  assert.equal(directorPackage.pnpm?.overrides?.hono, "4.13.5");
+  assert.equal(directorPackage.pnpm?.overrides?.["nanoid@3"], "3.3.18");
+  assert.equal(directorPackage.pnpm?.overrides?.qs, "6.16.0");
+  for (const resolution of [
+    "fast-uri@3.1.6:",
+    "ip-address@10.3.1:",
+    "hono@4.13.5:",
+    "nanoid@3.3.18:",
+    "qs@6.16.0:",
+  ]) {
     assert.match(directorLock, new RegExp(`^  ${resolution.replaceAll(".", "\\.")}`, "m"));
   }
 });
@@ -812,6 +847,16 @@ test("Windows packaging stages and installs a self-contained packaged WinUI prim
   assert.match(stageWinUi, /Generated WinUI MSIX is not self-contained/);
   assert.match(stageWinUi, /windowsAppSdkDeployment = "self-contained"/);
   assert.match(stageWinUi, /Get-SigningCertificateSubject/);
+  assert.match(stageWinUi, /if \(-not \$StoreIdentityFile -and[\s\S]*Sideload package publisher must match/);
+  assert.doesNotMatch(stageWinUi, /if \(\$expectedPublisher -cne/);
+
+  const storeIdentityExample = JSON.parse(
+    fs.readFileSync(path.resolve(studioRoot, "..", "edmg-studio-winui", "StoreIdentity.json.example"), "utf8"),
+  );
+  assert.deepEqual(
+    Object.keys(storeIdentityExample).sort(),
+    ["$schema", "certification", "displayName", "identityName", "knownIssues", "productId", "publisher", "publisherDisplayName", "publisherId", "rollback", "schemaVersion", "version"].sort(),
+  );
 
   assert.match(winUiInstaller, /backend\/edmg-studio-backend\.exe/);
   assert.match(winUiInstaller, /build_all\.ps1 owns candidate binding, joint signing/);
@@ -856,23 +901,32 @@ test("build-tool transitive security overrides stay on audited patched releases"
       brace1: packageJson.pnpm?.overrides?.["brace-expansion@1"],
       brace2: packageJson.pnpm?.overrides?.["brace-expansion@2"],
       brace5: packageJson.pnpm?.overrides?.["brace-expansion@5"],
+      xmldom08: packageJson.pnpm?.overrides?.["@xmldom/xmldom@0.8"],
       fastUri3: packageJson.pnpm?.overrides?.["fast-uri@3"],
+      joi18: packageJson.pnpm?.overrides?.["joi@18"],
       jsYaml4: packageJson.pnpm?.overrides?.["js-yaml@4"],
+      nanoid3: packageJson.pnpm?.overrides?.["nanoid@3"],
     },
     {
       brace1: "1.1.18",
       brace2: "2.1.4",
       brace5: "5.0.9",
-      fastUri3: "3.1.5",
-      jsYaml4: "4.3.1",
+      xmldom08: "0.8.15",
+      fastUri3: "3.1.6",
+      joi18: "18.2.5",
+      jsYaml4: "4.3.2",
+      nanoid3: "3.3.18",
     },
   );
   for (const resolution of [
     "brace-expansion@1.1.18:",
     "brace-expansion@2.1.4:",
     "brace-expansion@5.0.9:",
-    "fast-uri@3.1.5:",
-    "js-yaml@4.3.1:",
+    "'@xmldom/xmldom@0.8.15':",
+    "fast-uri@3.1.6:",
+    "joi@18.2.5:",
+    "js-yaml@4.3.2:",
+    "nanoid@3.3.18:",
   ]) {
     assert.match(lockfile, new RegExp(`^  ${resolution.replaceAll(".", "\\.")}`, "m"));
   }

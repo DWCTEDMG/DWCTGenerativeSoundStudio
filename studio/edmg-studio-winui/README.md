@@ -282,11 +282,15 @@ The canonical staging script can now create a Store upload artifact that contain
 self-contained Windows App SDK runtime **and** the validated production backend:
 
 ```powershell
-# Copy the example, then replace every value from Partner Center > Product management > Identity details.
+# Copy the example, then replace every placeholder with Partner Center identity
+# details or the referenced release evidence. The example intentionally fails validation.
 Copy-Item .\StoreIdentity.json.example .\StoreIdentity.json
 
 cd ..\edmg-studio
-pnpm run stage:winui:msix -- `
+node .\scripts\validate-store-submission.mjs ..\edmg-studio-winui\StoreIdentity.json
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+  -File .\packaging\windows\stage_winui_msix.ps1 `
+  -ReleaseMode store `
   -StoreIdentityFile ..\edmg-studio-winui\StoreIdentity.json `
   -IncludeProductionBackend
 ```

@@ -79,6 +79,17 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       processor.SampleRate == sampleRate &&
       processor.MaximumFrames >= requiredFrames;
 
+  internal static int CalculateFrameCapacity(int graphQuantumFrames, int graphSampleRate, int nodeSampleRate)
+  {
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(graphQuantumFrames);
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(graphSampleRate);
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(nodeSampleRate);
+    if (graphSampleRate == nodeSampleRate) return graphQuantumFrames;
+
+    long convertedFrames = ((long)graphQuantumFrames * nodeSampleRate + graphSampleRate - 1) / graphSampleRate;
+    return checked((int)convertedFrames + 1);
+  }
+
   public async Task RefreshDevicesAsync(CancellationToken cancellationToken = default)
   {
     ThrowIfDisposed();
@@ -278,6 +289,9 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       int graphQuantumFrames = checked((int)graph.SamplesPerQuantum);
       if (graphQuantumFrames <= 0)
         throw new InvalidOperationException("Windows reported an invalid AudioGraph quantum size.");
+      int graphSampleRate = checked((int)graph.EncodingProperties.SampleRate);
+      int frameCapacity = CalculateFrameCapacity(
+          graphQuantumFrames, graphSampleRate, configuration.SampleRate);
       AudioEncodingProperties floatStereo = AudioEncodingProperties.CreatePcm(
           (uint)configuration.SampleRate, 2, 32);
       floatStereo.Subtype = MediaEncodingSubtypes.Float;
@@ -290,7 +304,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         AudioFrameOutputNode trackOutput = graph.CreateFrameOutputNode(floatStereo);
         trackOutput.Stop();
         var preparedTrack = new PreparedTrack(route.TrackId, trackOutput,
-            new float[checked(graphQuantumFrames * 2)]);
+            new float[checked(frameCapacity * 2)]);
         tracks.Add(preparedTrack);
 
         foreach (AudioClipSource clip in route.Clips)
@@ -331,7 +345,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
           {
             if (insert.Bypassed) continue;
             bool foundProcessor = _vst3Host.TryGetProcessor(insert.Id, out IVst3InsertProcessor? processor) && processor is not null;
-            if (foundProcessor && !IsProcessorCompatible(processor!, insert, configuration.SampleRate, graphQuantumFrames))
+            if (foundProcessor && !IsProcessorCompatible(processor!, insert, configuration.SampleRate, frameCapacity))
             {
               await _vst3Host.RemoveInstanceAsync(insert.Id, cancellationToken).ConfigureAwait(false);
               processor = null;
@@ -345,7 +359,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
               if (!string.Equals(fingerprint.Sha256, insert.ModuleSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"VST3 module for insert '{insert.Id}' changed after discovery. Rescan it before playback.");
               Vst3InstanceStatus status = await _vst3Host.CreateInstanceAsync(new(
-                  insert.Id, insert.ModulePath, insert.PluginId, configuration.SampleRate, graphQuantumFrames), cancellationToken).ConfigureAwait(false);
+                  insert.Id, insert.ModulePath, insert.PluginId, configuration.SampleRate, frameCapacity), cancellationToken).ConfigureAwait(false);
               if (!status.Active)
                 throw new InvalidOperationException(status.Diagnostic ?? $"VST3 insert '{insert.Id}' did not become active.");
               if (!string.IsNullOrWhiteSpace(insert.StateBase64))
@@ -364,8 +378,8 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       }
 
       var prepared = new PreparedGraph(configuration, graph, outputResult.DeviceOutputNode,
-          masterInput, tracks, clips, CreateCoreProcessor(configuration, bindings, graphQuantumFrames),
-          graphQuantumFrames, this);
+          masterInput, tracks, clips, CreateCoreProcessor(configuration, bindings, frameCapacity),
+          frameCapacity, this);
       masterInput.QuantumStarted += prepared.OnQuantumStarted;
       return prepared;
     }

@@ -190,8 +190,8 @@ custom_prompt = """
 You are evaluating whether the agent's response is professional and courteous.
 Score from 1 (unprofessional) to 5 (highly professional).
 
-Query: 
-Response: 
+Query:
+Response:
 
 Output JSON only: {"result": <score>, "reason": "<explanation>"}
 """

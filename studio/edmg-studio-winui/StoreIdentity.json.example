@@ -1,5 +1,23 @@
 {
-  "identityName": "<replace-with-exact-Partner-Center-package-identity-name>",
-  "publisher": "<replace-with-exact-Partner-Center-publisher-DN>",
-  "version": "1.2.0.0"
+  "$schema": "StoreSubmission.schema.json",
+  "schemaVersion": 1,
+  "productId": "<PARTNER-CENTER-PRODUCT-ID-REPLACE>",
+  "identityName": "<PARTNER-CENTER-IDENTITY-NAME-REPLACE>",
+  "publisher": "CN=<PARTNER-CENTER-PUBLISHER-ID-REPLACE>",
+  "publisherId": "<PARTNER-CENTER-PUBLISHER-ID-REPLACE>",
+  "version": "0.0.0.0",
+  "displayName": "<PARTNER-CENTER-DISPLAY-NAME-REPLACE>",
+  "publisherDisplayName": "<PARTNER-CENTER-PUBLISHER-DISPLAY-NAME-REPLACE>",
+  "certification": {
+    "status": "<EXTERNAL-PARTNER-CENTER-STATUS-REPLACE>",
+    "evidenceReference": "<EXTERNAL-CERTIFICATION-REPORT-REFERENCE-REPLACE>"
+  },
+  "knownIssues": {
+    "status": "<REVIEWED-STATUS-REPLACE>",
+    "evidenceReference": "<KNOWN-ISSUES-RECORD-REFERENCE-REPLACE>"
+  },
+  "rollback": {
+    "status": "<EXTERNALLY-VALIDATED-STATUS-REPLACE>",
+    "evidenceReference": "<ROLLBACK-RECEIPT-REFERENCE-REPLACE>"
+  }
 }

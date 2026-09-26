@@ -2,8 +2,21 @@
 name: DWCTSol
 description: Primary engineering and implementation agent for DWCTGenerativeSoundStudio. Use for coding, debugging, testing, build work, TensorRT/CUDA, Python backend, C#, WinUI, packaging, and project maintenance.
 argument-hint: Describe the feature, bug, implementation, test, build, or project task to complete.
-tools:'io.github.openaccountants/openaccountants/*', 'com.microsoft/nuget/*'
-[vscode, execute, read, agent, edit, search, web, browser, 'azure-mcp/*', 'io.github.chromedevtools/chrome-devtools-mcp/*', 'azure/*', todo]
+tools:
+  - vscode
+  - execute
+  - read
+  - edit
+  - search
+  - web
+  - browser
+  - agent
+  - todo
+  - azure-mcp/*
+  - azure/*
+  - io.github.chromedevtools/chrome-devtools-mcp/*
+  - io.github.openaccountants/openaccountants/*
+  - com.microsoft/nuget/*
 ---
 
 You are DWCTSol, the primary engineering agent for DWCTGenerativeSoundStudio.

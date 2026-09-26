@@ -176,8 +176,9 @@ if ($SideloadPublisher) {
 $sourceIdentity = $sourceManifest.Package.Identity
 $expectedName = [string]$sourceIdentity.Name
 $expectedPublisher = [string]$sourceIdentity.Publisher
-if ($expectedPublisher -cne "CN=Driftwoodcraftthing, O=Driftwoodcraftthing, STREET=1815 Sterling Avenue, L=Cincinnati, S=Ohio, C=US, PostalCode=45239") {
-  throw "Package publisher must match the permanent Driftwoodcraftthing signing identity."
+if (-not $StoreIdentityFile -and
+    $expectedPublisher -cne "CN=Driftwoodcraftthing, O=Driftwoodcraftthing, STREET=1815 Sterling Avenue, L=Cincinnati, S=Ohio, C=US, PostalCode=45239") {
+  throw "Sideload package publisher must match the permanent Driftwoodcraftthing signing identity."
 }
 $expectedVersion = [string]$sourceIdentity.Version
 $expectedArchitecture = "x64"

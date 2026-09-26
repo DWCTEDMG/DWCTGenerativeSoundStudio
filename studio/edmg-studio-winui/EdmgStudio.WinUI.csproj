@@ -99,6 +99,14 @@
   <ItemGroup>
     <ProjectReference Include="src\EdmgStudio.Core\EdmgStudio.Core.csproj" />
   </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <WebView2UseWinRT>True</WebView2UseWinRT>
+    <WebView2UseDispatchAdapter>True</WebView2UseDispatchAdapter>
+    <WebView2DispatchAdapterUseJavaScriptCase>True</WebView2DispatchAdapterUseJavaScriptCase>
+    <WV2WinRTVerbosity>high</WV2WinRTVerbosity>
+    <WV2WinRTIgnoreWebHostHiddenAttribute>True</WV2WinRTIgnoreWebHostHiddenAttribute>
+    <WV2WinRTWrapWebViewTypes>True</WV2WinRTWrapWebViewTypes>
+  </PropertyGroup>
 
   <!--
     Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution
@@ -113,5 +121,20 @@
   <PropertyGroup>
     <PublishReadyToRun>false</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
+    <UseWindowsForms>True</UseWindowsForms>
+    <UseWPF>True</UseWPF>
+    <StartupObject>EdmgStudio.WinUI.Program</StartupObject>
+    <WindowsPackageType>MSIX</WindowsPackageType>
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+    <SignAssembly>False</SignAssembly>
+    <Company>Driftwoodcraftthing</Company>
+    <Product></Product>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Optimize>True</Optimize>
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>
