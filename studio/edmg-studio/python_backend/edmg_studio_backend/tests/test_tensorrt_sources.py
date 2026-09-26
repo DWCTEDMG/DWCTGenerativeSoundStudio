@@ -7,6 +7,7 @@ from edmg_studio_backend.runtime.cache import EngineCache, build_engine_identity
 from edmg_studio_backend.runtime.routes import CompilerAvailability, resolve_runtime_route
 from edmg_studio_backend.runtime.sources import SourceKind, classify_model_source
 from edmg_studio_backend.runtime.prebuilt import admit_prebuilt_engine
+from edmg_studio_backend.runtime.torch_builder import compile_torch_component
 
 
 def test_classifies_supported_source_formats(tmp_path):
@@ -74,7 +75,7 @@ def test_routes_onnx_torch_hf_prebuilt_and_gguf(tmp_path):
 
     expectations = {
         "model.onnx": "onnx_parser",
-        "model.pt": "torch_tensorrt",
+        "model.pt": "torch_compile_tensorrt",
         "model.engine": "prebuilt_engine",
     }
     for filename, expected in expectations.items():
@@ -99,6 +100,21 @@ def test_routes_onnx_torch_hf_prebuilt_and_gguf(tmp_path):
     )
     assert decision.selected_runtime == "llama_cpp"
     assert decision.selected_route == "llama_cpp"
+    assert decision.supported
+
+
+def test_pytorch_source_falls_back_to_direct_torch_tensorrt_without_dynamo(tmp_path):
+    (tmp_path / "model.pt").write_bytes(b"checkpoint")
+    source = classify_model_source(
+        tmp_path, model_id="fixture", model_family="sd15", component="unet"
+    )
+    decision = resolve_runtime_route(
+        source,
+        ComponentAdapterRegistry().require("sd15", "unet"),
+        CompilerAvailability(torch_tensorrt=True, torch_compile_tensorrt=False),
+    )
+    assert decision.selected_route == "torch_tensorrt"
+    assert decision.compiler == "torch_tensorrt"
     assert decision.supported
 
 
@@ -174,5 +190,44 @@ def test_prebuilt_engine_binding_mismatch_is_not_published(tmp_path):
             device=0, expected_inputs={"sample"}, expected_outputs={"latent"},
             validate=lambda value: {"passed": True},
             executor_factory=lambda _blob, _device: Executor(),
+        )
+    assert EngineCache(tmp_path / "data").entries() == []
+
+
+def test_torch_component_compiles_validates_and_publishes_with_injected_backend(tmp_path):
+    calls = []
+
+    class Module:
+        def __call__(self, sample):
+            return sample
+
+    class Compiled(Module):
+        pass
+
+    executor, manifest, state = compile_torch_component(
+        data_dir=tmp_path / "data",
+        identity={"model": "sd15", "component": "unet", "route": "torch_compile_tensorrt"},
+        module=Module(), example_args=(object(),), example_kwargs={}, input_names=("sample",),
+        compile_module=lambda module, args, kwargs: calls.append((module, args, kwargs)) or Compiled(),
+        serialize_module=lambda module: b"compiled-program",
+        validate=lambda module: {"passed": True, "finite": True},
+    )
+    assert calls
+    assert executor.input_names == ("sample",)
+    assert manifest["state"] == "ready"
+    assert manifest["compiled_torch"] is True
+    assert state == "built"
+
+
+def test_torch_component_does_not_publish_unsupported_operator(tmp_path):
+    import pytest
+    with pytest.raises(RuntimeError, match="aten::fixture"):
+        compile_torch_component(
+            data_dir=tmp_path / "data",
+            identity={"model": "sd15", "component": "unet", "route": "torch_tensorrt"},
+            module=object(), example_args=(), example_kwargs={}, input_names=(),
+            compile_module=lambda *_args: (_ for _ in ()).throw(RuntimeError("aten::fixture unsupported")),
+            serialize_module=lambda _module: b"never",
+            validate=lambda _module: {"passed": True},
         )
     assert EngineCache(tmp_path / "data").entries() == []

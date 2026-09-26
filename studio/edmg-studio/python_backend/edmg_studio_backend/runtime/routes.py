@@ -62,13 +62,13 @@ def resolve_runtime_route(descriptor: ModelSourceDescriptor, adapter,
             if admitted and descriptor.architecture not in admitted:
                 return RuntimeRouteDecision(fallback_runtime=fallback, selected_runtime=fallback,
                                             reason=f"Architecture {descriptor.architecture} has no registered loader")
+        if compilers.torch_compile_tensorrt:
+            return RuntimeRouteDecision(selected_runtime="tensorrt", selected_route="torch_compile_tensorrt",
+                                        compiler="torch_compile:tensorrt", supported=True, fallback_runtime=fallback)
         if compilers.torch_tensorrt:
             route = "huggingface_torch_tensorrt" if descriptor.kind is SourceKind.HUGGINGFACE else "torch_tensorrt"
             return RuntimeRouteDecision(selected_runtime="tensorrt", selected_route=route,
                                         compiler="torch_tensorrt", supported=True, fallback_runtime=fallback)
-        if compilers.torch_compile_tensorrt:
-            return RuntimeRouteDecision(selected_runtime="tensorrt", selected_route="torch_compile_tensorrt",
-                                        compiler="torch_compile:tensorrt", supported=True, fallback_runtime=fallback)
         return RuntimeRouteDecision(fallback_runtime=fallback, selected_runtime=fallback,
                                     reason="Torch-TensorRT compiler/backend is not installed")
     return RuntimeRouteDecision(fallback_runtime=fallback, selected_runtime=fallback,
