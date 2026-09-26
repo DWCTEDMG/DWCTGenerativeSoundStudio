@@ -4,6 +4,7 @@ import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import BackendSecurityPanel from "../components/BackendSecurityPanel";
 import RuntimeAccelerationPanel from "../components/RuntimeAccelerationPanel";
+import { ExecutionPlaneStatus } from "../components/ExecutionPlaneStatus";
 import { STUDIO_THEME_OPTIONS, useStudioAppearance } from "../components/studioAppearance";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { useUiMode } from "../components/uiMode";
@@ -2652,6 +2653,7 @@ export default function Settings(props: PageProps) {
   return (
     <div>
       <h1>Settings</h1>
+      <ExecutionPlaneStatus editableProfile />
       {err && <div style={{ color: "var(--danger)" }}>{err}</div>}
       <StudioLayoutCustomizer
         title="Settings layout"

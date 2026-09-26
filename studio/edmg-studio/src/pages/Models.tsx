@@ -6,6 +6,7 @@ import { useUiMode } from "../components/uiMode";
 import { useAdaptivePolling } from "../hooks/useAdaptivePolling";
 import { buildInternalModelReadiness } from "../shared/internalModelReadiness";
 import type { PageProps } from "../types/pageProps";
+import { ExecutionPlaneStatus } from "../components/ExecutionPlaneStatus";
 
 type CatalogEntry = {
   id: string;
@@ -1554,6 +1555,7 @@ export default function Models(props: PageProps) {
   return (
     <div>
       <h2>Model Manager</h2>
+      <ExecutionPlaneStatus />
       <div className="small" style={{ marginTop: 6 }}>
         EDMG ships with a curated model catalog, but does <b>not</b> bundle large weights in the installer. Use this page to install Studio-ready defaults, add community models, or browse curated Stability model families.
       </div>

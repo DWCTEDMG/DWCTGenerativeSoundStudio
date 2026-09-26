@@ -48,6 +48,8 @@ import { useProjectJobs } from "../shared/jobs/useProjectJobs";
 import { isJobActive, type StudioJob } from "../shared/jobs/jobStatus";
 import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 import type { PageProps } from "../types/pageProps";
+import { ExecutionPlaneStatus } from "../components/ExecutionPlaneStatus";
+import type { ExecutionEnvironment } from "../shared/executionPlane";
 
 type CatalogEntry = {
   id: string;
@@ -273,6 +275,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalDevicePreference, setInternalDevicePreference] = useState<"auto"|"cpu"|"cuda"|"mps"|"directml">("auto");
   const [internalRenderTier, setInternalRenderTier] = useState<"auto"|"draft"|"balanced"|"quality">((savedRenderDefaults.internalRenderTier as any) || "auto");
   const [internalAllowHostedFallback, setInternalAllowHostedFallback] = useState<boolean>(true);
+  const [executionEnvironment, setExecutionEnvironment] = useState<ExecutionEnvironment>("auto");
+  const [executionAllowFallback, setExecutionAllowFallback] = useState(true);
 
   const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">("frame_img2img");
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
@@ -790,6 +794,9 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       render_tier: internalRenderTier,
       device_preference: useTensorRt ? "cuda" : internalDevicePreference,
       runtime: buildOperationRuntime(),
+      execution_preference: executionEnvironment === "auto" && executionAllowFallback
+        ? undefined
+        : { environment: executionEnvironment, allow_environment_fallback: executionAllowFallback },
       allow_hosted_fallback: internalRenderMode === "diffusion" ? false : internalAllowHostedFallback,
       resume_existing_frames: useTensorRt ? false : internalResumeExisting,
       source_asset: sourceAsset || undefined,
@@ -2284,6 +2291,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   return (
     <div>
       <h1>Render</h1>
+      <ExecutionPlaneStatus environment={executionEnvironment} onEnvironmentChange={setExecutionEnvironment} allowFallback={executionAllowFallback} onAllowFallbackChange={setExecutionAllowFallback} />
       <ProjectRevisionConflict
         conflict={revisionConflict}
         onReload={() => refreshProject(projectId)}
