@@ -10,6 +10,34 @@ public sealed partial class SettingsPage
     private RuntimeSettings _runtimePolicy = new();
     private RuntimeStatusResponse? _runtimeStatus;
 
+    private async Task RefreshExecutionPlaneAsync()
+    {
+        try
+        {
+            ExecutionProfile profile = await _apiClient.GetExecutionProfileAsync();
+            ExecutionProfileComboBox.SelectedItem = ExecutionProfileComboBox.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), profile.RuntimeProfile, StringComparison.Ordinal));
+            ApplyExecutionInventory(await _apiClient.GetExecutionInventoryAsync());
+        }
+        catch (Exception ex) { ExecutionReadinessText.Text = $"Execution status unavailable: {ex.Message}"; }
+    }
+
+    private void ApplyExecutionInventory(ExecutionInventory inventory)
+    {
+        ExecutionReadinessPresentation view = ExecutionPlanePresentation.Describe(inventory);
+        ExecutionReadinessText.Text = $"{view.Title}: {view.Detail} Distro: {inventory.Wsl.Distribution ?? "not configured"}.";
+    }
+
+    private async void SaveExecutionProfile_Click(object sender, RoutedEventArgs e)
+    {
+        string profile = (ExecutionProfileComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "standard";
+        await _apiClient.SaveExecutionProfileAsync(new ExecutionProfile { RuntimeProfile = profile });
+        await RefreshExecutionPlaneAsync();
+    }
+
+    private async void ProbeWslExecution_Click(object sender, RoutedEventArgs e) =>
+        ApplyExecutionInventory(await _apiClient.ProbeWslExecutionAsync());
+
     private async Task RefreshRuntimeAsync()
     {
         try

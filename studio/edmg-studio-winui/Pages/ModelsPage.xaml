@@ -44,6 +44,11 @@
                 IsClosable="True"
                 IsOpen="False"
                 Severity="Informational" />
+            <TextBlock x:Name="ExecutionPlaneDiagnosticsText"
+                       AutomationProperties.AutomationId="ModelsExecutionPlaneDiagnostics"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Text="Execution-plane diagnostics unavailable."
+                       TextWrapping="Wrap" />
             <ProgressBar
                 x:Name="CommandProgress"
                 Height="3"

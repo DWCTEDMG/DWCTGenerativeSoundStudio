@@ -23,6 +23,7 @@ public sealed record InternalVideoRenderSettings
     public string RenderTier { get; init; } = "auto";
     public string DevicePreference { get; init; } = "auto";
     public OperationRuntimeOptions? Runtime { get; init; }
+    public ExecutionPreference? ExecutionPreference { get; init; }
     public bool AllowHostedFallback { get; init; } = true;
     public string HostedService { get; init; } = "default";
     public string? HostedModel { get; init; }
@@ -120,6 +121,7 @@ public static class InternalVideoRenderRequestBuilder
             ["render_tier"] = settings.RenderTier,
             ["device_preference"] = tensorRt ? "cuda" : settings.DevicePreference,
             ["runtime"] = JsonSerializer.SerializeToNode(settings.Runtime),
+            ["execution_preference"] = JsonSerializer.SerializeToNode(settings.ExecutionPreference),
             ["allow_hosted_fallback"] = tensorRt ? false : settings.AllowHostedFallback,
             ["hosted_service"] = settings.HostedService,
             ["hosted_model"] = Optional(settings.HostedModel),

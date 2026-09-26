@@ -82,9 +82,21 @@ public sealed partial class RenderPage : Page
     _ = LoadModelGuidanceAsync(_pageCancellation.Token);
     _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
     _ = LoadGenerationProviderAsync(_pageCancellation.Token);
+    _ = LoadExecutionPlaneAsync(_pageCancellation.Token);
     App.Services.JobsActivity.SnapshotChanged += JobsActivity_SnapshotChanged;
     _jobsActivityLease = App.Services.JobsActivity.Activate();
     _ = LoadQueueSummaryAsync(_pageCancellation.Token);
+  }
+
+  private async Task LoadExecutionPlaneAsync(CancellationToken cancellationToken)
+  {
+    try
+    {
+      ExecutionInventory inventory = await App.Services.ApiClient.GetExecutionInventoryAsync(cancellationToken);
+      ExecutionReadinessPresentation view = ExecutionPlanePresentation.Describe(inventory);
+      ExecutionEnvironmentStatusText.Text = $"{view.Title}: {view.Detail} Physical GPU mappings: {inventory.PhysicalGpus.Length}.";
+    }
+    catch (Exception ex) { ExecutionEnvironmentStatusText.Text = $"Execution inventory unavailable: {ex.Message}"; }
   }
 
   protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -611,6 +623,13 @@ public sealed partial class RenderPage : Page
       RenderTier = Selected(TierComboBox, "balanced"),
       DevicePreference = OperationDevicePreference(Selected(DeviceComboBox, "auto")),
       Runtime = BuildOperationRuntime(),
+      ExecutionPreference = Selected(ExecutionEnvironmentComboBox, "auto") == "auto" && ExecutionFallbackToggle.IsOn
+        ? null
+        : new ExecutionPreference
+        {
+          Environment = Selected(ExecutionEnvironmentComboBox, "auto"),
+          AllowEnvironmentFallback = ExecutionFallbackToggle.IsOn,
+        },
       AllowHostedFallback = HostedFallbackToggle.IsOn,
       HostedService = Selected(HostedProviderComboBox, "default"),
       HostedModel = EmptyToNull(HostedModelBox.Text),

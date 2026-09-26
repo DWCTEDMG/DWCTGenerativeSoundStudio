@@ -18,6 +18,21 @@
         <InfoBar x:Name="StatusInfoBar" Grid.Row="1" IsClosable="True" IsOpen="False" />
         <ScrollViewer x:Name="SettingsScroller" Grid.Row="2" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="16">
+                <Expander Header="Execution plane" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="True">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Windows remains the authoritative backend. Hybrid GPU adds managed WSL2 workers for Linux-preferred models; External Linux changes the backend target separately." TextWrapping="Wrap" />
+                        <ComboBox x:Name="ExecutionProfileComboBox" Header="Runtime profile" SelectedIndex="0" AutomationProperties.AutomationId="SettingsExecutionProfile">
+                            <ComboBoxItem Content="Standard" Tag="standard" />
+                            <ComboBoxItem Content="Hybrid GPU (recommended for AI workstations)" Tag="hybrid_gpu" />
+                            <ComboBoxItem Content="External Linux backend" Tag="external_linux" />
+                        </ComboBox>
+                        <TextBlock x:Name="ExecutionReadinessText" Text="Refresh to inspect WSL worker readiness." TextWrapping="Wrap" />
+                        <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
+                            <AppBarButton Label="Save profile" Icon="Save" Click="SaveExecutionProfile_Click" />
+                            <AppBarButton Label="Re-probe WSL" Icon="Refresh" Click="ProbeWslExecution_Click" />
+                        </CommandBar>
+                    </StackPanel>
+                </Expander>
                 <Expander Header="AI runtime / NVIDIA acceleration" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Automatic uses validated cached engines when beneficial. SD1.5 UNet and VAE decoder can be optimized independently while text encoding and scheduling remain on the existing runtime." TextWrapping="Wrap" />

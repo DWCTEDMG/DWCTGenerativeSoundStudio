@@ -68,6 +68,17 @@
                         </ComboBox>
                     </StackPanel>
                 </Expander>
+                <Expander Header="Execution environment" HorizontalAlignment="Stretch">
+                    <StackPanel Spacing="8">
+                        <ComboBox x:Name="ExecutionEnvironmentComboBox" Header="Requested environment" SelectedIndex="0" AutomationProperties.AutomationId="RenderExecutionEnvironment">
+                            <ComboBoxItem Content="Automatic" Tag="auto" />
+                            <ComboBoxItem Content="Windows" Tag="windows" />
+                            <ComboBoxItem Content="WSL2 Linux worker" Tag="wsl" />
+                        </ComboBox>
+                        <ToggleSwitch x:Name="ExecutionFallbackToggle" Header="Allow environment fallback" IsOn="True" />
+                        <TextBlock x:Name="ExecutionEnvironmentStatusText" Text="The backend resolves the effective environment and physical GPU before worker launch." TextWrapping="Wrap" />
+                    </StackPanel>
+                </Expander>
             </StackPanel>
             <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="6">
                 <TextBlock Text="Active project" HorizontalAlignment="Right"

@@ -87,6 +87,18 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     public Task<HealthResponse> GetHealthAsync(CancellationToken cancellationToken = default) =>
         SendJsonAsync<HealthResponse>(HttpMethod.Get, "/health", null, includeCredentials: false, cancellationToken);
 
+    public Task<ExecutionProfile> GetExecutionProfileAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ExecutionProfile>(HttpMethod.Get, "/v1/execution/profile", null, true, cancellationToken);
+
+    public Task<ExecutionProfile> SaveExecutionProfileAsync(ExecutionProfile profile, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ExecutionProfile>(HttpMethod.Put, "/v1/execution/profile", JsonContent.Create(profile, StudioJson.GetTypeInfo<ExecutionProfile>()), true, cancellationToken);
+
+    public Task<ExecutionInventory> GetExecutionInventoryAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ExecutionInventory>(HttpMethod.Get, "/v1/execution/inventory", null, true, cancellationToken);
+
+    public Task<ExecutionInventory> ProbeWslExecutionAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<ExecutionInventory>(HttpMethod.Post, "/v1/execution/wsl/probe", null, true, cancellationToken);
+
     public Task<ProjectListResponse> GetProjectsAsync(CancellationToken cancellationToken = default) =>
         SendJsonAsync<ProjectListResponse>(HttpMethod.Get, "/v1/projects", null, true, cancellationToken);
 

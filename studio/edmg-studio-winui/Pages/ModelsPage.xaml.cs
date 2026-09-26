@@ -67,6 +67,9 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
                 _tensorRtStatus = await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
             }
             _runtimeStatus = await _apiClient.GetRuntimeStatusAsync(cancellationToken);
+            ExecutionInventory execution = await _apiClient.GetExecutionInventoryAsync(cancellationToken);
+            ExecutionReadinessPresentation executionView = ExecutionPlanePresentation.Describe(execution);
+            ExecutionPlaneDiagnosticsText.Text = $"{executionView.Title} — {executionView.Detail} Distro: {execution.Wsl.Distribution ?? "not configured"}; physical GPU mappings: {execution.PhysicalGpus.Length}.";
             UpdateTensorRt();
             UpdateComponentAcceleration();
         }

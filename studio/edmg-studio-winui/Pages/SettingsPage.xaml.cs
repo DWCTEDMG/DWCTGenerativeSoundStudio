@@ -41,6 +41,7 @@ public sealed partial class SettingsPage : Page
         ApplyLocalRuntimeStatus(App.Services.LocalRuntime.CurrentStatus);
         await RefreshAsync();
         await RefreshRuntimeAsync();
+        await RefreshExecutionPlaneAsync();
     }
 
     private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)
