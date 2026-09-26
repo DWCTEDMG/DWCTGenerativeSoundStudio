@@ -35,6 +35,7 @@ identifies builds made without a commercial license as non-commercial use only.
 Recommended (for AI):
 
 - **Ollama** installed and running.
+- **WSL2 is optional**, not a package prerequisite. Standard profile always uses the package-relative Windows backend. Hybrid GPU can be selected later and reports an actionable blocker when WSL or its worker environment is absent; setup never installs or enables WSL silently.
 
 ## One-command build
 

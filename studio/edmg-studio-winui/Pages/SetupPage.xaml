@@ -70,6 +70,7 @@
                         <TextBlock x:Name="ComfyReadinessText" Text="ComfyUI: checking" TextWrapping="Wrap" />
                         <TextBlock x:Name="EdmgReadinessText" Text="EDMG Core: checking" TextWrapping="Wrap" />
                         <TextBlock x:Name="SevenZipReadinessText" Text="7-Zip: checking" TextWrapping="Wrap" />
+                        <TextBlock Text="WSL2 is optional. Standard uses the packaged Windows backend; select Hybrid GPU in Settings only for Linux-preferred workers. Studio never installs or enables WSL silently." TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 
