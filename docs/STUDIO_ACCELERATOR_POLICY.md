@@ -2,6 +2,8 @@
 
 Studio setup defaults to **Automatic — prefer GPU**. An explicit CPU selection is supported, but automatic selection must not silently choose CPU or replace a CUDA installation with CPU wheels.
 
+Backend location and worker execution environment are separate decisions. The packaged Windows backend remains authoritative in Standard and Hybrid GPU profiles; WSL2 is an optional execution plane for Linux-preferred models. See [Hybrid WSL2 execution plane](HYBRID_WSL2_EXECUTION_PLANE.md).
+
 ## Dependency profiles and runtime devices
 
 - Automatic Python setup preserves a CUDA-enabled target environment, including when the NVIDIA driver is temporarily unavailable. Otherwise a successful NVIDIA device probe selects CUDA.
