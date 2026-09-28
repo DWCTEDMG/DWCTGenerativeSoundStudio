@@ -11,6 +11,10 @@ const schemaPath = path.join(temporaryDirectory, "project-health.json");
 const generatedPath = path.join(temporaryDirectory, "project-health.ts");
 const check = process.argv.includes("--check");
 
+function normalizeGeneratedSource(source) {
+  return source.replaceAll("\r\n", "\n");
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -37,12 +41,17 @@ try {
   await import("node:fs/promises").then(({ writeFile }) => writeFile(schemaPath, schema, "utf8"));
   const cli = path.join(root, "node_modules", "openapi-typescript", "bin", "cli.js");
   run(process.execPath, [cli, schemaPath, "-o", generatedPath]);
-  const generated = readFileSync(generatedPath, "utf8").replaceAll(schemaPath.replaceAll("\\", "/"), "FastAPI Project Health OpenAPI");
+  const generated = normalizeGeneratedSource(
+    readFileSync(generatedPath, "utf8").replaceAll(
+      schemaPath.replaceAll("\\", "/"),
+      "FastAPI Project Health OpenAPI",
+    ),
+  );
 
   if (check) {
     let committed = "";
     try {
-      committed = readFileSync(output, "utf8");
+      committed = normalizeGeneratedSource(readFileSync(output, "utf8"));
     } catch {
       // The diagnostic below also covers a missing generated file.
     }
