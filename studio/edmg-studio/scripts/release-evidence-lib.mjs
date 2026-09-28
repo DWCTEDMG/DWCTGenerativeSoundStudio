@@ -482,6 +482,10 @@ export async function buildChecksumManifest({
   return manifest;
 }
 
+export function requiresReleaseCandidate(phase, artifactSet) {
+  return phase === "dist" && artifactSet !== "linux-appimage";
+}
+
 export async function writeReleaseEvidence({
   root,
   phase = "bundle",
@@ -499,7 +503,13 @@ export async function writeReleaseEvidence({
   await fsp.mkdir(evidenceDir, { recursive: true });
   const candidatePath = path.join(root, "release", "candidate", "release-candidate.json");
   const candidate = fs.existsSync(candidatePath) ? JSON.parse(await fsp.readFile(candidatePath, "utf8")) : null;
-  if (phase === "dist" && !candidate?.candidateId) throw new Error("Distribution evidence requires release/candidate/release-candidate.json.");
+  // The release-candidate contract is currently Windows-only: its immutable
+  // core targets Windows and requires the exact VST3 host/scanner .exe files.
+  // Linux AppImages still receive SBOM and checksum evidence, but cannot be
+  // truthfully bound to that Windows candidate on a native Linux builder.
+  if (requiresReleaseCandidate(phase, artifactSet) && !candidate?.candidateId) {
+    throw new Error("Windows distribution evidence requires release/candidate/release-candidate.json.");
+  }
 
   const resolvedProfile = resolveAcceleratorProfile({ argv: [`--profile=${profile}`], env, platform: process.platform });
   const sbomPath = path.join(evidenceDir, `python-backend-${resolvedProfile}.cyclonedx.json`);

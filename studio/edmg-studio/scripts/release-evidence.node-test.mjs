@@ -12,6 +12,7 @@ import {
   planCodeSigning,
   readPythonSbom,
   readWindowsSignatureEvidence,
+  requiresReleaseCandidate,
   resolveCodeSigningConfig,
   validateBundleEvidenceForSbomReuse,
   writeReleaseEvidence,
@@ -228,6 +229,14 @@ test("dist evidence reuses the bundle SBOM by default", async () => {
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("Linux distribution evidence does not require a Windows release candidate", async () => {
+  assert.equal(requiresReleaseCandidate("dist", "linux-appimage"), false);
+  for (const artifactSet of ["win-nsis", "win-winui-exe", "win-inno", "win-inno-cuda"]) {
+    assert.equal(requiresReleaseCandidate("dist", artifactSet), true);
+  }
+  assert.equal(requiresReleaseCandidate("bundle", ""), false);
 });
 
 test("dist SBOM reuse rejects stale bundle checksum evidence", async () => {
