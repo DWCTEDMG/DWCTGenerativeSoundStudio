@@ -7,8 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from edmg_studio_backend.execution.contracts import ExecutionFailure
-from edmg_studio_backend.execution.contracts import ExecutionResult
+from edmg_studio_backend.execution.contracts import ExecutionFailure, ExecutionResult
 from edmg_studio_backend.execution.staging import prepare_execution_attempt
 from edmg_studio_backend.execution.wsl import ExecutionProcessResult
 from edmg_studio_backend.services import hunyuan_execution_worker
@@ -69,6 +68,14 @@ def _config() -> ivm.HunyuanRunnerConfig:
     )
 
 
+def _isolate_wsl_path_mapping(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ivm,
+        "_wsl_path",
+        lambda path, _config: str(path) if str(path).startswith("/") else "/mnt/c/edmg/python_backend",
+    )
+
+
 def test_adapter_acquires_physical_gpu_lease_and_invokes_manifest_worker(tmp_path, monkeypatch) -> None:
     prepared = _prepared(tmp_path)
     stdout = prepared.attempt_root / "stdout.log"
@@ -84,6 +91,7 @@ def test_adapter_acquires_physical_gpu_lease_and_invokes_manifest_worker(tmp_pat
         yield SimpleNamespace(device_ids=tuple(device_ids))
 
     monkeypatch.setattr(ivm, "gpu_execution_lease", lease)
+    _isolate_wsl_path_mapping(monkeypatch)
     adapter = ivm.WslHunyuanExecutionAdapter(_config(), transport=transport)
     cancellation = Cancellation()
     result = adapter.execute(prepared, cancellation=cancellation)
@@ -115,7 +123,6 @@ def test_adapter_acquires_physical_gpu_lease_and_invokes_manifest_worker(tmp_pat
 
 
 def test_adapter_rejects_non_wsl_or_missing_configuration(tmp_path) -> None:
-    prepared = _prepared(tmp_path)
     invalid = ivm.HunyuanRunnerConfig(
         mode="external",
         python="",
@@ -150,6 +157,7 @@ def test_unrelated_worker_failure_remains_fail_closed_without_adapter_retry(tmp_
         yield SimpleNamespace()
 
     monkeypatch.setattr(ivm, "gpu_execution_lease", lease)
+    _isolate_wsl_path_mapping(monkeypatch)
     result = ivm.WslHunyuanExecutionAdapter(_config(), transport=transport).execute(
         prepared,
         cancellation=Cancellation(),
