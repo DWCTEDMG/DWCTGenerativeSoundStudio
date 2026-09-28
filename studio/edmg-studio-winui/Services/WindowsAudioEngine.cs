@@ -90,6 +90,32 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     return checked((int)convertedFrames + 1);
   }
 
+  internal static bool ShouldSeekClip(bool transportRequiresSeek, bool isPlaying) =>
+      transportRequiresSeek || !isPlaying;
+
+  internal static bool CanUseDirectPlayback(AudioEngineConfiguration configuration)
+  {
+    if (configuration.Tracks.Length != 1 ||
+        configuration.Automation is { Lanes.Length: > 0 })
+    {
+      return false;
+    }
+
+    AudioTrackRoute route = configuration.Tracks[0];
+    if (!string.Equals(route.OutputBusId, "master", StringComparison.Ordinal) || route.Pan != 0)
+    {
+      return false;
+    }
+
+    return configuration.MixerChannels.IsDefaultOrEmpty || configuration.MixerChannels.All(channel =>
+        channel.Inserts.IsDefaultOrEmpty &&
+        channel.Sends.IsDefaultOrEmpty &&
+        channel.Gain == 1 &&
+        channel.Pan == 0 &&
+        !channel.Muted &&
+        !channel.Solo);
+  }
+
   public async Task RefreshDevicesAsync(CancellationToken cancellationToken = default)
   {
     ThrowIfDisposed();
@@ -258,6 +284,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     }
 
     AudioGraph graph = graphResult.Graph;
+    bool directPlayback = CanUseDirectPlayback(configuration);
     List<PreparedClip> clips = new();
     List<PreparedTrack> tracks = new();
     AudioFrameInputNode? masterInput = null;
@@ -296,16 +323,22 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
           (uint)configuration.SampleRate, 2, 32);
       floatStereo.Subtype = MediaEncodingSubtypes.Float;
       masterInput = graph.CreateFrameInputNode(floatStereo);
-      masterInput.AddOutgoingConnection(outputResult.DeviceOutputNode);
+      if (!directPlayback)
+      {
+        masterInput.AddOutgoingConnection(outputResult.DeviceOutputNode);
+      }
       masterInput.Stop();
 
       foreach (AudioTrackRoute route in configuration.Tracks)
       {
-        AudioFrameOutputNode trackOutput = graph.CreateFrameOutputNode(floatStereo);
-        trackOutput.Stop();
-        var preparedTrack = new PreparedTrack(route.TrackId, trackOutput,
-            new float[checked(frameCapacity * 2)]);
-        tracks.Add(preparedTrack);
+        AudioFrameOutputNode? trackOutput = null;
+        if (!directPlayback)
+        {
+          trackOutput = graph.CreateFrameOutputNode(floatStereo);
+          trackOutput.Stop();
+          tracks.Add(new PreparedTrack(route.TrackId, trackOutput,
+              new float[checked(frameCapacity * 2)]));
+        }
 
         foreach (AudioClipSource clip in route.Clips)
         {
@@ -330,8 +363,17 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
           }
 
           AudioFileInputNode node = inputResult.FileInputNode;
-          node.OutgoingGain = 1;
-          node.AddOutgoingConnection(trackOutput);
+          node.OutgoingGain = directPlayback && (route.Muted || (configuration.Tracks.Any(item => item.Solo) && !route.Solo))
+              ? 0
+              : directPlayback ? route.Gain : 1;
+          if (directPlayback)
+          {
+            node.AddOutgoingConnection(outputResult.DeviceOutputNode);
+          }
+          else
+          {
+            node.AddOutgoingConnection(trackOutput!);
+          }
           node.Stop();
           clips.Add(new PreparedClip(clip, node));
         }
@@ -379,8 +421,14 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
 
       var prepared = new PreparedGraph(configuration, graph, outputResult.DeviceOutputNode,
           masterInput, tracks, clips, CreateCoreProcessor(configuration, bindings, frameCapacity),
-          frameCapacity, this);
-      masterInput.QuantumStarted += prepared.OnQuantumStarted;
+          frameCapacity, graphQuantumFrames, graphSampleRate, directPlayback, this);
+      // FrameOutputNode.GetFrame is synchronized to AudioGraph.QuantumStarted, not to the
+      // independent FrameInputNode callback. Mixing on the graph cadence prevents partial
+      // accumulated frames from being padded with silence between decoder quanta.
+      if (!directPlayback)
+      {
+        graph.QuantumStarted += prepared.OnQuantumStarted;
+      }
       return prepared;
     }
     catch
@@ -530,7 +578,10 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       long sourceSample = clip.Source.SourceStartSample +
                           projectOffset * clip.Source.SourceSampleRate / active.Configuration.SampleRate;
       TimeSpan sourcePosition = TimeSpan.FromSeconds(sourceSample / (double)clip.Source.SourceSampleRate);
-      if (playback.RequiresSeek || !clip.IsPlaying || Math.Abs((clip.Node.Position - sourcePosition).TotalMilliseconds) > 100)
+      // AudioGraph's decoder/device clock is authoritative during steady playback. Comparing its
+      // buffered Position to a wall-clock projection and seeking to correct normal output latency
+      // repeatedly flushes the decoder, which is audible as chopped or restarting audio.
+      if (ShouldSeekClip(playback.RequiresSeek, clip.IsPlaying))
       {
         clip.Node.Seek(sourcePosition);
       }
@@ -562,6 +613,10 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     private readonly float[] _output;
     private readonly MixerMeterSnapshot[] _meterBuffer;
     private readonly AudioAutomationSnapshot _automation;
+    private readonly int _graphQuantumFrames;
+    private readonly int _graphSampleRate;
+    private long _nodeFrameRemainder;
+    private readonly bool _directPlayback;
     private long _samplePosition;
     private int _disposed;
 
@@ -574,6 +629,9 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         List<PreparedClip> clips,
         MixerProcessor mixer,
         int maximumFrames,
+        int graphQuantumFrames,
+        int graphSampleRate,
+        bool directPlayback,
         WindowsAudioEngine owner)
     {
       Configuration = configuration;
@@ -588,6 +646,9 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       _output = new float[checked(maximumFrames * 2)];
       _meterBuffer = new MixerMeterSnapshot[mixer.ChannelIds.Length];
       _automation = configuration.Automation ?? AudioAutomationSnapshot.Empty;
+      _graphQuantumFrames = graphQuantumFrames;
+      _graphSampleRate = graphSampleRate;
+      _directPlayback = directPlayback;
     }
 
     public AudioEngineConfiguration Configuration { get; }
@@ -597,10 +658,13 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     public AudioFrameInputNode MasterInput { get; }
     public List<PreparedTrack> Tracks { get; }
     public List<PreparedClip> Clips { get; }
+    public bool DirectPlayback => _directPlayback;
 
-    public void OnQuantumStarted(AudioFrameInputNode sender, FrameInputNodeQuantumStartedEventArgs args)
+    public void OnQuantumStarted(AudioGraph sender, object args)
     {
-      int frames = args.RequiredSamples;
+      long scaledFrames = checked((long)_graphQuantumFrames * Configuration.SampleRate + _nodeFrameRemainder);
+      int frames = checked((int)(scaledFrames / _graphSampleRate));
+      _nodeFrameRemainder = scaledFrames % _graphSampleRate;
       if (frames <= 0 || Volatile.Read(ref _disposed) != 0) return;
       if (frames > _mixer.MaximumFrames)
         throw new InvalidOperationException($"AudioGraph requested {frames} frames, exceeding the negotiated capacity {_mixer.MaximumFrames}.");
@@ -617,7 +681,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         _mixer.ProcessBlock(_inputs, _output, frames, Math.Max(0, _samplePosition), _automation);
         var outputFrame = new AudioFrame((uint)(sampleCount * sizeof(float)));
         CopyStereoToFrame(_output, outputFrame, sampleCount);
-        sender.AddFrame(outputFrame);
+        MasterInput.AddFrame(outputFrame);
 
         int meterCount = _mixer.CopyMeterSnapshots(_meterBuffer);
         if (_owner.MetersAvailable is EventHandler<IReadOnlyList<AudioMeterSnapshot>> handler)
@@ -636,7 +700,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       catch (Exception exception)
       {
         System.Diagnostics.Trace.TraceError($"Audio mixer quantum failed: {exception}");
-        sender.AddFrame(new AudioFrame((uint)(sampleCount * sizeof(float))));
+        MasterInput.AddFrame(new AudioFrame((uint)(sampleCount * sizeof(float))));
       }
     }
 
@@ -655,7 +719,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         catch (Exception exception) { (failures ??= []).Add(exception); }
       }
       Release(Graph.Stop);
-      MasterInput.QuantumStarted -= OnQuantumStarted;
+      if (!_directPlayback) Graph.QuantumStarted -= OnQuantumStarted;
       foreach (PreparedClip clip in Clips) Release(clip.Node.Dispose);
       foreach (PreparedTrack track in Tracks) Release(track.Output.Dispose);
       Release(MasterInput.Dispose);

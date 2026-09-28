@@ -8829,7 +8829,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         pdir = store.project_dir(project_id)
         audio_meta = proj.meta.get("audio")
         audio_path: Path | None = None
-        if audio_meta and audio_meta.get("filename"):
+        if bool(payload.get("include_audio", True)) and audio_meta and audio_meta.get("filename"):
             audio_path = pdir / "assets" / "audio" / str(audio_meta["filename"])
             if not audio_path.exists():
                 audio_path = None
@@ -9001,7 +9001,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
         pdir = store.project_dir(project_id)
         audio_meta = proj.meta.get("audio")
         audio_path: Path | None = None
-        if audio_meta and audio_meta.get("filename"):
+        if bool(payload.get("include_audio", True)) and audio_meta and audio_meta.get("filename"):
             audio_path = pdir / "assets" / "audio" / str(audio_meta["filename"])
             if not audio_path.exists():
                 audio_path = None
@@ -9166,7 +9166,7 @@ def _run_internal_video(project_id: str, job_id: str, payload: dict[str, Any]) -
     pdir = store.project_dir(project_id)
     audio_meta = proj.meta.get("audio")
     audio_path: Path | None = None
-    if audio_meta and audio_meta.get("filename"):
+    if bool(payload.get("include_audio", True)) and audio_meta and audio_meta.get("filename"):
         audio_path = pdir / "assets" / "audio" / str(audio_meta["filename"])
         if not audio_path.exists():
             audio_path = None

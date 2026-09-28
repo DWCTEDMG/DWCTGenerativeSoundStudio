@@ -29,12 +29,19 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid ColumnSpacing="16">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="4">
+        <ScrollViewer x:Name="RenderHeaderScrollViewer"
+                      MaxHeight="360"
+                      HorizontalScrollMode="Disabled"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollMode="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      AutomationProperties.AutomationId="RenderHeaderScrollViewer">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
                 <TextBlock Text="Render Studio" Style="{StaticResource TitleTextBlockStyle}" />
                 <TextBlock Text="Native controls for planning, generation, assembly, export, and worker operations."
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -79,8 +86,8 @@
                         <TextBlock x:Name="ExecutionEnvironmentStatusText" Text="The backend resolves the effective environment and physical GPU before worker launch." TextWrapping="Wrap" />
                     </StackPanel>
                 </Expander>
-            </StackPanel>
-            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="6">
+                </StackPanel>
+                <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="6">
                 <TextBlock Text="Active project" HorizontalAlignment="Right"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <TextBlock x:Name="ActiveProjectText"
@@ -112,8 +119,9 @@
                             VerticalAlignment="Bottom"
                             AutomationProperties.AutomationId="OpenOutputsFromRenderButton" />
                 </StackPanel>
-            </StackPanel>
-        </Grid>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
 
         <InfoBar x:Name="StatusInfoBar"
                  Grid.Row="1"
@@ -149,6 +157,32 @@
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
+                                    <Border Padding="12"
+                                            CornerRadius="8"
+                                            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            AutomationProperties.AutomationId="RenderAppliedPlanCard">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Applied project plan"
+                                                       Style="{StaticResource FieldLabelStyle}"
+                                                       AutomationProperties.HeadingLevel="Level3" />
+                                            <TextBlock x:Name="AppliedPlanStatusText"
+                                               Text="Checking the applied project plan…"
+                                                       FontWeight="SemiBold"
+                                                       AutomationProperties.AutomationId="RenderAppliedPlanStatus" />
+                                            <TextBlock x:Name="AppliedPlanDetailText"
+                                                       Text="Director, Timeline, camera, motion, and Reactive Lab handoff status will appear here."
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       AutomationProperties.AutomationId="RenderAppliedPlanDetail" />
+                                            <TextBlock x:Name="AppliedPlanMappingsText"
+                                                       Text="Audio, section, cue, camera, and motion mappings will appear here."
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       AutomationProperties.AutomationId="RenderAppliedPlanMappings" />
+                                        </StackPanel>
+                                    </Border>
                                     <Grid ColumnSpacing="12" RowSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -249,6 +283,96 @@
                                                      AutomationProperties.AutomationId="RenderQuickPromptBox" />
                                         </StackPanel>
                                     </Grid>
+                                    <Expander x:Name="SimpleInternalSettingsPanel"
+                                              Header="Internal renderer settings"
+                                              IsExpanded="True"
+                                              HorizontalAlignment="Stretch"
+                                              AutomationProperties.AutomationId="SimpleInternalRendererSettings">
+                                        <Grid Padding="0,12,0,0" ColumnSpacing="12" RowSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Spacing="4">
+                                                <TextBlock Text="Render mode" Style="{StaticResource FieldLabelStyle}" />
+                                                <ComboBox x:Name="SimpleRenderModeComboBox" SelectedIndex="0" AutomationProperties.AutomationId="SimpleInternalRenderMode">
+                                                    <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                    <ComboBoxItem Content="Internal diffusion" Tag="diffusion" />
+                                                    <ComboBoxItem Content="TensorRT" Tag="tensorrt" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Spacing="4">
+                                                <TextBlock Text="Primary model ID" Style="{StaticResource FieldLabelStyle}" />
+                                                <TextBox x:Name="SimplePrimaryModelBox" Text="auto" AutomationProperties.AutomationId="SimpleInternalPrimaryModel" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Spacing="4">
+                                                <TextBlock Text="Device" Style="{StaticResource FieldLabelStyle}" />
+                                                <ComboBox x:Name="SimpleDeviceComboBox" SelectedIndex="0" AutomationProperties.AutomationId="SimpleInternalDevice">
+                                                    <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                    <ComboBoxItem Content="CUDA" Tag="cuda" />
+                                                    <ComboBoxItem Content="CPU" Tag="cpu" />
+                                                    <ComboBoxItem Content="DirectML" Tag="directml" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Row="1" Spacing="4">
+                                                <TextBlock Text="Temporal mode" Style="{StaticResource FieldLabelStyle}" />
+                                                <ComboBox x:Name="SimpleTemporalModeComboBox" SelectedIndex="1" AutomationProperties.AutomationId="SimpleInternalTemporalMode">
+                                                    <ComboBoxItem Content="Off" Tag="off" />
+                                                    <ComboBoxItem Content="Keyframes" Tag="keyframes" />
+                                                    <ComboBoxItem Content="Frame img2img" Tag="frame_img2img" />
+                                                    <ComboBoxItem Content="Video model" Tag="video_model" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                                                <TextBlock Text="Video model engine" Style="{StaticResource FieldLabelStyle}" />
+                                                <ComboBox x:Name="SimpleVideoEngineComboBox" SelectedIndex="0" AutomationProperties.AutomationId="SimpleInternalVideoEngine">
+                                                    <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                    <ComboBoxItem Content="Stable Video Diffusion" Tag="svd" />
+                                                    <ComboBoxItem Content="AnimateDiff" Tag="animatediff" />
+                                                    <ComboBoxItem Content="HunyuanVideo-1.5" Tag="hunyuan_video15" />
+                                                    <ComboBoxItem Content="LTX-2.5 Distilled" Tag="ltx_25" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="4">
+                                                <TextBlock Text="Video model ID" Style="{StaticResource FieldLabelStyle}" />
+                                                <TextBox x:Name="SimpleVideoModelBox" PlaceholderText="Internal video-model ID" AutomationProperties.AutomationId="SimpleInternalVideoModel" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Row="2" Spacing="4">
+                                                <TextBlock Text="Motion strategy" Style="{StaticResource FieldLabelStyle}" />
+                                                <ComboBox x:Name="SimpleMotionStrategyComboBox" SelectedIndex="0" AutomationProperties.AutomationId="SimpleInternalMotionStrategy">
+                                                    <ComboBoxItem Content="Manual" Tag="manual" />
+                                                    <ComboBoxItem Content="Storyboard full motion" Tag="storyboard_full_motion" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                                                <TextBlock Text="Keyframe renderer" Style="{StaticResource FieldLabelStyle}" />
+                                                <ComboBox x:Name="SimpleKeyframeRendererComboBox" SelectedIndex="0" AutomationProperties.AutomationId="SimpleInternalKeyframeRenderer">
+                                                    <ComboBoxItem Content="Internal" Tag="internal" />
+                                                    <ComboBoxItem Content="TensorRT SD 1.5" Tag="tensorrt_sd15" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Row="2" Grid.Column="2" Spacing="4">
+                                                <TextBlock Text="Keyframe model ID" Style="{StaticResource FieldLabelStyle}" />
+                                                <TextBox x:Name="SimpleKeyframeModelBox" PlaceholderText="Optional keyframe model" AutomationProperties.AutomationId="SimpleInternalKeyframeModel" />
+                                            </StackPanel>
+                                            <ToggleSwitch x:Name="SimpleTimelineCameraToggle" Grid.Row="3" Header="Apply timeline camera" IsOn="True" AutomationProperties.AutomationId="SimpleInternalTimelineCamera" />
+                                            <ToggleSwitch x:Name="SimplePromptRefineToggle" Grid.Row="3" Grid.Column="1" Header="Prompt refinement" IsOn="True" AutomationProperties.AutomationId="SimpleInternalPromptRefinement" />
+                                            <ToggleSwitch x:Name="SimpleIncludeAudioToggle" Grid.Row="3" Grid.Column="2" Header="Include project audio" IsOn="True" AutomationProperties.AutomationId="SimpleInternalIncludeAudio" />
+                                            <TextBlock Grid.Row="4" Grid.ColumnSpan="3"
+                                                       Text="These values and the applied Conductor timeline submit through the native internal_video route."
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Expander>
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <Button Content="Plan shots with AI"
                                                 Click="OpenAiPlanner_Click"
@@ -613,6 +737,7 @@
                                                   Grid.Row="6"
                                                   Grid.Column="1"
                                                   Header="Include audio"
+                                                  IsOn="True"
                                                   AutomationProperties.AutomationId="RenderIncludeAudioToggle" />
                                 </Grid>
                             </Expander>

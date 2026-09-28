@@ -42,6 +42,8 @@ public sealed partial class RenderPage : Page
     ApplyAdvancedMode();
     UpdateVideoEngineControls();
     RestoreSavedPreset();
+    UpdateSimpleInternalSettingsVisibility();
+    SyncAdvancedInternalSettingsToSimple();
     UpdateReadinessCard();
   }
 
@@ -80,6 +82,7 @@ public sealed partial class RenderPage : Page
     }
 
     _ = LoadModelGuidanceAsync(_pageCancellation.Token);
+    _ = LoadAppliedProjectPlanAsync(_pageCancellation.Token);
     _ = LoadHardwareCapabilitiesAsync(_pageCancellation.Token);
     _ = LoadGenerationProviderAsync(_pageCancellation.Token);
     _ = LoadExecutionPlaneAsync(_pageCancellation.Token);
@@ -87,6 +90,156 @@ public sealed partial class RenderPage : Page
     _jobsActivityLease = App.Services.JobsActivity.Activate();
     _ = LoadQueueSummaryAsync(_pageCancellation.Token);
   }
+
+  private async Task LoadAppliedProjectPlanAsync(CancellationToken cancellationToken)
+  {
+    if (_projectId is null)
+    {
+      AppliedPlanStatusText.Text = "No project plan is available";
+      AppliedPlanDetailText.Text = "Choose an active project, then apply a Workspace or Director draft.";
+      AppliedPlanMappingsText.Text = "No audio or timeline mappings are available.";
+      return;
+    }
+
+    try
+    {
+      Task<ProjectResponse> projectTask = App.Services.ApiClient.GetProjectAsync(_projectId, cancellationToken);
+      Task<JsonElement> directorTask = App.Services.ApiClient.GetDirectorDocumentAsync(_projectId, cancellationToken);
+      await Task.WhenAll(projectTask, directorTask);
+
+      ProjectDto project = projectTask.Result.Project;
+      JsonElement directorResponse = directorTask.Result;
+      JsonElement director = directorResponse.TryGetProperty("document", out JsonElement document)
+          && document.ValueKind == JsonValueKind.Object
+          ? document
+          : directorResponse;
+      int sceneCount = ArrayLength(director, "scenes");
+      long revision = directorResponse.TryGetProperty("revision", out JsonElement revisionElement)
+          && revisionElement.TryGetInt64(out long directorRevision)
+          ? directorRevision
+          : project.Revision;
+
+      JsonElement timeline = ObjectProperty(project.Meta, "timeline");
+      JsonElement workflow = ObjectProperty(project.Meta, "director_workflow");
+      JsonElement schedule = ObjectProperty(workflow, "schedule");
+      JsonElement scheduleSummary = ObjectProperty(schedule, "summary");
+      JsonElement reactive = ObjectProperty(timeline, "reactive_lab");
+      JsonElement camera = ObjectProperty(timeline, "camera");
+      JsonElement audio = ObjectProperty(project.Meta, "audio");
+      int appliedScenes = IntProperty(scheduleSummary, "scenes");
+      if (appliedScenes == 0)
+      {
+        appliedScenes = ArrayLength(reactive, "sections");
+      }
+      int cameraKeys = IntProperty(scheduleSummary, "camera_keys");
+      if (cameraKeys == 0)
+      {
+        cameraKeys = ArrayLength(camera, "keyframes");
+      }
+      int motionKeys = IntProperty(scheduleSummary, "motion_keys");
+      if (motionKeys == 0)
+      {
+        motionKeys = ArrayLength(reactive, "keyframes");
+      }
+      int cueEvents = ArrayLength(reactive, "cue_events");
+      int mappedSections = ArrayLength(reactive, "sections");
+      string audioFilename = StringProperty(audio, "filename");
+      double durationSeconds = NumberProperty(timeline, "duration_s");
+      if (durationSeconds <= 0)
+      {
+        durationSeconds = NumberProperty(audio, "duration_s");
+      }
+      bool reactiveApplied = reactive.ValueKind == JsonValueKind.Object;
+      bool applied = sceneCount > 0 && (appliedScenes > 0 || cameraKeys > 0 || motionKeys > 0);
+
+      AppliedPlanStatusText.Text = applied
+          ? $"Applied project plan ready · {sceneCount} Director scenes"
+          : sceneCount > 0
+              ? $"Director draft saved · {sceneCount} scenes · timeline handoff pending"
+              : "No Director draft is applied";
+
+      var details = new List<string> { $"Director revision {revision}" };
+      if (durationSeconds > 0)
+      {
+        details.Add($"Timeline {durationSeconds:0.#}s");
+      }
+      if (appliedScenes > 0)
+      {
+        details.Add($"{appliedScenes} scheduled scenes");
+      }
+      if (cameraKeys > 0)
+      {
+        details.Add($"{cameraKeys} camera keys");
+      }
+      if (motionKeys > 0)
+      {
+        details.Add($"{motionKeys} motion keys");
+      }
+      details.Add(reactiveApplied ? "Reactive Lab applied" : "Reactive Lab not applied");
+      AppliedPlanDetailText.Text = string.Join(" · ", details);
+
+      var mappings = new List<string>();
+      mappings.Add(string.IsNullOrWhiteSpace(audioFilename)
+          ? "No project audio mapped"
+          : $"Audio: {audioFilename}");
+      if (mappedSections > 0)
+      {
+        mappings.Add($"{mappedSections} sections");
+      }
+      if (cueEvents > 0)
+      {
+        mappings.Add($"{cueEvents} cue events");
+      }
+      mappings.Add($"{cameraKeys} camera keys");
+      mappings.Add($"{motionKeys} motion keys");
+      mappings.Add(applied ? "Auto-applied by Conductor" : "Conductor mapping incomplete");
+      AppliedPlanMappingsText.Text = string.Join(" · ", mappings);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+      AppliedPlanStatusText.Text = "Applied project plan could not be loaded";
+      AppliedPlanDetailText.Text = StudioPageHelpers.GetUserFacingError(ex);
+      AppliedPlanMappingsText.Text = "Audio and timeline mappings could not be read.";
+    }
+  }
+
+  private static JsonElement ObjectProperty(JsonElement value, string name) =>
+      value.ValueKind == JsonValueKind.Object
+      && value.TryGetProperty(name, out JsonElement property)
+      && property.ValueKind == JsonValueKind.Object
+          ? property
+          : default;
+
+  private static int ArrayLength(JsonElement value, string name) =>
+      value.ValueKind == JsonValueKind.Object
+      && value.TryGetProperty(name, out JsonElement property)
+      && property.ValueKind == JsonValueKind.Array
+          ? property.GetArrayLength()
+          : 0;
+
+  private static string StringProperty(JsonElement value, string name) =>
+      value.ValueKind == JsonValueKind.Object
+      && value.TryGetProperty(name, out JsonElement property)
+      && property.ValueKind == JsonValueKind.String
+          ? property.GetString() ?? string.Empty
+          : string.Empty;
+
+  private static int IntProperty(JsonElement value, string name) =>
+      value.ValueKind == JsonValueKind.Object
+      && value.TryGetProperty(name, out JsonElement property)
+      && property.TryGetInt32(out int number)
+          ? number
+          : 0;
+
+  private static double NumberProperty(JsonElement value, string name) =>
+      value.ValueKind == JsonValueKind.Object
+      && value.TryGetProperty(name, out JsonElement property)
+      && property.TryGetDouble(out double number)
+          ? number
+          : 0;
 
   private async Task LoadExecutionPlaneAsync(CancellationToken cancellationToken)
   {
@@ -647,6 +800,7 @@ public sealed partial class RenderPage : Page
       AnchorStrength = Number(AnchorStrengthBox, 0.2),
       PromptBlend = PromptBlendToggle.IsOn,
       ResumeExistingFrames = ResumeFramesToggle.IsOn,
+      IncludeAudio = IncludeAudioToggle.IsOn,
       MotionStrategy = Selected(MotionStrategyComboBox, "manual"),
       StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
       VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
@@ -768,6 +922,7 @@ public sealed partial class RenderPage : Page
       ModelBox.Text = selectedModel;
       VideoModelBox.Text = selectedModel == "auto" ? string.Empty : selectedModel;
       MotionStrengthBox.Value = 1.5;
+      SyncAdvancedInternalSettingsToSimple();
     }
 
     QuickSetupSummaryText.Text = setup.OpensTimeline
@@ -778,6 +933,40 @@ public sealed partial class RenderPage : Page
     UpdateModelGuidance();
     UpdateReadinessCard();
     return setup;
+  }
+
+  private void SyncSimpleInternalSettingsToAdvanced()
+  {
+    SelectComboValue(ModeComboBox, Selected(SimpleRenderModeComboBox, "auto"));
+    ModelBox.Text = SimplePrimaryModelBox.Text.Trim();
+    SelectComboValue(DeviceComboBox, Selected(SimpleDeviceComboBox, "auto"));
+    SelectComboValue(TemporalModeComboBox, Selected(SimpleTemporalModeComboBox, "keyframes"));
+    SelectComboValue(VideoModelEngineComboBox, Selected(SimpleVideoEngineComboBox, "auto"));
+    VideoModelBox.Text = SimpleVideoModelBox.Text.Trim();
+    SelectComboValue(MotionStrategyComboBox, Selected(SimpleMotionStrategyComboBox, "manual"));
+    SelectComboValue(KeyframeRendererComboBox, Selected(SimpleKeyframeRendererComboBox, "internal"));
+    KeyframeModelBox.Text = SimpleKeyframeModelBox.Text.Trim();
+    TimelineCameraToggle.IsOn = SimpleTimelineCameraToggle.IsOn;
+    VideoPromptRefineToggle.IsOn = SimplePromptRefineToggle.IsOn;
+    IncludeAudioToggle.IsOn = SimpleIncludeAudioToggle.IsOn;
+    UpdateVideoEngineControls();
+    UpdateModelGuidance();
+  }
+
+  private void SyncAdvancedInternalSettingsToSimple()
+  {
+    SelectComboValue(SimpleRenderModeComboBox, Selected(ModeComboBox, "auto"));
+    SimplePrimaryModelBox.Text = string.IsNullOrWhiteSpace(ModelBox.Text) ? "auto" : ModelBox.Text.Trim();
+    SelectComboValue(SimpleDeviceComboBox, Selected(DeviceComboBox, "auto"));
+    SelectComboValue(SimpleTemporalModeComboBox, Selected(TemporalModeComboBox, "keyframes"));
+    SelectComboValue(SimpleVideoEngineComboBox, Selected(VideoModelEngineComboBox, "auto"));
+    SimpleVideoModelBox.Text = VideoModelBox.Text.Trim();
+    SelectComboValue(SimpleMotionStrategyComboBox, Selected(MotionStrategyComboBox, "manual"));
+    SelectComboValue(SimpleKeyframeRendererComboBox, Selected(KeyframeRendererComboBox, "internal"));
+    SimpleKeyframeModelBox.Text = KeyframeModelBox.Text.Trim();
+    SimpleTimelineCameraToggle.IsOn = TimelineCameraToggle.IsOn;
+    SimplePromptRefineToggle.IsOn = VideoPromptRefineToggle.IsOn;
+    SimpleIncludeAudioToggle.IsOn = IncludeAudioToggle.IsOn;
   }
 
   private void MotionStrategySelection_Changed(object sender, SelectionChangedEventArgs e)
@@ -819,8 +1008,16 @@ public sealed partial class RenderPage : Page
   {
     if (_modelGuidanceUiReady)
     {
+      UpdateSimpleInternalSettingsVisibility();
       UpdateReadinessCard();
     }
+  }
+
+  private void UpdateSimpleInternalSettingsVisibility()
+  {
+    SimpleInternalSettingsPanel.Visibility = ResolveQuickSetup().Route == "internal"
+        ? Visibility.Visible
+        : Visibility.Collapsed;
   }
 
   private void QuickFpsBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -834,6 +1031,10 @@ public sealed partial class RenderPage : Page
   private void QuickPreflight_Click(object sender, RoutedEventArgs e)
   {
     RenderQuickSetup setup = ResolveQuickSetup();
+    if (setup.Route == "internal")
+    {
+      SyncSimpleInternalSettingsToAdvanced();
+    }
     if (setup.OpensTimeline)
     {
       _ = Frame.Navigate(typeof(TimelinePage));
@@ -859,6 +1060,10 @@ public sealed partial class RenderPage : Page
   private void QuickRender_Click(object sender, RoutedEventArgs e)
   {
     RenderQuickSetup setup = ResolveQuickSetup();
+    if (setup.Route == "internal")
+    {
+      SyncSimpleInternalSettingsToAdvanced();
+    }
     if (setup.OpensTimeline)
     {
       _ = Frame.Navigate(typeof(TimelinePage));
@@ -1730,13 +1935,11 @@ public sealed partial class RenderPage : Page
 
   private void StickyPreflight_Click(object sender, RoutedEventArgs e)
   {
-    _ = ApplyQuickSetup();
     QuickPreflight_Click(sender, e);
   }
 
   private void StickyRender_Click(object sender, RoutedEventArgs e)
   {
-    _ = ApplyQuickSetup();
     QuickRender_Click(sender, e);
   }
 

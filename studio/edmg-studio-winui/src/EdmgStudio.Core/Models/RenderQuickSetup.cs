@@ -54,7 +54,10 @@ public sealed record RenderQuickSetup(
             "motion_svd" => ("motion", "video_model", "svd", "storyboard_full_motion"),
             "full_video" => ("internal", "video_model", "auto", "storyboard_full_motion"),
             "edit" => ("timeline", "off", "auto", "manual"),
-            _ => ("pipeline", "keyframes", "auto", "automatic"),
+            // The Simple "Automatic internal" goal must remain on Studio's native
+            // renderer. The pipeline route is allowed to select other engines,
+            // including ComfyUI, so it is not a safe default for this explicit goal.
+            _ => ("internal", "keyframes", "auto", "automatic"),
         };
 
         return new RenderQuickSetup(

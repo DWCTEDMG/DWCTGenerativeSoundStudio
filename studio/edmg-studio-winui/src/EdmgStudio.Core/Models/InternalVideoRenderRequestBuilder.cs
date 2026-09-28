@@ -42,6 +42,7 @@ public sealed record InternalVideoRenderSettings
     public double AnchorStrength { get; init; } = 0.2;
     public bool PromptBlend { get; init; } = true;
     public bool ResumeExistingFrames { get; init; } = true;
+    public bool IncludeAudio { get; init; } = true;
     public string MotionStrategy { get; init; } = "manual";
     public double StoryboardShotMaxSeconds { get; init; } = 4.0;
     public string VideoModelEngine { get; init; } = "auto";
@@ -137,6 +138,7 @@ public static class InternalVideoRenderRequestBuilder
             ["anchor_strength"] = settings.AnchorStrength,
             ["prompt_blend"] = settings.PromptBlend,
             ["resume_existing_frames"] = tensorRt ? false : settings.ResumeExistingFrames,
+            ["include_audio"] = settings.IncludeAudio,
             ["motion_strategy"] = tensorRt ? "manual" : settings.MotionStrategy,
             ["storyboard_shot_max_s"] = settings.StoryboardShotMaxSeconds,
             ["video_model_engine"] = settings.VideoModelEngine,

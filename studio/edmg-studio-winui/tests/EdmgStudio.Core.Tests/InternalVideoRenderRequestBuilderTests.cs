@@ -7,6 +7,19 @@ namespace EdmgStudio.Core.Tests;
 public sealed class InternalVideoRenderRequestBuilderTests
 {
     [TestMethod]
+    public void Build_IncludesProjectAudioByDefaultAndCanDisableIt()
+    {
+        JsonElement enabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());
+        JsonElement disabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            IncludeAudio = false,
+        });
+
+        Assert.IsTrue(enabled.GetProperty("include_audio").GetBoolean());
+        Assert.IsFalse(disabled.GetProperty("include_audio").GetBoolean());
+    }
+
+    [TestMethod]
     public void Build_RuntimeChoiceIsScopedToOneRequest()
     {
         var settings = new InternalVideoRenderSettings();

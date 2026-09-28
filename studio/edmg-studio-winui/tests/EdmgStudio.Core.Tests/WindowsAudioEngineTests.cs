@@ -1,4 +1,5 @@
 using EdmgStudio.Core.Audio;
+using EdmgStudio.Core.Models;
 using EdmgStudio.WinUI.Services;
 using System.Threading.Channels;
 
@@ -51,6 +52,32 @@ public sealed class WindowsAudioEngineTests
     Assert.AreEqual(481, WindowsAudioEngine.CalculateFrameCapacity(441, 44_100, 48_000));
     Assert.AreEqual(441, WindowsAudioEngine.CalculateFrameCapacity(441, 44_100, 44_100));
     Assert.AreEqual(442, WindowsAudioEngine.CalculateFrameCapacity(480, 48_000, 44_100));
+  }
+
+  [TestMethod]
+  public void ClipSeekOnlyOccursForTransportChangesOrClipStart()
+  {
+    Assert.IsTrue(WindowsAudioEngine.ShouldSeekClip(transportRequiresSeek: true, isPlaying: true));
+    Assert.IsTrue(WindowsAudioEngine.ShouldSeekClip(transportRequiresSeek: false, isPlaying: false));
+    Assert.IsFalse(WindowsAudioEngine.ShouldSeekClip(transportRequiresSeek: false, isPlaying: true));
+  }
+
+  [TestMethod]
+  public void SimpleSingleTrackUsesDirectDevicePlaybackButProcessingDoesNot()
+  {
+    AudioTrackRoute route = new("track", "master", 1, 0, false, false, []);
+    AudioEngineConfiguration simple = new("project", "{default}", 48_000, 1024, [route]);
+
+    Assert.IsTrue(WindowsAudioEngine.CanUseDirectPlayback(simple));
+    Assert.IsFalse(WindowsAudioEngine.CanUseDirectPlayback(simple with
+    {
+      Automation = new([new AutomationLaneSnapshot("lane", "track", "volume", AutomationMode.Read,
+          1, [new AutomationSamplePoint(0, 1, AutomationCurve.Linear, 0)])])
+    }));
+    Assert.IsFalse(WindowsAudioEngine.CanUseDirectPlayback(simple with
+    {
+      Tracks = [route with { Pan = 0.25f }]
+    }));
   }
 
   [TestMethod]

@@ -45,7 +45,7 @@ public sealed class RenderQuickSetupTests
     }
 
     [TestMethod]
-    [DataRow("auto", "pipeline")]
+    [DataRow("auto", "internal")]
     [DataRow("stills", "stills")]
     [DataRow("motion_ad", "motion")]
     [DataRow("motion_svd", "motion")]
@@ -104,7 +104,7 @@ public sealed class RenderQuickSetupTests
         RenderQuickSetup high = RenderQuickSetup.Resolve("auto", "balanced", "768x432", 120);
 
         Assert.AreEqual("auto", low.Goal);
-        Assert.AreEqual("pipeline", low.Route);
+        Assert.AreEqual("internal", low.Route);
         Assert.AreEqual("balanced", low.Quality);
         Assert.AreEqual(768, low.Width);
         Assert.AreEqual(432, low.Height);

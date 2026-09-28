@@ -38,7 +38,9 @@ public sealed partial class TimelinePage : Page
     private const double MaximumPixelsPerSecond = 360;
     private const string PointerToolSettingKey = "Timeline.PointerTool";
     private const string ViewStateSettingPrefix = "Timeline.ViewState.";
-    private const int DefaultAudioBufferFrames = 512;
+    // Timeline playback competes with video-frame decoding and a dense WinUI editing surface.
+    // A 1024-frame shared-mode quantum provides underrun headroom while keeping interaction latency low.
+    private const int DefaultAudioBufferFrames = 1024;
 
     private readonly DispatcherTimer _transportTimer = new()
     {
