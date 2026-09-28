@@ -862,6 +862,7 @@ def test_video_model_motion_retry_is_bounded(tmp_path, monkeypatch, always_stati
         video_model_path=str(model_path),
         hunyuan_generation_mode="t2v",
         video_model_max_frames_per_scene=8,
+        device_preference="cpu",
     )
 
     if always_static:

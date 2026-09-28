@@ -8,8 +8,8 @@ import pytest
 from PIL import Image
 
 from edmg_studio_backend.errors import UserFacingError
-from edmg_studio_backend.services import internal_video_models as ivm
 from edmg_studio_backend.services import hunyuan_video15_worker as hunyuan_worker
+from edmg_studio_backend.services import internal_video_models as ivm
 from edmg_studio_backend.tests.safetensors_test_utils import (
     write_minimal_safetensors,
 )
@@ -374,7 +374,7 @@ def test_hunyuan_distributed_cuda_failure_retries_on_primary_gpu(tmp_path: Path,
 
 
 def test_hunyuan_output_decoder_uses_available_core_video_stack(tmp_path: Path) -> None:
-    import av
+    av = pytest.importorskip("av", reason="PyAV is optional outside the internal-video runtime profile")
 
     output = tmp_path / "worker-output.mp4"
     with av.open(str(output), mode="w") as container:

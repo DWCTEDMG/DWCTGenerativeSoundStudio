@@ -215,7 +215,12 @@ def test_qwen_director_cuda_pack_metadata():
 
 
 def test_qwen_pack_requires_license_before_queueing(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from edmg_studio_backend.services import model_manager as model_manager_module
+
     manager = _manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(model_manager_module, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(manager.tasks, "start", lambda *_args, **_kwargs: pytest.fail("task queued"))
     with pytest.raises(UserFacingError) as exc:
         manager.install_pack("qwen_director_cuda", {"backend": "cuda"})
@@ -224,6 +229,7 @@ def test_qwen_pack_requires_license_before_queueing(tmp_path, monkeypatch):
 
 def test_existing_pinned_llama_cuda_runtime_is_reused(tmp_path, monkeypatch):
     from types import SimpleNamespace
+
     from edmg_studio_backend.services import model_manager as model_manager_module
 
     manager = _manager(tmp_path, monkeypatch)

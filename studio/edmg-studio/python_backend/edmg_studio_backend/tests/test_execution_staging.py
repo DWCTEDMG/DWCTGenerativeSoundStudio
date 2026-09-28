@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -91,8 +90,8 @@ def test_prepare_copies_immutable_inputs_and_writes_wsl_manifest(tmp_path) -> No
     assert staged.read_bytes() == b"source-audio"
     assert staged != source
     assert prepared.manifest.inputs[0].sha256 == hashlib.sha256(b"source-audio").hexdigest()
-    assert prepared.manifest.input_root.startswith("/mnt/")
-    assert prepared.manifest.output_root.startswith("/mnt/")
+    assert prepared.manifest.input_root == windows_path_to_wsl(prepared.input_root)
+    assert prepared.manifest.output_root == windows_path_to_wsl(prepared.output_root)
     assert prepared.manifest_path.is_file()
     source.write_bytes(b"mutated-source")
     assert staged.read_bytes() == b"source-audio"
