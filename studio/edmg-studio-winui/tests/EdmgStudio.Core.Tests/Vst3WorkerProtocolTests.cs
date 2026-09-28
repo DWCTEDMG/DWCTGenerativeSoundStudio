@@ -3,8 +3,11 @@ using EdmgStudio.Core.Audio;
 namespace EdmgStudio.Core.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public sealed class Vst3WorkerProtocolTests
 {
+    private static readonly TimeSpan ChildProcessTimeout = TimeSpan.FromSeconds(30);
+
     [TestMethod]
     public void ProtocolRejectsVersionMismatchUnknownFieldsAndOversizedMessages()
     {
@@ -19,7 +22,7 @@ public sealed class Vst3WorkerProtocolTests
     {
         const string script = "$r=[Console]::ReadLine()|ConvertFrom-Json;$o=[ordered]@{protocolVersion=1;requestId=$r.requestId;success=$true;samples=@($r.samples|%{[double]$_*0.5});diagnostic='deterministic fake; no native VST3 processing'};$o|ConvertTo-Json -Compress -Depth 4";
         var client = new Vst3WorkerProcessClient("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
-        Vst3WorkerResponse response = await client.SendAsync(new(1, "request-1", "process", "fake", [1, -.5f]), TimeSpan.FromSeconds(10));
+        Vst3WorkerResponse response = await client.SendAsync(new(1, "request-1", "process", "fake", [1, -.5f]), ChildProcessTimeout);
         Assert.IsTrue(response.Success);
         CollectionAssert.AreEqual(new[] { .5f, -.25f }, response.Samples!);
         StringAssert.Contains(response.Diagnostic, "no native VST3 processing");
@@ -31,7 +34,7 @@ public sealed class Vst3WorkerProtocolTests
     {
         var client = new Vst3WorkerProcessClient("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Error.Write('boom');exit 7"]);
         InvalidOperationException error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            client.SendAsync(new(1, "request-2", "ping", null, null), TimeSpan.FromSeconds(10)));
+            client.SendAsync(new(1, "request-2", "ping", null, null), ChildProcessTimeout));
         StringAssert.Contains(error.Message, "code 7");
     }
 }
