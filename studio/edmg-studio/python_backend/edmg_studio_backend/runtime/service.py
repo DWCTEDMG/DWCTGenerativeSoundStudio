@@ -67,13 +67,30 @@ def _component_runtime_status(
         display_state = latest.get("state", "adapter_available")
     else:
         display_state = "adapter_available"
+    selected_route = route.selected_route if route else "existing_runtime"
+    selected_compiler = route.compiler if route else None
+    latest_ready = max(
+        ready_engines, key=lambda value: float(value.get("updated_at", 0)), default=None
+    )
+    if latest_ready:
+        identity = latest_ready.get("identity", {})
+        admitted_route = identity.get("route")
+        admitted_compiler = identity.get("compiler")
+        if admitted_route:
+            selected_route = admitted_route
+        elif source and source.kind.value == "huggingface" and admitted_compiler == "onnx":
+            selected_route = "huggingface_onnx_tensorrt"
+        if admitted_compiler:
+            selected_compiler = (
+                "onnx+tensorrt" if admitted_compiler == "onnx" else admitted_compiler
+            )
     route_fields = {
         "source_kind": source.kind.value if source else None,
         "architecture": source.architecture if source else None,
         "requested_route": route.requested_runtime if route else "tensorrt",
-        "selected_route": route.selected_route if route else "existing_runtime",
-        "compiler": route.compiler if route else None,
-        "compiler_available": bool(route and route.compiler),
+        "selected_route": selected_route,
+        "compiler": selected_compiler,
+        "compiler_available": bool(selected_compiler),
         "route_supported": bool(route and route.supported),
         "route_reason": route.reason if route else (declared.get("reason") or reason),
         "validated": bool(ready_engines),

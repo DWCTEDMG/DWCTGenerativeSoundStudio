@@ -74,34 +74,18 @@ def serve(root: Path) -> None:
                 route = resolve_runtime_route(source, adapter, discover_compilers())
                 if not route.supported:
                     raise RuntimeError(route.reason or "TensorRT route is unsupported")
+                selected_route = route.selected_route
+                selected_compiler = route.compiler
                 if source.kind in {SourceKind.PYTORCH_CHECKPOINT, SourceKind.HUGGINGFACE}:
-                    if not command.get("allow_build"):
-                        raise RuntimeError("No validated cached Torch-TensorRT artifact is available")
                     import torch
                     import torch_tensorrt
                     import tensorrt as trt
-                    from .torch_builder import compile_torch_component, load_registered_component
-                    module, args, kwargs, input_names = load_registered_component(
-                        adapter.loader_id or "", model_dir, command["shape"], command["precision"],
-                        int(command["device"]),
+                    torch.cuda.set_device(int(command["device"]))
+                    torch_tensorrt.runtime.set_multi_device_safe_mode(True)
+                    from .torch_builder import (
+                        compile_torch_component, load_cached_torch_component,
+                        load_registered_component,
                     )
-                    with torch.inference_mode():
-                        reference = module(*args, **kwargs)
-                    def validate(compiled):
-                        with torch.inference_mode():
-                            actual = compiled(*args, **kwargs)
-                        if hasattr(actual, "sample"):
-                            actual = actual.sample
-                        if isinstance(actual, (tuple, list)):
-                            actual = actual[0]
-                        metrics = {
-                            "passed": bool(torch.isfinite(actual).all() and torch.allclose(
-                                actual, reference, rtol=0.03 if command["precision"] == "fp16" else 0.005,
-                                atol=0.03 if command["precision"] == "fp16" else 0.005,
-                            )),
-                            "max_abs": float((actual - reference).abs().max().item()),
-                        }
-                        return metrics
                     props = torch.cuda.get_device_properties(int(command["device"]))
                     identity = build_engine_identity(
                         source=source, route=route.selected_route, compiler=route.compiler,
@@ -110,10 +94,69 @@ def serve(root: Path) -> None:
                         precision=command["precision"], profile={"input": command["shape"]},
                         device={"compute_capability": f"{props.major}.{props.minor}", "index": int(command["device"])},
                     )
-                    executor, manifest, cache_status = compile_torch_component(
-                        data_dir=Path(configuration["data_dir"]), identity=identity, module=module,
-                        example_args=args, example_kwargs=kwargs, input_names=input_names, validate=validate,
+                    input_names = (("latent",) if adapter.component == "vae_decoder" else
+                                   ("sample", "timestep", "encoder_hidden_states"))
+                    cached = load_cached_torch_component(
+                        data_dir=Path(configuration["data_dir"]), identity=identity,
+                        input_names=input_names, device=f"cuda:{command['device']}",
                     )
+                    if cached:
+                        executor, manifest, cache_status = cached
+                    else:
+                        if not command.get("allow_build"):
+                            executor, manifest, cache_status = adapter.prepare(
+                                Path(configuration["data_dir"]), model_dir, command["shape"],
+                                command["precision"], int(command["device"]), False,
+                                validation_limits=command.get("validation_limits"),
+                            )
+                            selected_route = "huggingface_onnx_tensorrt"
+                            selected_compiler = "onnx+tensorrt"
+                        else:
+                            module, args, kwargs, input_names = load_registered_component(
+                                adapter.loader_id or "", model_dir, command["shape"], command["precision"],
+                                int(command["device"]), source.kind.value,
+                            )
+                            with torch.inference_mode():
+                                reference = module(*args, **kwargs)
+                            def validate(compiled):
+                                from .policy import RuntimePolicy
+                                from .validation import evaluate_validation, tensor_validation_metrics
+                                with torch.inference_mode():
+                                    actual = compiled(*args, **kwargs)
+                                if hasattr(actual, "sample"):
+                                    actual = actual.sample
+                                if isinstance(actual, (tuple, list)):
+                                    actual = actual[0]
+                                limits = command.get("validation_limits") or RuntimePolicy().validation_limits(
+                                    command["precision"], adapter.component,
+                                )
+                                metrics = tensor_validation_metrics(reference, actual)
+                                passed, failures = evaluate_validation(metrics, limits)
+                                return {
+                                    "passed": passed, "failures": failures,
+                                    "limits": limits, **metrics,
+                                }
+                            try:
+                                executor, manifest, cache_status = compile_torch_component(
+                                    data_dir=Path(configuration["data_dir"]), identity=identity, module=module,
+                                    example_args=args, example_kwargs=kwargs, input_names=input_names, validate=validate,
+                                )
+                            except Exception as exc:
+                                if "model is not fully supported" not in str(exc):
+                                    raise
+                                del module, args, kwargs
+                                torch.cuda.empty_cache()
+                                executor, manifest, cache_status = adapter.prepare(
+                                    Path(configuration["data_dir"]), model_dir, command["shape"],
+                                    command["precision"], int(command["device"]), True,
+                                    validation_limits=command.get("validation_limits"),
+                                    progress=lambda stage: atomic_write(
+                                        root / "progress.json",
+                                        json.dumps(stage if isinstance(stage, dict) else {"stage": stage}).encode(),
+                                    ),
+                                )
+                                selected_route = "huggingface_onnx_tensorrt"
+                                selected_compiler = "onnx+tensorrt"
                 elif source.kind is SourceKind.TENSORRT_ENGINE:
                     import torch
                     import tensorrt as trt
@@ -159,8 +202,8 @@ def serve(root: Path) -> None:
                         validation_limits=command.get("validation_limits"),
                         progress=lambda stage: atomic_write(root / "progress.json", json.dumps(stage if isinstance(stage, dict) else {"stage": stage}).encode()))
                 result = {"manifest": manifest, "cache": cache_status,
-                          "source_kind": source.kind.value, "selected_route": route.selected_route,
-                          "compiler": route.compiler}
+                          "source_kind": source.kind.value, "selected_route": selected_route,
+                          "compiler": selected_compiler}
             elif command["operation"] == "execute":
                 import torch
                 if executor is None:

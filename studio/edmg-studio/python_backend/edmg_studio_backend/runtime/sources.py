@@ -64,6 +64,14 @@ def classify_model_source(model_root: Path, *, model_id: str, model_family: str,
                            model_family=model_family, component=component,
                            reason="Managed model root is unavailable")
 
+    # Diffusers stores component configs and weights below the pipeline root.  Classify the
+    # registered component rather than treating the pipeline-level model_index.json as an
+    # unknown source.
+    component_folder = "vae" if component == "vae_decoder" else component
+    nested_root = root / component_folder
+    if not (root / "config.json").is_file() and (nested_root / "config.json").is_file():
+        root = nested_root
+
     config_path = root / "config.json"
     index_paths = sorted(root.glob("*.safetensors.index.json"))
     safetensors = sorted(root.glob("*.safetensors"))

@@ -31,37 +31,41 @@ Visual Studio supports repository instructions when its custom-instructions opti
 ## Implementer update
 
 <!-- IMPLEMENTER-UPDATE-START: Visual Studio Copilot owns this section. -->
-**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. Implementer is finishing the existing WinUI x64 MSIX lane; unrelated dirty work remains outside release ownership.
+**Acknowledgement:** Repository instructions and the latest Reviewer update were loaded. Implementer normalized the WinUI project properties while preserving the current x64 unpackaged-development and opt-in MSIX release paths.
 
-- Updated UTC: 2026-09-26T06:46:09Z. Task / gate: Gate F MSIX implementation and locally achievable qualification, preserving the packaged-identity architecture and specialist workflows.
-- Branch / base / state: `codex/Unified` at `1797b4956048b88a522a495613dfddfae9611f23`, 12 commits ahead of `origin/codex/Unified`, with modified agent, Director, frontend, proxy-test, AudioGraph, and handoff files. No unrelated file will be reverted, stashed, staged, or committed to manufacture a clean tree.
-- Owned paths: MSIX packaging contracts/tests/docs, private-template examples (never credentials), generated release artifacts, the existing AudioGraph fix/tests, and this Implementer section. No dependency synchronization or accelerator-profile change is authorized.
-- Planned work: align stale Store metadata guidance with the validator; build and validate fresh x64 VST3 helpers and production backend from existing environments; stage and inspect a candidate-bound developer MSIX; attempt `.msixupload` only if exact Partner Center metadata is present; record external signing, Store, clean-machine, and real-device limits honestly.
-- Current blockers: exact Partner Center Store identity metadata is absent and the production backend payload was not staged at the prior checkpoint. Store certification and clean-machine/device evidence cannot be synthesized locally.<!-- IMPLEMENTER-UPDATE-END -->
+- Updated UTC: 2026-09-27T01:00:00Z. Task / gate: WinUI project-property normalization supporting Gates B and F.
+- Branch / base / state: `codex/Unified` at `7978783437faffe51b5cc5a06deab412a949de3d`, one commit ahead of `origin/codex/Unified`, with pre-existing TensorRT/runtime changes plus modified `STUDIO_PROGRESS.md` and `studio/edmg-studio-winui/EdmgStudio.WinUI.csproj`.
+- Owned paths: `studio/edmg-studio-winui/EdmgStudio.WinUI.csproj` and this Implementer section. Existing backend/runtime work remains untouched; no dependency or accelerator-profile changes occurred.
+- Completed: removed accidental WebView2 projection, WPF, WinForms, startup-object, unconditional MSIX, documentation/signing metadata, Debug optimization, and warnings-as-errors overrides. Retained .NET 10 WinUI 3, x64, conditional MSIX validation, nullable/unsafe, and stability-first untrimmed/non-ReadyToRun publishing.
+- Validation: from repository root, `dotnet build studio\edmg-studio-winui\EdmgStudio.WinUI.csproj --configuration Release --runtime win-x64 --no-restore --nologo` exited 0 with 0 warnings and 0 errors. Log: `%TEMP%\edmg-winui-project-properties-build.log`. Visual Studio project build also succeeded. `git diff --check` exited 0; line-ending conversion warnings reflect the existing mixed-ending working copy.
+- Remaining / blockers: none for project-property normalization. Packaged launch, signing, Store acceptance, and interactive UI qualification remain separate Gate F evidence.<!-- IMPLEMENTER-UPDATE-END -->
 
 ## Reviewer update
 
 <!-- REVIEWER-UPDATE-START: Codex owns this section. -->
 
-**Observed UTC:** 2026-09-23T03:26:00Z. The user explicitly reassigned Codex from reviewer-only monitoring to full Studio diagnostics and repair.
+**Observed UTC:** 2026-09-28. The user supplied `LANDR-The End-Balanced-Low-REV_V3.wav` to close the opt-in real-audio planning gate after production SD1.5 qualification.
 
-**Baseline and root causes:** `codex/Unified` at `1c0e95fe5624bfcfa29338415eff954f404974a3`, plus the implementer's saved Settings changes. The 02:26 and 02:29 unhandled navigation failures were traced to XAML `SelectionChanged` running before later controls existed and unpackaged Debug calling `ApplicationData.Current.LocalSettings`. The same unpackaged storage assumption also existed in Reactive Lab recovery and Timeline audio/post-alignment caches. WSL GPU discovery made one attempt and left local Director auto-start failed when that attempt raced WSL initialization.
+**Baseline and findings:** the two supplied pasted files have identical SHA-256 content and do not conflict. `codex/Unified` is one local commit ahead of `origin/codex/Unified` at `7978783` (`Execute PyTorch and prebuilt TensorRT routes`). That commit completed worker branches omitted by the earlier partial checkpoint, but route status could claim `torch_compile_tensorrt` while the worker actually invoked `torch_tensorrt.compile`; Diffusers pipeline roots were not classified through their component subfolders; and raw `.pt/.pth` routing did not load the classified checkpoint.
 
-**Repairs:** preserve the Settings initialization gate and package-identity guard; add package-aware filesystem roots for unpackaged Reactive Lab and Timeline workflows without changing packaged paths; retry WSL `nvidia-smi` discovery up to three times with bounded cancellation-aware delays. Added focused storage-path and transient-WSL regression tests using red/green verification. Existing untracked `.github/agents/` and `studio/edmg-studio-winui/TextFile1.txt` remain untouched.
+**Repairs:** installed pinned Hub revision `451f4fe16113bff5a5d2269ed5ad43b0592e9a14` of `stable-diffusion-v1-5/stable-diffusion-v1-5` as managed model `hf_sd15_internal` using complete default safetensors. Production execution exposed and repaired frontend-specific Torch-TensorRT 2.11 precision options, policy-aware numerical validation, exported-program cache loading, multi-GPU safe-mode binding, and truthful ONNX/TensorRT fallback/status for a direct Torch-TensorRT-unsupported UNet. Added repeatable production-model validation tooling. Preserved Copilot's Implementer update and WinUI project cleanup.
 
-**Fresh evidence (repository root unless stated otherwise; no dependency sync):**
+**Fresh evidence (repository root; exact dirty candidate; no dependency sync):**
 
-| Gate | Result | Evidence |
-| --- | --- | --- |
-| Frozen aggregate Python scopes | Exit 0; repository 174 passed/6 skipped; backend 1082 passed/5 skipped | `%TEMP%\edmg-full-diagnostics-20260923-030619\backend-tests.log` |
-| Final WinUI Core suite | Exit 0; 564 passed/3 skipped external native-VST3 cases | `%TEMP%\edmg-full-diagnostics-20260923-030619\winui-core-tests-final.log` |
-| Final WinUI Release x64/XAML build | Exit 0; 0 warnings/0 errors | `%TEMP%\edmg-full-diagnostics-20260923-030619\winui-release-build-final.log` |
-| Frontend typecheck and lint | Both exit 0 | `%TEMP%\edmg-full-diagnostics-20260923-030619\frontend-typecheck.log`, `frontend-lint.log` |
-| Frontend Vitest | Exit 0; 43 files/183 tests passed | `%TEMP%\edmg-full-diagnostics-20260923-030619\frontend-tests.log` |
-| Release-toolchain Node tests | Exit 0; 108 passed/1 platform skip | `%TEMP%\edmg-full-diagnostics-20260923-030619\release-toolchain-tests.log` |
-| Live backend/readiness | `/health` ok; system readiness ready; CUDA active on RTX A6000; TensorRT diagnostic ready; validated VAE and UNet engines present | Live API observation at 2026-09-23T03:05Z |
-| WSL runtime preflight | Ubuntu WSL2 running; three RTX A6000 GPUs visible; llama.cpp 0.4.1-dev present | Direct `wsl.exe` observation at 2026-09-23T03:18Z |
+| Gate | Result |
+| --- | --- |
+| Managed model | 15 pinned files/5.5 GB; complete default safetensors; full local `StableDiffusionPipeline` load succeeded in FP16 |
+| Focused TensorRT/component/model-load backend tests | Exit 0; 132 passed; final status regression 43 passed |
+| Real-audio Workspace flow | Exit 0; 329.995s/59.84 BPM; editable Director draft, camera/motion schedules, Apply-to-Timeline persistence, and reopen passed using source SHA-256 `E6E47C1ADCF7FE4F64EEE0A3C57670D5AE7DFB319429DB2985D4FFA71ADF1C28` |
+| Full backend package suite with `STUDIO_TEST_AUDIO` | Exit 0; 1204 passed/1 skipped destructive real-model inference case |
+| WinUI Core Release suite | Exit 0; 575 passed/3 skipped external native-worker cases |
+| WinUI Release x64/XAML build | Exit 0; 0 warnings/0 errors |
+| Live Torch-TensorRT worker | Exit 0 on RTX A6000 GPU 0; compiled, validated with max_abs 0.0, executed, serialized, and reloaded in a new worker with `allow_build=false`; engine `ebab16568a89a1bc46758fb5c98b875795c00df20b5228313a47c4a824eb2f7e` |
+| Production SD1.5 VAE | Direct `huggingface_torch_tensorrt`; FP16 512x512; six validation metrics passed; exported-program reload passed; engine `a022af73f79aaea4340073ae1c6e80097b91fdf0ae2af6effb0139a8b6601eea` |
+| Production SD1.5 UNet | Direct Torch-TensorRT failed closed as not fully supported; `huggingface_onnx_tensorrt` built at 64x64 latent with dynamic 32-128 profiles and batch 1-2; fixed-seed validation, cache reload, and execution passed; engine `70ec69eaadbc586e52368e6a46c6e977b35168224c8e2c0cabda40050bc0fb2c`; measured 0.0576s TRT vs 0.1343s PyTorch |
+| Studio readiness | TensorRT diagnostics `ready`; healthy and compatible; VAE and UNet both `validated` and optimization-eligible with actual admitted routes serialized truthfully |
+| Patch hygiene | `git diff --check` clean; branch remains one unpushed commit ahead |
 
-**Acceptance limits:** the currently running Debug UI predates the final Reactive/Timeline/WSL-retry build, though it is responsive and the supplied Settings screenshot plus absence of a later unhandled entry show the two saved Settings fixes loaded. Native-app UI automation was unavailable, so page-by-page interactive traversal, real render inference, audible device playback, third-party VST3 compatibility, signed installer lifecycle, Store qualification, and live TensorRT acceleration on a new render remain unclaimed. Historical failed/quarantined TensorRT records remain diagnostics, not current engine failures; current API state reports `accelerating: false` until an actual render receipt proves use.
+**Acceptance limits:** production-size SD1.5 model installation and both registered TensorRT components are now qualified on RTX A6000 GPU 0. The text encoder intentionally remains on the existing PyTorch runtime. Full end-to-end image/video render receipt, execution on GPUs 1-2, packaged launch, signing/Store acceptance, and interactive WinUI traversal remain separate gates. The earlier transcript's native-build blocker and missing-model blocker are stale for this candidate.
 
 <!-- REVIEWER-UPDATE-END -->

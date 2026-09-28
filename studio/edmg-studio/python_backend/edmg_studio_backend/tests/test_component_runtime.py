@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from edmg_studio_backend.runtime.cache import EngineCache, engine_key
+from edmg_studio_backend.runtime.adapters import ComponentAdapterRegistry
 from edmg_studio_backend.runtime.resources import require_build_memory, workspace_bytes
 from edmg_studio_backend.runtime.manager import (
     RuntimeManager,
@@ -442,6 +443,29 @@ def test_runtime_status_reports_qualified_component_evidence(tmp_path, monkeypat
     assert component["validated_engine_count"] == 1
     assert component["profile_coverage"] == [{"input": [1, 4, 64, 64]}]
     assert component["last_benchmark"]["beneficial"]
+
+
+def test_component_status_reports_admitted_onnx_fallback_route():
+    from types import SimpleNamespace
+    import edmg_studio_backend.runtime.service as runtime_service
+
+    declared = ComponentAdapterRegistry().require("sd15", "unet").status()
+    engine = {
+        "state": "ready", "updated_at": 1.0, "engine_id": "a" * 64,
+        "identity": {"model": "sd15", "component": "unet", "compiler": "onnx"},
+        "validation": {"passed": True}, "benchmark": {"beneficial": True},
+    }
+    status = runtime_service._component_runtime_status(
+        declared, [engine], policy_enabled=True, package_available=True,
+        compatible=True, model_installed=True,
+        source=SimpleNamespace(kind=SimpleNamespace(value="huggingface"), architecture="UNet2DConditionModel"),
+        route=SimpleNamespace(
+            requested_runtime="tensorrt", selected_route="huggingface_torch_tensorrt",
+            compiler="torch_tensorrt", supported=True, reason=None,
+        ),
+    )
+    assert status["selected_route"] == "huggingface_onnx_tensorrt"
+    assert status["compiler"] == "onnx+tensorrt"
 
 
 def test_runtime_metadata_reports_actual_tensorrt_selection():

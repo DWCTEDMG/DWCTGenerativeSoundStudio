@@ -58,6 +58,23 @@ def test_huggingface_safetensors_requires_config_and_complete_shards(tmp_path):
     assert complete.architecture == "UNet2DConditionModel"
 
 
+def test_classifies_diffusers_component_below_pipeline_root(tmp_path):
+    component = tmp_path / "unet"
+    component.mkdir()
+    (component / "config.json").write_text(
+        json.dumps({"_class_name": "UNet2DConditionModel"}), encoding="utf-8"
+    )
+    (component / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+
+    result = classify_model_source(
+        tmp_path, model_id="fixture", model_family="sd15", component="unet"
+    )
+
+    assert result.kind is SourceKind.HUGGINGFACE
+    assert result.root == component.resolve()
+    assert result.architecture == "UNet2DConditionModel"
+
+
 def test_ambiguous_directory_fails_without_admitted_format(tmp_path):
     (tmp_path / "model.onnx").write_bytes(b"onnx")
     (tmp_path / "model.plan").write_bytes(b"plan")
@@ -75,7 +92,7 @@ def test_routes_onnx_torch_hf_prebuilt_and_gguf(tmp_path):
 
     expectations = {
         "model.onnx": "onnx_parser",
-        "model.pt": "torch_compile_tensorrt",
+        "model.pt": "torch_tensorrt",
         "model.engine": "prebuilt_engine",
     }
     for filename, expected in expectations.items():
@@ -116,6 +133,20 @@ def test_pytorch_source_falls_back_to_direct_torch_tensorrt_without_dynamo(tmp_p
     assert decision.selected_route == "torch_tensorrt"
     assert decision.compiler == "torch_tensorrt"
     assert decision.supported
+
+
+def test_route_reports_the_compiler_the_worker_actually_invokes(tmp_path):
+    (tmp_path / "model.pt").write_bytes(b"checkpoint")
+    source = classify_model_source(
+        tmp_path, model_id="fixture", model_family="sd15", component="unet"
+    )
+    decision = resolve_runtime_route(
+        source,
+        ComponentAdapterRegistry().require("sd15", "unet"),
+        CompilerAvailability(torch_tensorrt=True, torch_compile_tensorrt=True),
+    )
+    assert decision.selected_route == "torch_tensorrt"
+    assert decision.compiler == "torch_tensorrt"
 
 
 def test_missing_torch_tensorrt_is_truthful_fallback(tmp_path):
