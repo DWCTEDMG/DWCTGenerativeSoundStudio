@@ -10,7 +10,7 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class WorkspacePage
 {
-    private const string DefaultQwenModelId = "hf_qwen3_vl_8b_gguf_director";
+    private const string DefaultQwenModelId = "hf_qwen3_omni_30b_a3b_thinking_director";
     private const string ManagedWhisperModelId = "hf_whisper_large_v3_turbo_internal";
 
     public ObservableCollection<WorkspaceDirectionSceneItem> CommandProposalItems { get; } = [];
@@ -84,6 +84,23 @@ public sealed partial class WorkspacePage
         foreach (JsonObject scene in (document["scenes"] as JsonArray ?? []).OfType<JsonObject>())
             CommandProposalItems.Add(new WorkspaceDirectionSceneItem(scene, rate, false, () => { }));
         CommandProposalSummary.Text = $"{CommandProposalItems.Count} scenes | {document["story_bible"]?["project_theme"]}";
+        if (reviewed.TryGetProperty("provenance", out JsonElement provenance) && provenance.ValueKind == JsonValueKind.Object)
+        {
+            DirectorListeningProofText.Text = $"Director semantic interpretation: {ReadString(provenance, "model_id", "audio-native model")} · {ReadString(provenance, "input_modality", "unknown modality")}";
+            DirectorDraftProofText.Text = ReadString(provenance, "input_modality", "") == "audio+text"
+                ? "Draft provenance: audio-native Qwen Director draft · Timeline unchanged until Apply"
+                : "Draft provenance: visual/text Qwen draft · model did not listen to the track";
+        }
+        if (reviewed.TryGetProperty("semantic_interpretation", out JsonElement semantic) && semantic.ValueKind == JsonValueKind.Object)
+        {
+            DirectorMeaningProofText.Text = $"Meaning/theme: {ReadString(semantic, "central_meaning", "not supplied")}";
+            if (semantic.TryGetProperty("emotional_arc", out JsonElement arc) && arc.ValueKind == JsonValueKind.Array)
+                DirectorEmotionProofText.Text = $"Emotional arc: {arc.GetArrayLength()} evidence-backed stage(s)";
+            if (semantic.TryGetProperty("motifs", out JsonElement motifs) && motifs.ValueKind == JsonValueKind.Array)
+                DirectorMotifsProofText.Text = "Recurring motifs: " + string.Join(", ", motifs.EnumerateArray().Select(value => value.GetString()).Where(value => !string.IsNullOrWhiteSpace(value)));
+        }
+        if (reviewed.TryGetProperty("transcript_evidence", out JsonElement transcript) && transcript.ValueKind == JsonValueKind.Object)
+            DirectorTranscriptProofText.Text = $"Transcript evidence: audio-native Director · {ReadString(transcript, "language", "language unknown")}";
         CommandProposalSection.Visibility = Visibility.Visible;
         CommandProposalSection.IsExpanded = true;
         CommandProgress.Value = 100;

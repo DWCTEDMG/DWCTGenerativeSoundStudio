@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.director_readiness import (
+    AUDIO_NATIVE_DIRECTOR_MODEL_ID,
+    AUDIO_NATIVE_FALLBACK_MODEL_ID,
     HIGH_TIER_DIRECTOR_MODEL_ID,
     HUNYUAN_MODEL_ID,
     LTX_MODEL_ID,
@@ -45,9 +47,11 @@ class DirectorGenerationRequest(BaseModel):
     start_sample: str | None = None
     end_sample: str | None = None
     model_id: Literal[
+        "hf_qwen3_omni_30b_a3b_thinking_director", "hf_qwen25_omni_7b_director",
         "hf_qwen3_vl_8b_director", "hf_qwen3_vl_30b_director",
         "hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director",
     ] | None = None
+    require_audio_native: bool = False
 
 
 class DirectorApplyRequest(BaseModel):
@@ -64,6 +68,8 @@ def create_director_router(
         """Return install availability and managed runtime qualification without loading weights."""
 
         model_ids = (
+            AUDIO_NATIVE_DIRECTOR_MODEL_ID,
+            AUDIO_NATIVE_FALLBACK_MODEL_ID,
             STANDARD_DIRECTOR_MODEL_ID,
             HIGH_TIER_DIRECTOR_MODEL_ID,
             HUNYUAN_MODEL_ID,
@@ -214,6 +220,15 @@ def create_director_router(
                       "code": "DIRECTOR_MODEL_NOT_INSTALLED", "model_id": model_id,
                       "draft_unchanged": True}
             )
+        if request.require_audio_native and model_id not in {
+            AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID,
+        }:
+            raise HTTPException(422, {
+                "message": "No ready audio-native Director was selected",
+                "hint": "Install Qwen3-Omni Thinking or Qwen2.5-Omni. Studio will not silently use Qwen3-VL.",
+                "code": "AUDIO_NATIVE_DIRECTOR_REQUIRED",
+                "draft_unchanged": True,
+            })
         workflow = project.meta.get("director_workflow") or {}
         document = DirectorDocument.model_validate(workflow.get("document") or project.meta.get("director_document") or {})
         if not document.scenes:
@@ -253,6 +268,7 @@ def create_director_router(
             "context_digest": context_digest,
             "context_revision": int(workflow.get("context_revision") or project.revision),
             "model_id": model_id,
+            "require_audio_native": request.require_audio_native,
             "mode": request.mode,
             "renderer_engine": request.renderer_engine,
             "allow_external": request.allow_external,
@@ -267,6 +283,32 @@ def create_director_router(
             "cuda_graphs": bool(runtime_settings.get("cuda_graphs", False)),
             "vram_gb": float(hardware.get("llama_vram_gb") or hardware.get("vram_gb") or 0),
         }
+        if model_id in {AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID}:
+            audio_meta = project.meta.get("audio") or {}
+            filename = str(audio_meta.get("filename") or "").strip()
+            if not filename:
+                raise HTTPException(422, {
+                    "message": "Audio-native Director requires project audio",
+                    "hint": "Choose and analyze the complete source track, then retry.",
+                    "code": "DIRECTOR_AUDIO_REQUIRED",
+                })
+            audio_path = get_store().project_dir(project_id) / "assets" / "audio" / filename
+            if not audio_path.is_file():
+                raise HTTPException(422, "The project audio file is missing")
+            analysis = deepcopy(project.meta.get("analysis") or {})
+            payload["audio_path"] = str(audio_path.resolve())
+            payload["audio_evidence"] = {
+                "signal_analysis": analysis.get("signal_analysis") or {
+                    "status": "complete" if analysis.get("features") else "unavailable",
+                    "analyzer": "edmg_deterministic",
+                },
+                "features": analysis.get("features") or {},
+                "sections": analysis.get("sections") or analysis.get("structure") or [],
+                "transcript": analysis.get("transcript") or {},
+                "transcript_evidence": analysis.get("transcript_evidence") or {},
+                "duration_s": analysis.get("duration_s"),
+                "source_audio_hash": analysis.get("source_audio_hash"),
+            }
         runtime_path = str(runtime_settings.get("runtime_path") or "").strip()
         if runtime_path:
             payload["runtime_path"] = runtime_path
@@ -396,7 +438,10 @@ def create_director_router(
         except KeyError as exc:
             raise HTTPException(404, "Project not found") from exc
         return {**workflow_state(current), "job_id": job.id, "job_status": "reviewed",
-                "document": job.result["document"]}
+                "document": job.result["document"],
+                "semantic_interpretation": job.result.get("semantic_interpretation"),
+                "transcript_evidence": job.result.get("transcript_evidence"),
+                "provenance": job.result.get("provenance", {})}
 
     @router.post("/v1/projects/{project_id}/director/drafts/{job_id}/apply")
     def apply_draft(project_id: str, job_id: str, request: DirectorApplyRequest):
@@ -444,6 +489,22 @@ def create_director_router(
                 "source_revision": job.payload["source_revision"],
                 "provenance": job.result.get("provenance", {}),
             }
+            if job.result.get("semantic_interpretation"):
+                analysis = project.meta.setdefault("analysis", {})
+                analysis["audio_native_director"] = {
+                    "status": "complete",
+                    "semantic_interpretation": deepcopy(job.result["semantic_interpretation"]),
+                    "provenance": deepcopy(job.result.get("provenance") or {}),
+                }
+                native_transcript = job.result.get("transcript_evidence")
+                if isinstance(native_transcript, dict):
+                    prior = analysis.get("transcript") or {}
+                    analysis["transcript_evidence"] = {
+                        "primary_source": "audio_native_director",
+                        "verification_source": (prior.get("provider") if isinstance(prior, dict) else None),
+                        "verification_state": ((job.result.get("provenance") or {}).get("whisper_verification") or "not_requested"),
+                        "director": deepcopy(native_transcript),
+                    }
             project.meta["director_job"] = {**recovery, "status": "applied", "reviewed": True,
                                             "reviewed_job_id": job.id}
             prepare_workflow(

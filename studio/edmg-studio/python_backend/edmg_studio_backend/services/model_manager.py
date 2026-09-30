@@ -500,6 +500,9 @@ def _hf_snapshot_download_profile(
     kind = str(entry.get("kind") or "").strip().lower()
     pipeline_layout = kind in {"diffusers", "video_diffusers"}
     allow: list[str] = list(_HF_METADATA_PATTERNS)
+    for required in entry.get("required_binary_files") or []:
+        if isinstance(required, str) and required and Path(required).name == required:
+            allow.append(required)
     if normalized_format != "metadata":
         extension = "safetensors" if normalized_format == "safetensors" else "bin"
         if pipeline_layout:
@@ -2139,6 +2142,11 @@ class ModelManager:
                         return False
                     metadata = json.loads((path / filename).read_text(encoding="utf-8"))
                     if not isinstance(metadata, dict) or not metadata:
+                        return False
+                for filename in entry.get("required_binary_files") or []:
+                    if not isinstance(filename, str) or Path(filename).name != filename:
+                        return False
+                    if not self._is_model_weight_file(path / filename):
                         return False
                 config = json.loads((path / "config.json").read_text(encoding="utf-8"))
                 if entry.get("family") and config.get("model_type") != entry["family"]:

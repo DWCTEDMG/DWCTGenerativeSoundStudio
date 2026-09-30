@@ -26,15 +26,20 @@ public sealed partial class WorkspacePage
             CommandModel.Text = "";
             CommandProvider.SelectedIndex = 0;
             CommandNativeAudio.IsChecked = false;
+            CommandVerifyLyrics.IsChecked = false;
+            CommandSeparateVocals.IsChecked = false;
             CommandDirectorModel.SelectedIndex = 0;
             CommandProposalItems.Clear();
             CommandProposalSection.Visibility = Visibility.Collapsed;
             CommandProgress.Value = 0;
+            UpdateDirectorProof(project);
             if (project.Meta.ValueKind != JsonValueKind.Object || !project.Meta.TryGetProperty("workspace_command", out JsonElement saved)) return;
             if (saved.TryGetProperty("brief", out var brief)) CommandBrief.Text = brief.GetString() ?? "";
             if (saved.TryGetProperty("style", out var style)) CommandStyle.Text = style.GetString() ?? "";
             if (saved.TryGetProperty("model", out var model)) CommandModel.Text = model.GetString() ?? "";
             if (saved.TryGetProperty("native_audio", out var audio)) CommandNativeAudio.IsChecked = audio.ValueKind == JsonValueKind.True;
+            if (saved.TryGetProperty("verify_lyrics", out var verify)) CommandVerifyLyrics.IsChecked = verify.ValueKind == JsonValueKind.True;
+            if (saved.TryGetProperty("separate_vocals", out var separate)) CommandSeparateVocals.IsChecked = separate.ValueKind == JsonValueKind.True;
             if (saved.TryGetProperty("provider", out var provider))
                 foreach (ComboBoxItem item in CommandProvider.Items)
                     if ((string?)item.Tag == provider.GetString()) CommandProvider.SelectedItem = item;
@@ -51,6 +56,37 @@ public sealed partial class WorkspacePage
             _restoringCommand = false;
         }
     }
+
+    private void UpdateDirectorProof(ProjectDto project)
+    {
+        DirectorSignalProofText.Text = "Signal analysis: not available";
+        DirectorListeningProofText.Text = "Audio-native Director: not run";
+        DirectorTranscriptProofText.Text = "Transcript evidence: not available";
+        DirectorMeaningProofText.Text = "Meaning/theme: awaiting interpretation";
+        DirectorEmotionProofText.Text = "Emotional arc: awaiting interpretation";
+        DirectorMotifsProofText.Text = "Recurring motifs: awaiting interpretation";
+        DirectorDraftProofText.Text = "Draft provenance: deterministic baseline";
+        if (project.Meta.ValueKind != JsonValueKind.Object ||
+            !project.Meta.TryGetProperty("analysis", out JsonElement analysis) || analysis.ValueKind != JsonValueKind.Object) return;
+        if (analysis.TryGetProperty("signal_analysis", out JsonElement signal))
+            DirectorSignalProofText.Text = $"Signal analysis: {ReadString(signal, "status", "complete")} · exact timing is deterministic";
+        if (analysis.TryGetProperty("transcript_evidence", out JsonElement transcript))
+            DirectorTranscriptProofText.Text = $"Transcript evidence: {ReadString(transcript, "primary_source", "unknown")} · verification {ReadString(transcript, "verification_state", "unknown")}";
+        if (!analysis.TryGetProperty("audio_native_director", out JsonElement director) || director.ValueKind != JsonValueKind.Object) return;
+        JsonElement provenance = director.TryGetProperty("provenance", out JsonElement provenanceValue) ? provenanceValue : default;
+        DirectorListeningProofText.Text = $"Director semantic interpretation: {ReadString(provenance, "model_id", "audio-native model")} · {ReadString(provenance, "input_modality", "audio+text")}";
+        if (!director.TryGetProperty("semantic_interpretation", out JsonElement semantic)) return;
+        DirectorMeaningProofText.Text = $"Meaning/theme: {ReadString(semantic, "central_meaning", "not supplied")}";
+        if (semantic.TryGetProperty("emotional_arc", out JsonElement arc) && arc.ValueKind == JsonValueKind.Array)
+            DirectorEmotionProofText.Text = $"Emotional arc: {arc.GetArrayLength()} evidence-backed stage(s)";
+        if (semantic.TryGetProperty("motifs", out JsonElement motifs) && motifs.ValueKind == JsonValueKind.Array)
+            DirectorMotifsProofText.Text = "Recurring motifs: " + string.Join(", ", motifs.EnumerateArray().Select(value => value.GetString()).Where(value => !string.IsNullOrWhiteSpace(value)));
+        DirectorDraftProofText.Text = "Draft provenance: audio-native Qwen Director draft · Timeline unchanged until Review and Apply";
+    }
+
+    private static string ReadString(JsonElement parent, string property, string fallback) =>
+        parent.ValueKind == JsonValueKind.Object && parent.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? fallback : fallback;
 
     private async void CancelCommand_Click(object sender, RoutedEventArgs e)
     {
@@ -73,10 +109,13 @@ public sealed partial class WorkspacePage
         string provider = GetComboTag(CommandProvider, "internal_qwen");
         bool internalModel = provider == "internal_qwen";
         string? directorModel = NullIfWhiteSpace(GetComboTag(CommandDirectorModel, ""));
+        directorModel ??= "hf_qwen3_omni_30b_a3b_thinking_director";
         string? model = NullIfWhiteSpace(CommandModel.Text);
         string? brief = NullIfWhiteSpace(CommandBrief.Text);
         string? style = NullIfWhiteSpace(CommandStyle.Text);
         bool nativeAudio = CommandNativeAudio.IsChecked == true;
+        bool verifyLyrics = CommandVerifyLyrics.IsChecked == true;
+        bool separateVocals = CommandSeparateVocals.IsChecked == true;
         SetCommandBusy(true);
         try
         {
@@ -84,6 +123,8 @@ public sealed partial class WorkspacePage
             {
                 try
                 {
+                    await App.Services.ApiClient.SaveTranscriptionSettingsAsync(
+                        JsonSerializer.SerializeToElement(new { verification_enabled = verifyLyrics, separate_vocals = separateVocals }), token);
                     if (_projectResponse?.Project.HasAudio != true && string.IsNullOrWhiteSpace(_pendingAudioPath))
                         throw new InvalidOperationException("Choose source audio before creating direction.");
                     CommandProgress.Value = 5;
@@ -163,8 +204,9 @@ public sealed partial class WorkspacePage
                                 .Where(value => !string.IsNullOrWhiteSpace(value)));
                             if (instruction.Length == 0)
                                 instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
+                            bool requireAudioNative = string.IsNullOrWhiteSpace(directorModel) || directorModel.Contains("omni", StringComparison.OrdinalIgnoreCase);
                             var request = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(),
-                                instruction, ModelId: directorModel);
+                                instruction, ModelId: directorModel, RequireAudioNative: requireAudioNative);
                             JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);
                             _directorDraftJobId = queued.GetProperty("job_id").GetString()!;
                             _directorDraftJobStatus = queued.GetProperty("status").GetString();

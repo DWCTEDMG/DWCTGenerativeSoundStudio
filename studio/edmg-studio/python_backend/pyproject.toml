@@ -87,6 +87,7 @@ internal-video = [
   "accelerate>=0.33,<2",
   "safetensors>=0.4.3,<1",
   "tensorboard>=2.16,<3",
+  "qwen-omni-utils>=0.0.8,<1",
 ]
 advanced = [
   "aiohttp>=3.10,<4",

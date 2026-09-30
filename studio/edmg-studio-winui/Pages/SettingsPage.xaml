@@ -251,6 +251,9 @@
                             </ComboBox>
                         </Grid>
                         <TextBox x:Name="TranscriptionModelTextBox" AutomationProperties.AutomationId="SettingsTranscriptionModelTextBox" Header="Model" PlaceholderText="turbo" />
+                        <CheckBox x:Name="TranscriptVerificationCheckBox" Content="Use this ASR provider to verify audio-native Director lyrics" />
+                        <CheckBox x:Name="SeparateVocalsCheckBox" Content="Separate vocals before verification" />
+                        <TextBlock Opacity="0.68" Text="ASR is optional evidence. The audio-native Director listens to the complete track; deterministic signal analysis remains authoritative for timing." TextWrapping="Wrap" />
                         <Button AutomationProperties.AutomationId="SettingsSaveTranscriptionButton" Click="SaveTranscriptionButton_Click" Content="Save transcription settings" HorizontalAlignment="Left" />
                     </StackPanel>
                 </Border>

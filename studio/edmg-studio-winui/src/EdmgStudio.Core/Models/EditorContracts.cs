@@ -22,7 +22,8 @@ public sealed record DirectorGenerationRequest(
     string? EndSample = null,
     [property: JsonPropertyName("model_id")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ModelId = null);
+    string? ModelId = null,
+    [property: JsonPropertyName("require_audio_native")] bool RequireAudioNative = false);
 
 public sealed record DirectorApplyRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision);

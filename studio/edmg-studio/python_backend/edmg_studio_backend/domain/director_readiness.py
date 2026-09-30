@@ -20,6 +20,8 @@ RendererEngine = Literal["hunyuan_video15", "ltx_25", "external"]
 
 STANDARD_DIRECTOR_MODEL_ID = "hf_qwen3_vl_8b_director"
 HIGH_TIER_DIRECTOR_MODEL_ID = "hf_qwen3_vl_30b_director"
+AUDIO_NATIVE_DIRECTOR_MODEL_ID = "hf_qwen3_omni_30b_a3b_thinking_director"
+AUDIO_NATIVE_FALLBACK_MODEL_ID = "hf_qwen25_omni_7b_director"
 HUNYUAN_MODEL_ID = "hf_hunyuan_video15_internal"
 LTX_MODEL_ID = "hf_ltx_25_distilled_internal"
 
@@ -262,6 +264,7 @@ def resolve_director_readiness(
         if director_model_id not in {
             STANDARD_DIRECTOR_MODEL_ID, HIGH_TIER_DIRECTOR_MODEL_ID,
             STANDARD_GGUF_ID, HIGH_GGUF_ID,
+            AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID,
         }:
             raise ValueError(f"Unsupported internal Director model: {director_model_id}")
         director_model = director_model_id
@@ -275,7 +278,9 @@ def resolve_director_readiness(
     )
     director_installed = _model_installed(installed, director_model)
     director_status = _runtime_record(installed, director_model)
-    director_runtime_ready = director_model == STANDARD_DIRECTOR_MODEL_ID
+    director_runtime_ready = director_model in {
+        STANDARD_DIRECTOR_MODEL_ID, AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID,
+    }
     if director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID}:
         director_status = director_status or runtime_status(director_model, hw)
         director_runtime_ready = bool(
@@ -363,11 +368,13 @@ def resolve_director_readiness(
 
     director_selection = _selection(
         role="director",
-        engine="qwen3_vl_gguf" if director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID} else "qwen3_vl",
+        engine=("qwen_omni" if director_model in {AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID}
+                else "qwen3_vl_gguf" if director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID} else "qwen3_vl"),
         model_id=director_model,
-        label="Qwen3-VL-30B-A3B"
-        if director_model in {HIGH_TIER_DIRECTOR_MODEL_ID, HIGH_GGUF_ID}
-        else "Qwen3-VL-8B",
+        label=("Qwen3-Omni-30B-A3B Thinking" if director_model == AUDIO_NATIVE_DIRECTOR_MODEL_ID
+               else "Qwen2.5-Omni-7B" if director_model == AUDIO_NATIVE_FALLBACK_MODEL_ID
+               else "Qwen3-VL-30B-A3B" if director_model in {HIGH_TIER_DIRECTOR_MODEL_ID, HIGH_GGUF_ID}
+               else "Qwen3-VL-8B"),
         profile=director_profile,
         installed=director_installed,
         adapter_ready=director_runtime_ready,

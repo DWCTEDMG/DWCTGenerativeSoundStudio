@@ -4253,8 +4253,15 @@ def analyze_audio(project_id: str, *, force: bool = True):
     development_timings_ms: dict[str, float] = {}
     with development_timing("audio_analysis", development_timings_ms):
         feats = _collect_audio_analysis_features(audio_path)
+    asr_cfg = transcription_settings.get()
     try:
-        asr_cfg = transcription_settings.get()
+        if not bool(asr_cfg.get("verification_enabled", False)):
+            trans = {
+                "text": "",
+                "provider": "disabled",
+                "note": "ASR verification was not requested; the audio-native Director may create transcript evidence.",
+            }
+            raise StopIteration
         transcription_audio_path, separation_meta = _prepare_transcription_audio(
             audio_path,
             store.project_dir(project_id),
@@ -4289,6 +4296,8 @@ def analyze_audio(project_id: str, *, force: bool = True):
         trans = transcript_result if isinstance(transcript_result, dict) else {"text": str(transcript_result or "")}
         trans["source_audio_path"] = str(transcription_audio_path)
         trans["vocal_separation"] = separation_meta
+    except StopIteration:
+        pass
     except Exception:
         logger.exception("Project transcription failed")
         trans = {"error": "Transcription failed"}
@@ -4304,6 +4313,20 @@ def analyze_audio(project_id: str, *, force: bool = True):
     duration_s = _analysis_duration_s(analysis)
     if duration_s:
         analysis["duration_s"] = float(duration_s)
+    analysis["signal_analysis"] = {
+        "status": "complete",
+        "analyzer": "edmg_ffmpeg_numpy",
+        "authoritative_timing": True,
+    }
+    analysis["transcript_evidence"] = {
+        "primary_source": "pending_audio_native_director",
+        "verification_source": str(trans.get("provider") or "none"),
+        "verification_state": (
+            "complete" if str(trans.get("text") or "").strip()
+            else "not_requested" if not bool(asr_cfg.get("verification_enabled", False))
+            else "failed" if trans.get("error") else "empty"
+        ),
+    }
     previous_analysis = proj.meta.get("analysis") or next(iter(reversed(proj.meta.get("analysis_history") or [])), {})
     analysis["revision"] = int(previous_analysis.get("revision") or 0) + 1
     analysis["source_audio_hash"] = source_hash

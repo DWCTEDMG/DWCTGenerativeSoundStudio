@@ -143,6 +143,8 @@ public sealed partial class SettingsPage : Page
         SelectComboValue(TranscriptionDeviceComboBox, settings["device"]?.GetValue<string>() ?? "auto");
         SelectComboValue(ComputeTypeComboBox, settings["compute_type"]?.GetValue<string>() ?? "auto");
         TranscriptionModelTextBox.Text = settings["model"]?.GetValue<string>() ?? "turbo";
+        TranscriptVerificationCheckBox.IsChecked = settings["verification_enabled"]?.GetValue<bool?>() ?? false;
+        SeparateVocalsCheckBox.IsChecked = settings["separate_vocals"]?.GetValue<bool?>() ?? false;
     }
 
     private static async Task<string?> ProbeAndApplyAsync(
@@ -475,7 +477,9 @@ public sealed partial class SettingsPage : Page
             ["provider"] = TranscriptionProviderComboBox.SelectedItem as string ?? "faster_whisper",
             ["device"] = TranscriptionDeviceComboBox.SelectedItem as string ?? "auto",
             ["compute_type"] = ComputeTypeComboBox.SelectedItem as string ?? "auto",
-            ["model"] = TranscriptionModelTextBox.Text.Trim()
+            ["model"] = TranscriptionModelTextBox.Text.Trim(),
+            ["verification_enabled"] = TranscriptVerificationCheckBox.IsChecked == true,
+            ["separate_vocals"] = SeparateVocalsCheckBox.IsChecked == true
         };
         await RunSaveAsync(() => _apiClient.SaveTranscriptionSettingsAsync(payload), "Transcription settings saved.");
     }

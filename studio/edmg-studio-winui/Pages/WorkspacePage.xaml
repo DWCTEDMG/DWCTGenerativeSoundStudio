@@ -153,12 +153,16 @@
                                 <ComboBoxItem Content="NVIDIA NIM" Tag="nemotron_cloud" />
                                 <ComboBoxItem Content="Manual / local planning" Tag="local" />
                             </ComboBox>
-                            <ComboBox x:Name="CommandDirectorModel" Header="Qwen model" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandDirectorModel_SelectionChanged">
-                                <ComboBoxItem Content="Automatic (managed Qwen3-VL-8B)" Tag="" />
+                            <ComboBox x:Name="CommandDirectorModel" Header="Director listening model" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandDirectorModel_SelectionChanged">
+                                <ComboBoxItem Content="Automatic (prefer audio-native Qwen)" Tag="" />
+                                <ComboBoxItem Content="Qwen3-Omni-30B-A3B Thinking · audio native" Tag="hf_qwen3_omni_30b_a3b_thinking_director" />
+                                <ComboBoxItem Content="Qwen2.5-Omni-7B · audio-native fallback" Tag="hf_qwen25_omni_7b_director" />
                                 <ComboBoxItem Content="Qwen3-VL-8B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_8b_gguf_director" />
                                 <ComboBoxItem Content="Qwen3-VL-30B-A3B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_30b_gguf_director" />
                                 <ComboBoxItem Content="Qwen3-VL-8B Instruct" Tag="hf_qwen3_vl_8b_director" />
                             </ComboBox>
+                            <CheckBox x:Name="CommandVerifyLyrics" Content="Verify uncertain lyrics with configured ASR / Whisper" />
+                            <CheckBox x:Name="CommandSeparateVocals" Content="Separate vocals before transcript verification" />
                             <TextBox x:Name="CommandModel" Header="BYOM model" PlaceholderText="Configured model" Visibility="Collapsed" TextChanged="CommandModel_TextChanged" />
                             <CheckBox x:Name="CommandNativeAudio" Content="Send track to selected audio-capable model" />
                             <Border Padding="12" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
@@ -167,6 +171,18 @@
                                     <TextBlock x:Name="CommandQwenStatus" Text="Qwen: checking configuration and runtime evidence" TextWrapping="Wrap" />
                                     <TextBlock x:Name="CommandTranscriptionStatus" Text="Whisper: loading settings and runtime evidence" TextWrapping="Wrap" />
                                     <TextBlock x:Name="CommandAnalysisStatus" Text="Analysis: no project selected" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border Padding="12" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                <StackPanel Spacing="5">
+                                    <TextBlock FontWeight="SemiBold" Text="Director evidence and provenance" />
+                                    <TextBlock x:Name="DirectorSignalProofText" Text="Signal analysis: not available" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="DirectorListeningProofText" Text="Audio-native Director: not run" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="DirectorTranscriptProofText" Text="Transcript evidence: not available" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="DirectorMeaningProofText" Text="Meaning/theme: awaiting interpretation" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="DirectorEmotionProofText" Text="Emotional arc: awaiting interpretation" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="DirectorMotifsProofText" Text="Recurring motifs: awaiting interpretation" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="DirectorDraftProofText" Text="Draft provenance: deterministic baseline" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <ComboBox x:Name="CommandRenderer" Header="Video renderer" SelectedIndex="0" HorizontalAlignment="Stretch">

@@ -26,6 +26,7 @@ TRANSCRIPTION_DEVICES = ("auto", "cuda", "cpu")
 TRANSCRIPTION_COMPUTE_TYPES = ("auto", "float16", "int8", "int8_float16")
 
 DEFAULT_TRANSCRIPTION_SETTINGS: dict[str, Any] = {
+    "verification_enabled": False,
     "provider": "faster_whisper",
     "model": "turbo",
     "device": "auto",
@@ -163,6 +164,7 @@ class TranscriptionSettingsStore:
             model = DEFAULT_TRANSCRIPTION_SETTINGS["model"]
 
         return {
+            "verification_enabled": bool(payload.get("verification_enabled", False)),
             "provider": provider,
             "model": model,
             "device": normalize_device(payload.get("device")),

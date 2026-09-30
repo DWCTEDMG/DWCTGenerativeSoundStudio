@@ -79,6 +79,33 @@ def test_director_catalog_is_pinned_and_requires_complete_snapshot(tmp_path, mon
     assert _hf_profile_matches_path("model-00001-of-00004.safetensors", profile)
 
 
+def test_audio_native_director_requires_binary_companion(tmp_path, monkeypatch):
+    from edmg_studio_backend.services.model_catalog import built_in_catalog
+
+    entry = next(item for item in built_in_catalog() if item["id"] == "hf_qwen25_omni_7b_director")
+    assert entry["hf_revision"] == "ae9e1690543ffd5c0221dc27f79834d0294cba00"
+    assert entry["family"] == "qwen2_5_omni"
+    assert entry["required_binary_files"] == ["spk_dict.pt"]
+    profile = _hf_snapshot_download_profile(entry, weight_format="metadata")
+    assert _hf_profile_matches_path("spk_dict.pt", profile)
+
+    manager = _manager(tmp_path, monkeypatch)
+    mode, destination = manager._models_dest(entry)
+    assert mode == "snapshot"
+    destination.mkdir(parents=True, exist_ok=True)
+    for filename in entry["required_files"]:
+        (destination / filename).write_text(json.dumps({"fixture": True}), encoding="utf-8")
+    (destination / "config.json").write_text(json.dumps({"model_type": "qwen2_5_omni"}), encoding="utf-8")
+    (destination / "model.safetensors.index.json").write_text(json.dumps({
+        "weight_map": {"weight": "model-00001-of-00001.safetensors"}
+    }), encoding="utf-8")
+    write_minimal_safetensors(destination / "model-00001-of-00001.safetensors")
+
+    assert not manager._internal_asset_installed(entry, destination)
+    (destination / "spk_dict.pt").write_bytes(b"speaker dictionary fixture")
+    assert manager._internal_asset_installed(entry, destination)
+
+
 def _write_valid_unet_snapshot(path: Path, *, extension: str = "safetensors") -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / "model_index.json").write_text(

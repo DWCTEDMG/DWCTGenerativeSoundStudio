@@ -102,6 +102,19 @@ def run_director_job(
 ) -> dict:
     """Worker entry point. Recheck installed weights and live memory before loading."""
     _check_canceled(cancel_check)
+    from .audio_native_director import is_audio_native_model, run_audio_native_director_job
+
+    if is_audio_native_model(payload.get("model_id")):
+        return run_audio_native_director_job(
+            payload, models, cancel_check=cancel_check, progress_fn=progress_fn
+        )
+    if payload.get("require_audio_native"):
+        raise UserFacingError(
+            "The selected Director cannot listen to project audio",
+            hint="Select Qwen3-Omni Thinking or Qwen2.5-Omni, then retry. No text-only fallback was used.",
+            code="AUDIO_NATIVE_DIRECTOR_REQUIRED",
+            status_code=422,
+        )
     if progress_fn:
         progress_fn("validating_model", "Checking the installed Director model and available memory")
     model_id = payload.get("model_id")
