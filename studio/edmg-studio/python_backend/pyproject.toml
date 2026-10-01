@@ -20,6 +20,7 @@ dependencies = [
   "hf-transfer==0.1.9",
   "hf-xet==1.5.1",
   "keyring>=24.3.0",
+  "json-repair>=0.63.5,<0.64",
 ]
 
 [project.optional-dependencies]

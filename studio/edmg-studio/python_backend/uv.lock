@@ -919,6 +919,7 @@ dependencies = [
     { name = "hf-transfer" },
     { name = "hf-xet" },
     { name = "huggingface-hub" },
+    { name = "json-repair" },
     { name = "keyring" },
     { name = "pillow" },
     { name = "py7zr" },
@@ -1063,6 +1064,7 @@ requires-dist = [
     { name = "hf-transfer", specifier = "==0.1.9" },
     { name = "hf-xet", specifier = "==1.5.1" },
     { name = "huggingface-hub", specifier = ">=0.34.0,<1.0" },
+    { name = "json-repair", specifier = ">=0.63.5,<0.64" },
     { name = "keyring", specifier = ">=24.3.0" },
     { name = "librosa", marker = "extra == 'audio'", specifier = ">=0.10.2,<1" },
     { name = "matplotlib", marker = "extra == 'core'", specifier = ">=3.9,<4" },
@@ -1789,6 +1791,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/41/f2/d34e8b3a08a9cc79a50b2208a93dce981fe615b64d5a4d4abee421d898df/joblib-1.5.3.tar.gz", hash = "sha256:8561a3269e6801106863fd0d6d84bb737be9e7631e33aaed3fb9ce5953688da3", size = 331603, upload-time = "2025-12-15T08:41:46.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/91/984aca2ec129e2757d1e4e3c81c3fcda9d0f85b74670a094cc443d9ee949/joblib-1.5.3-py3-none-any.whl", hash = "sha256:5fc3c5039fc5ca8c0276333a188bbd59d6b7ab37fe6632daa76bc7f9ec18e713", size = 309071, upload-time = "2025-12-15T08:41:44.973Z" },
+]
+
+[[package]]
+name = "json-repair"
+version = "0.63.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/29/653c36e0de80f7048f01298a9098f1c66bb9da162e92ad6a6e2c3202cc52/json_repair-0.63.5.tar.gz", hash = "sha256:75a6a1a4ea954935dd3fb69b6e49ac0e3e3d69b4290127a0c8d37af93b709f3a", size = 52945, upload-time = "2026-09-22T18:36:08.745Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/a4/222e2581667c326183a87df229e772140fbf3e5dc03ec73e2a0e74804114/json_repair-0.63.5-py3-none-any.whl", hash = "sha256:0e39b3066f7829b4bd7fc614e463cfd4ff7a4c46f82f5b65431fc11e29a74c81", size = 51334, upload-time = "2026-09-22T18:36:07.05Z" },
 ]
 
 [[package]]
