@@ -130,7 +130,10 @@ def built_in_catalog() -> list[dict[str, Any]]:
             notes="Primary audio-native Director. Listens to project audio and returns semantic interpretation plus evidence-backed scene mappings. Multi-GPU CUDA is recommended.",
             family="qwen3_omni_moe",
             tags=["internal", "director", "planning", "audio", "music", "reasoning", "multi-gpu"],
-            required_files=["config.json", "tokenizer.json", "tokenizer_config.json",
+            # This pinned Qwen3-Omni revision uses the BPE pair
+            # ``vocab.json`` + ``merges.txt`` and does not publish a
+            # monolithic ``tokenizer.json``.
+            required_files=["config.json", "tokenizer_config.json",
                             "preprocessor_config.json", "model.safetensors.index.json"],
             hardware_targets=["nvidia"],
         ),

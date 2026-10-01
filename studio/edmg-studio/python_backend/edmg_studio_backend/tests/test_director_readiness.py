@@ -6,6 +6,8 @@ import pytest
 
 from edmg_studio_backend.api.director import create_director_router
 from edmg_studio_backend.domain.director_readiness import (
+    AUDIO_NATIVE_DIRECTOR_MODEL_ID,
+    AUDIO_NATIVE_FALLBACK_MODEL_ID,
     HIGH_TIER_DIRECTOR_MODEL_ID,
     HUNYUAN_MODEL_ID,
     LTX_MODEL_ID,
@@ -81,6 +83,31 @@ def test_low_hardware_automatic_resolves_standard_director_and_hunyuan_admission
     assert result.director.ready is True
     assert result.ready is False
     assert any("HunyuanVideo-1.5" in blocker for blocker in result.blockers)
+
+
+def test_automatic_prefers_installed_audio_native_director_and_uses_7b_fallback():
+    hardware = {"backend": "cuda", "vram_gb": 48.0, "ram_gb": 128.0}
+    primary = resolve_director_readiness(
+        hardware,
+        installed_models={
+            AUDIO_NATIVE_DIRECTOR_MODEL_ID: True,
+            AUDIO_NATIVE_FALLBACK_MODEL_ID: True,
+            STANDARD_DIRECTOR_MODEL_ID: True,
+        },
+    )
+    assert primary.director.model_id == AUDIO_NATIVE_DIRECTOR_MODEL_ID
+    assert primary.director.ready is True
+
+    fallback = resolve_director_readiness(
+        hardware,
+        installed_models={
+            AUDIO_NATIVE_FALLBACK_MODEL_ID: True,
+            STANDARD_DIRECTOR_MODEL_ID: True,
+        },
+    )
+    assert fallback.director.model_id == AUDIO_NATIVE_FALLBACK_MODEL_ID
+    assert fallback.director.ready is True
+    assert any("audio-native Director" in warning for warning in fallback.warnings)
 
 
 def test_quality_on_high_hardware_prefers_ltx_and_high_tier_director_when_available():

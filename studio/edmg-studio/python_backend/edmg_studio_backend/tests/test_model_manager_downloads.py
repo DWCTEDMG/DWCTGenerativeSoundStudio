@@ -106,6 +106,18 @@ def test_audio_native_director_requires_binary_companion(tmp_path, monkeypatch):
     assert manager._internal_asset_installed(entry, destination)
 
 
+def test_qwen3_omni_catalog_matches_pinned_bpe_tokenizer_layout():
+    from edmg_studio_backend.services.model_catalog import built_in_catalog
+
+    entry = next(
+        item for item in built_in_catalog()
+        if item["id"] == "hf_qwen3_omni_30b_a3b_thinking_director"
+    )
+    assert entry["hf_revision"] == "2f443cfc4c54b14a815c0e2bb9a9d6cbcd9a748b"
+    assert "tokenizer.json" not in entry["required_files"]
+    assert "tokenizer_config.json" in entry["required_files"]
+
+
 def _write_valid_unet_snapshot(path: Path, *, extension: str = "safetensors") -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / "model_index.json").write_text(

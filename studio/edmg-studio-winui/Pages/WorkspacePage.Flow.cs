@@ -197,11 +197,25 @@ public sealed partial class WorkspacePage
             return;
         }
 
-        string modelId = GetComboTag(CommandDirectorModel, DefaultQwenModelId);
-        if (string.IsNullOrWhiteSpace(modelId)) modelId = DefaultQwenModelId;
+        string modelId = GetComboTag(CommandDirectorModel, "");
         CommandQwenStatus.Text = "Qwen: checking configuration and runtime evidence";
         try
         {
+            if (TryGetActiveProjectId(out string projectId))
+            {
+                JsonElement readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
+                    projectId, "automatic", "automatic", token,
+                    string.IsNullOrWhiteSpace(modelId) ? null : modelId);
+                JsonElement director = readiness.GetProperty("director");
+                string label = ReadString(director, "label", "Audio-native Qwen");
+                string reason = ReadString(director, "reason", "Readiness evidence unavailable.");
+                bool ready = director.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
+                CommandQwenStatus.Text = ready
+                    ? $"Qwen: ready - {(string.IsNullOrWhiteSpace(modelId) ? "Automatic selected " : "")}{label}. {reason}"
+                    : $"Qwen: unavailable - {label}. {reason}";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(modelId)) modelId = DefaultQwenModelId;
             ModelRuntimeStatus status = await App.Services.ApiClient.GetModelRuntimeReadinessAsync(modelId, token);
             CommandQwenStatus.Text = WorkspaceReadinessSummary.Model("Qwen", status);
         }

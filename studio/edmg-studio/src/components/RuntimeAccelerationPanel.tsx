@@ -3,11 +3,41 @@ import { apiDelete, apiGet, apiPost } from "./api";
 
 type Policy = {
   mode: string; enabled: boolean; auto_build: boolean; allow_fallback: boolean;
-  precision: string; strict: boolean; cache_enabled: boolean; cache_limit_gb: number; package_path: string;
+  precision: string; strict: boolean; cache_enabled?: boolean; cache_limit_gb: number; package_path: string;
 };
-type Status = { settings: Policy; state: string; package: { installed: boolean };
-  diagnostics: { status: string; version?: string; tested_at?: number } | null;
-  cache_bytes: number; engines: { engine_id: string; state: string }[] };
+type RuntimeComponent = {
+  model_family: string; component: string; fallback_runtime: string;
+  optimization_reason?: string | null; validated_engine_count: number;
+  last_failure?: string | null; source_kind?: string | null; architecture?: string | null;
+  selected_route: string; compiler?: string | null; route_supported: boolean;
+  route_reason?: string | null; validated: boolean; accelerating: boolean;
+};
+type Engine = { engine_id: string; state: string };
+type Status = {
+  settings: Policy; state: string; installed: boolean; available: boolean; healthy: boolean;
+  compatible: boolean; accelerating: boolean; tensorrt_version?: string | null;
+  diagnostics: { status?: string; version?: string } | null; cache_bytes: number;
+  supported_component_count: number; components: RuntimeComponent[]; engines: Engine[];
+};
+
+const ROUTE_LABELS: Record<string, string> = {
+  onnx_parser: "ONNX via TensorRT parser",
+  torch_tensorrt: "PyTorch via Torch-TensorRT",
+  torch_compile_tensorrt: "PyTorch via torch.compile TensorRT",
+  huggingface_torch_tensorrt: "Hugging Face via Torch-TensorRT",
+  huggingface_onnx_tensorrt: "Hugging Face via ONNX/TensorRT",
+  prebuilt_engine: "Prebuilt TensorRT engine",
+  llama_cpp: "GGUF via llama.cpp (non-TensorRT)",
+  existing_runtime: "Existing runtime",
+};
+const words = (value: string | null | undefined) => String(value || "unknown").replaceAll("_", " ");
+const routeLabel = (component: RuntimeComponent) => ROUTE_LABELS[component.selected_route] || words(component.selected_route);
+function componentState(component: RuntimeComponent) {
+  if (component.accelerating) return "Accelerating this operation";
+  if (component.validated) return "Validated engine available";
+  if (component.route_supported) return "Supported; not yet validated";
+  return `Fallback: ${words(component.fallback_runtime)}`;
+}
 
 export default function RuntimeAccelerationPanel() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -15,14 +45,16 @@ export default function RuntimeAccelerationPanel() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState(0);
+
   async function refresh() {
     const value = await apiGet("/v1/runtime/status") as Status;
-    setStatus(value); setPolicy(value.settings);
+    setStatus({ ...value, components: value.components || [], engines: value.engines || [] });
+    setPolicy(value.settings);
   }
   useEffect(() => { void refresh().catch(error => setMessage(String(error))); }, []);
-  async function perform(action: () => Promise<unknown>, message: string) {
+  async function perform(action: () => Promise<unknown>, successMessage: string) {
     setBusy(true);
-    try { await action(); setMessage(message); await refresh(); }
+    try { await action(); setMessage(successMessage); await refresh(); }
     catch (error) { setMessage(String(error)); }
     finally { setBusy(false); }
   }
@@ -30,9 +62,10 @@ export default function RuntimeAccelerationPanel() {
     const job = await apiPost("/v1/runtime/jobs", { operation, device, precision: policy?.precision === "fp32" ? "fp32" : "fp16" });
     setMessage(`Job ${job.job_id} queued. Follow progress or cancel in the Studio job queue.`);
   }
+
   return <details>
     <summary>AI runtime / NVIDIA acceleration</summary>
-    <p>Automatic reuses validated engines when beneficial. Performance can compile on first use. SD1.5 VAE decoding is the first supported component.</p>
+    <p>Automatic mode reuses validated engines when beneficial. Performance mode can compile on first use; actual acceleration is recorded per render.</p>
     {policy && <fieldset disabled={busy} style={{ display: "grid", gap: 10 }}>
       <label>Runtime mode <select value={policy.mode} onChange={e => setPolicy({ ...policy, mode: e.target.value })}>
         {["auto", "compatibility", "performance", "pytorch_cuda", "tensorrt"].map(v => <option key={v}>{v}</option>)}
@@ -56,12 +89,28 @@ export default function RuntimeAccelerationPanel() {
       </div>
     </fieldset>}
     {status && <>
-      <p>Installed: {status.package.installed ? "Yes" : "No"}. Last diagnostic: {status.diagnostics?.status ?? "Not run"}
-        {status.diagnostics?.version ? ` (TensorRT ${status.diagnostics.version})` : ""}. Cache: {(status.cache_bytes / 1024 ** 3).toFixed(2)} GB.</p>
-      <p>Diagnostics record a previous test. Actual acceleration is recorded per render. Optimization requires the installed SD1.5 model.</p>
-      {status.engines.map(engine => <div key={engine.engine_id} style={{ overflowWrap: "anywhere" }}>
-        {engine.engine_id} — {engine.state} <button disabled={busy} onClick={() => void perform(() => apiDelete(`/v1/runtime/tensorrt/cache/${engine.engine_id}`), "Engine cache cleared.")}>Clear engine</button>
-      </div>)}
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 900 }}>Runtime readiness</div>
+        <div className="small">Installed: <b>{status.installed ? "Yes" : "No"}</b> · Healthy: <b>{status.healthy ? "Yes" : "No"}</b> · Compatible: <b>{status.compatible ? "Yes" : "No"}</b>{status.tensorrt_version ? ` · TensorRT ${status.tensorrt_version}` : ""} · Cache: <b>{(status.cache_bytes / 1024 ** 3).toFixed(2)} GB</b></div>
+        <div className="small">Last diagnostic: <b>{status.diagnostics?.status ?? "Not run"}</b>. This is a saved receipt, not a live-render acceleration claim.</div>
+      </div>
+      {status.components.length > 0 && <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+        <div style={{ fontWeight: 900 }}>Component routes</div>
+        {status.components.map(component => <div className="card" key={`${component.model_family}:${component.component}`}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <b>{words(component.model_family)} · {words(component.component)}</b><span className="badge">{componentState(component)}</span>
+          </div>
+          <div className="small">{routeLabel(component)}{component.compiler ? ` · compiler ${component.compiler}` : ""}</div>
+          <div className="small">Source: {words(component.source_kind)}{component.architecture ? ` · ${component.architecture}` : ""} · Engines: {component.validated_engine_count}</div>
+          {!component.route_supported && component.route_reason ? <div className="small warn">{component.route_reason}</div> : null}
+          {component.optimization_reason ? <div className="small">{component.optimization_reason}</div> : null}
+          {component.last_failure ? <div className="small error">Last failure: {component.last_failure}</div> : null}
+        </div>)}
+      </div>}
+      {status.engines.length > 0 && <details style={{ marginTop: 12 }}>
+        <summary>Validated engine cache ({status.engines.length})</summary>
+        {status.engines.map(engine => <div key={engine.engine_id} style={{ overflowWrap: "anywhere" }}>{engine.engine_id} — {engine.state} <button disabled={busy} onClick={() => void perform(() => apiDelete(`/v1/runtime/tensorrt/cache/${engine.engine_id}`), "Engine cache cleared.")}>Clear engine</button></div>)}
+      </details>}
     </>}
     <p role="status">{message}</p>
   </details>;

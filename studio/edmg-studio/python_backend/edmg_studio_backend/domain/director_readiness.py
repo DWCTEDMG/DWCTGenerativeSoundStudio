@@ -190,6 +190,15 @@ def _director_for_mode(
     installed_models: dict[str, Any],
 ) -> tuple[str, list[str]]:
     warnings: list[str] = []
+    if mode == "automatic":
+        if _model_installed(installed_models, AUDIO_NATIVE_DIRECTOR_MODEL_ID):
+            return AUDIO_NATIVE_DIRECTOR_MODEL_ID, warnings
+        if _model_installed(installed_models, AUDIO_NATIVE_FALLBACK_MODEL_ID):
+            warnings.append(
+                "Qwen3-Omni-30B-A3B Thinking is not installed; using the installed "
+                "Qwen2.5-Omni-7B audio-native Director."
+            )
+            return AUDIO_NATIVE_FALLBACK_MODEL_ID, warnings
     if mode in {"quality", "maximum"} and tier in {"high", "ultra"}:
         if _model_installed(installed_models, HIGH_TIER_DIRECTOR_MODEL_ID):
             return HIGH_TIER_DIRECTOR_MODEL_ID, warnings

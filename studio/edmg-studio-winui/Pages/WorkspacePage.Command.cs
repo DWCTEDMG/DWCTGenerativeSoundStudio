@@ -109,7 +109,6 @@ public sealed partial class WorkspacePage
         string provider = GetComboTag(CommandProvider, "internal_qwen");
         bool internalModel = provider == "internal_qwen";
         string? directorModel = NullIfWhiteSpace(GetComboTag(CommandDirectorModel, ""));
-        directorModel ??= "hf_qwen3_omni_30b_a3b_thinking_director";
         string? model = NullIfWhiteSpace(CommandModel.Text);
         string? brief = NullIfWhiteSpace(CommandBrief.Text);
         string? style = NullIfWhiteSpace(CommandStyle.Text);

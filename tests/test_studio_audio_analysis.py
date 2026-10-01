@@ -10,6 +10,16 @@ from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend.store.projects import ProjectStore
 
 
+@pytest.fixture(autouse=True)
+def _enable_asr_verification_for_legacy_audio_analysis_tests(monkeypatch):
+    settings = studio_app.transcription_settings.get()
+    monkeypatch.setattr(
+        studio_app.transcription_settings,
+        "get",
+        lambda: {**settings, "verification_enabled": True},
+    )
+
+
 def _make_project(tmp_path: Path):
     store = ProjectStore(tmp_path / "data")
     jobs = JobStore(store.projects_dir)
