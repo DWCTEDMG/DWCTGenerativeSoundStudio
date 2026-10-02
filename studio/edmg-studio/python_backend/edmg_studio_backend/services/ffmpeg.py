@@ -1016,12 +1016,14 @@ def interpolate_video_fps(
     *,
     engine: str = "auto",
     rife_cmd: str | None = None,
+    fruc_cmd: str | None = None,
 ) -> None:
     """Interpolate a video to a higher FPS.
 
     Engines:
-      - auto: prefer RIFE if rife_cmd provided, else ffmpeg minterpolate, else fps (dup).
+      - auto: prefer configured RIFE, then NVIDIA FRUC, then CPU minterpolate/fps.
       - rife: requires rife_cmd template (env EDMG_RIFE_CMD).
+      - fruc: requires fruc_cmd template (env EDMG_FRUC_CMD); fails without it.
       - minterpolate: ffmpeg filter-based motion interpolation.
       - fps: simple frame duplication to target FPS (no motion estimation).
     """
@@ -1038,19 +1040,29 @@ def interpolate_video_fps(
 
     engine_l = (engine or "auto").lower().strip()
     rife_cmd = rife_cmd or os.getenv("EDMG_RIFE_CMD")
+    fruc_cmd = fruc_cmd or os.getenv("EDMG_FRUC_CMD")
 
-    if engine_l in ("auto", "rife") and rife_cmd:
-        # User supplies a command template, because RIFE CLIs vary.
-        # Template fields: {in}, {out}, {fps}
-        cmd = _rife_command_args(rife_cmd, in_mp4=in_mp4, out_mp4=out_mp4, fps=fps_out)
-        proc = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+    for provider, template in (("rife", rife_cmd), ("fruc", fruc_cmd)):
+        if engine_l not in ("auto", provider):
+            continue
+        if not template:
+            if engine_l == provider:
+                raise RuntimeError(f"{provider.upper()} requires EDMG_{provider.upper()}_CMD")
+            continue
+        cmd = _rife_command_args(template, in_mp4=in_mp4, out_mp4=out_mp4, fps=fps_out)
+        try:
+            proc = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+        except OSError as exc:
+            if engine_l == provider:
+                raise RuntimeError(f"{provider.upper()} command could not start: {exc}") from exc
+            continue
         if proc.returncode != 0:
-            if engine_l == "rife":
-                raise RuntimeError(f"RIFE command failed: {proc.stderr[:2000]}")
+            if engine_l == provider:
+                raise RuntimeError(f"{provider.upper()} command failed: {proc.stderr[:2000]}")
         elif _video_output_is_usable(ffmpeg_path, out_mp4):
             return
-        elif engine_l == "rife":
-            raise RuntimeError("RIFE command produced an output without a video stream")
+        elif engine_l == provider:
+            raise RuntimeError(f"{provider.upper()} command produced an output without a video stream")
 
     ffmpeg = ensure_ffmpeg(ffmpeg_path)
 

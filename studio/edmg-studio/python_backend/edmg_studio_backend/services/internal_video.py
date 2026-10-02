@@ -76,7 +76,7 @@ class InternalVideoSettings:
     keyframe_interval_s: float = 5.0
     keyframe_continuity_mode: str = "scene"  # scene|project
 
-    interpolation_engine: str = "auto"  # auto|minterpolate|fps|rife
+    interpolation_engine: str = "auto"  # auto|minterpolate|fps|rife|fruc
     negative_prompt: str = (
         "blurry, low quality, watermark, text, logo, collage, contact sheet, "
         "split screen, multi-panel composition, comic panels, tiled image, storyboard sheet, mosaic, "

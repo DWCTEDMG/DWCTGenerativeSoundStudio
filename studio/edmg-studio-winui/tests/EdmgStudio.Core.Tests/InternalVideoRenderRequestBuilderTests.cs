@@ -7,6 +7,19 @@ namespace EdmgStudio.Core.Tests;
 public sealed class InternalVideoRenderRequestBuilderTests
 {
     [TestMethod]
+    public void Build_SerializesNvidiaFrucInterpolation()
+    {
+        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+        {
+            InterpolationEngine = "fruc",
+            OutputFps = 60,
+            RenderFps = 3,
+        });
+        Assert.AreEqual("fruc", request.GetProperty("interpolation_engine").GetString());
+        Assert.AreEqual(60, request.GetProperty("fps_output").GetInt32());
+    }
+
+    [TestMethod]
     public void Build_IncludesProjectAudioByDefaultAndCanDisableIt()
     {
         JsonElement enabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());

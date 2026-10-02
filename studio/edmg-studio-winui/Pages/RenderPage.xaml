@@ -273,15 +273,6 @@
                                                 </AutoSuggestBox.ItemTemplate>
                                             </AutoSuggestBox>
                                         </StackPanel>
-                                        <StackPanel Grid.Row="2" Grid.ColumnSpan="3" Spacing="4">
-                                            <TextBlock Text="Prompt" Style="{StaticResource FieldLabelStyle}" />
-                                            <TextBox x:Name="QuickPromptBox"
-                                                     AcceptsReturn="True"
-                                                     MinHeight="72"
-                                                     TextWrapping="Wrap"
-                                                     PlaceholderText="Describe the visual result"
-                                                     AutomationProperties.AutomationId="RenderQuickPromptBox" />
-                                        </StackPanel>
                                     </Grid>
                                     <Expander x:Name="SimpleInternalSettingsPanel"
                                               Header="Internal renderer settings"
@@ -450,13 +441,6 @@
                                       Style="{StaticResource WorkflowExpanderStyle}"
                                       AutomationProperties.AutomationId="InternalGenerationExpander">
                                 <StackPanel Padding="12" Spacing="12">
-                                    <TextBlock Text="Prompt" Style="{StaticResource FieldLabelStyle}" />
-                                    <TextBox x:Name="PromptBox"
-                                             AcceptsReturn="True"
-                                             MinHeight="100"
-                                             TextWrapping="Wrap"
-                                             PlaceholderText="Describe the visual sequence"
-                                             AutomationProperties.AutomationId="RenderPromptBox" />
                                     <TextBlock Text="Negative prompt" Style="{StaticResource FieldLabelStyle}" />
                                     <TextBox x:Name="NegativePromptBox"
                                              AcceptsReturn="True"
@@ -678,10 +662,11 @@
                                         <ComboBox x:Name="InterpolationComboBox"
                                                   SelectedIndex="0"
                                                   AutomationProperties.AutomationId="RenderInterpolationComboBox">
-                                            <ComboBoxItem Content="Automatic" Tag="auto" />
-                                            <ComboBoxItem Content="FFmpeg minterpolate" Tag="minterpolate" />
-                                            <ComboBoxItem Content="FPS conversion" Tag="fps" />
-                                            <ComboBoxItem Content="RIFE" Tag="rife" />
+                                            <ComboBoxItem Content="Automatic (RIFE, NVIDIA FRUC, then CPU)" Tag="auto" />
+                                            <ComboBoxItem Content="FFmpeg minterpolate (CPU)" Tag="minterpolate" />
+                                            <ComboBoxItem Content="Duplicate frames (no motion synthesis)" Tag="fps" />
+                                            <ComboBoxItem Content="RIFE (requires configured runtime)" Tag="rife" />
+                                            <ComboBoxItem Content="NVIDIA OFA / FRUC + NVENC (configured SDK)" Tag="fruc" />
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Row="3" Spacing="4">

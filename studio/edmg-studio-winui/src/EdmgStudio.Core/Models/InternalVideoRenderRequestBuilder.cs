@@ -268,7 +268,7 @@ public static class InternalVideoRenderRequestBuilder
         Enum(settings.RenderTier, ["auto", "draft", "balanced", "quality"], "Render tier");
         Enum(settings.TemporalMode, ["off", "keyframes", "frame_img2img", "video_model"], "Temporal mode");
         Enum(settings.KeyframeContinuityMode, ["scene", "project"], "Keyframe continuity mode");
-        Enum(settings.InterpolationEngine, ["auto", "minterpolate", "fps", "rife"], "Interpolation engine");
+        Enum(settings.InterpolationEngine, ["auto", "minterpolate", "fps", "rife", "fruc"], "Interpolation engine");
         Enum(settings.HostedService, ["default", "core", "ultra", "sd3"], "Hosted service");
         Enum(settings.DevicePreference, ["auto", "cpu", "cuda", "mps", "directml"], "Device preference");
         Enum(settings.VideoModelEngine, ["auto", "svd", "animatediff", "hunyuan_video15", "ltx_25"], "Video model engine");

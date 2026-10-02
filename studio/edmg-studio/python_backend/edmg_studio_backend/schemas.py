@@ -294,7 +294,7 @@ class InternalVideoRenderRequest(BaseModel):
     keyframe_interval_s: float = Field(default=5.0, ge=0.5, le=60.0)
     keyframe_continuity_mode: Literal["scene", "project"] = "scene"
 
-    interpolation_engine: Literal["auto","minterpolate","fps","rife"] = "auto"
+    interpolation_engine: Literal["auto","minterpolate","fps","rife","fruc"] = "auto"
     model_id: str = "auto"
     render_mode: Literal["auto","diffusion","hosted","tensorrt"] = "auto"
     render_tier: Literal["auto","draft","balanced","quality"] = "auto"

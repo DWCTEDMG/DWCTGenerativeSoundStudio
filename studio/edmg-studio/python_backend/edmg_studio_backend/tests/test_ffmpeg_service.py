@@ -194,7 +194,8 @@ def test_assemble_image_sequence_muxes_audio_after_raw_encode_and_duration_fix(t
     assert not (tmp_path / "output.remux.mp4").exists()
 
 
-def test_rife_template_is_expanded_as_argv_without_a_shell(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("provider", ["rife", "fruc"])
+def test_rife_template_is_expanded_as_argv_without_a_shell(tmp_path, monkeypatch, provider) -> None:
     in_mp4 = tmp_path / "input;not-a-command.mp4"
     out_mp4 = tmp_path / "output video.mp4"
     in_mp4.write_bytes(b"video")
@@ -215,8 +216,8 @@ def test_rife_template_is_expanded_as_argv_without_a_shell(tmp_path, monkeypatch
         in_mp4=in_mp4,
         out_mp4=out_mp4,
         fps_out=48,
-        engine="rife",
-        rife_cmd='rife --input "{in}" --output "{out}" --fps {fps}',
+        engine=provider,
+        **{f"{provider}_cmd": 'rife --input "{in}" --output "{out}" --fps {fps}'},
     )
 
     assert observed["shell"] is False
@@ -229,6 +230,23 @@ def test_rife_template_is_expanded_as_argv_without_a_shell(tmp_path, monkeypatch
         "--fps",
         "48",
     ]
+
+
+@pytest.mark.parametrize("provider", ["rife", "fruc"])
+def test_explicit_gpu_interpolation_requires_configuration(tmp_path, monkeypatch, provider):
+    monkeypatch.delenv(f"EDMG_{provider.upper()}_CMD", raising=False)
+    monkeypatch.setattr(ffmpeg_service, "_probe_frame_rate", lambda *args: 3.0)
+    with pytest.raises(RuntimeError, match="requires EDMG_"):
+        ffmpeg_service.interpolate_video_fps("unused", tmp_path / "in.mp4", tmp_path / "out.mp4", 60, engine=provider)
+
+
+def test_fruc_failure_does_not_fall_back_to_cpu(tmp_path, monkeypatch):
+    source = tmp_path / "in.mp4"
+    source.write_bytes(b"video")
+    monkeypatch.setattr(ffmpeg_service, "_probe_frame_rate", lambda *args: 3.0)
+    monkeypatch.setattr(ffmpeg_service.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stderr="OFA failed"))
+    with pytest.raises(RuntimeError, match="FRUC command failed: OFA failed"):
+        ffmpeg_service.interpolate_video_fps("unused", source, tmp_path / "out.mp4", 60, engine="fruc", fruc_cmd="fruc {in} {out} {fps}")
 
 
 def test_interpolate_falls_back_to_fps_when_minterpolate_output_has_no_video_stream(tmp_path, monkeypatch) -> None:

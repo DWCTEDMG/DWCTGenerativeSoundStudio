@@ -755,7 +755,6 @@ public sealed partial class RenderPage : Page
 
   private JsonElement BuildInternalRenderRequest()
   {
-    string prompt = PromptBox.Text.Trim();
     long seed = LongNumber(SeedBox, -1);
     InternalVideoRenderSettings settings = new()
     {
@@ -834,9 +833,7 @@ public sealed partial class RenderPage : Page
       ParseqManifest = ParseqBox.Text,
       SourceAsset = EmptyToNull(MotionSourceBox.Text),
       SourceStrength = Number(SourceStrengthBox, 0.55),
-      DeforumPrompts = string.IsNullOrWhiteSpace(prompt)
-                ? string.Empty
-                : JsonSerializer.Serialize(new Dictionary<string, string> { ["0"] = prompt }),
+      DeforumPrompts = string.Empty,
       DeforumNegativePrompts = DeforumNegativePromptsBox.Text,
       DeforumZoom = DeforumZoomBox.Text,
       DeforumAngle = DeforumAngleBox.Text,
@@ -884,7 +881,6 @@ public sealed partial class RenderPage : Page
 
     string model = QuickModelBox.Text.Trim();
     string selectedModel = string.IsNullOrWhiteSpace(model) ? "auto" : model;
-    PromptBox.Text = QuickPromptBox.Text;
     SelectComboValue(PipelinePresetComboBox, setup.Quality);
     SelectComboValue(PipelineModeComboBox, "auto");
 
@@ -1953,7 +1949,6 @@ public sealed partial class RenderPage : Page
       settings.Values["RenderPreset.Resolution"] = Selected(QuickResolutionComboBox, "768x432");
       settings.Values["RenderPreset.Fps"] = Number(QuickFpsBox, 24);
       settings.Values["RenderPreset.Model"] = QuickModelBox.Text.Trim();
-      settings.Values["RenderPreset.Prompt"] = QuickPromptBox.Text;
       ShowStatus("The current Simple render preset was saved on this device.", InfoBarSeverity.Success);
     }
     catch (Exception exception)
@@ -1972,7 +1967,6 @@ public sealed partial class RenderPage : Page
       SelectComboValue(QuickResolutionComboBox, settings.Values["RenderPreset.Resolution"] as string ?? "768x432");
       QuickFpsBox.Value = settings.Values["RenderPreset.Fps"] is int fps ? fps : 24;
       QuickModelBox.Text = settings.Values["RenderPreset.Model"] as string ?? "auto";
-      QuickPromptBox.Text = settings.Values["RenderPreset.Prompt"] as string ?? string.Empty;
     }
     catch (Exception exception)
     {
@@ -1991,7 +1985,6 @@ public sealed partial class RenderPage : Page
     SelectComboValue(QuickResolutionComboBox, "768x432");
     QuickFpsBox.Value = 24;
     QuickModelBox.Text = "auto";
-    QuickPromptBox.Text = string.Empty;
     _ = ApplyQuickSetup();
     ShowStatus("Render controls were reset to the safe automatic setup.", InfoBarSeverity.Informational);
   }
