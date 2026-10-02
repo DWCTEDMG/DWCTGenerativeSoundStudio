@@ -46,11 +46,9 @@ class DirectorGenerationRequest(BaseModel):
     allow_external: bool = False
     start_sample: str | None = None
     end_sample: str | None = None
-    model_id: Literal[
-        "hf_qwen3_omni_30b_a3b_thinking_director", "hf_qwen25_omni_7b_director",
-        "hf_qwen3_vl_8b_director", "hf_qwen3_vl_30b_director",
-        "hf_qwen3_vl_8b_gguf_director", "hf_qwen3_vl_30b_gguf_director",
-    ] | None = None
+    provider: Literal["automatic", "nemotron", "qwen"] = "automatic"
+    director_quality: Literal["fast", "standard", "advanced"] | None = None
+    model_id: str | None = Field(default=None, max_length=256)
     require_audio_native: bool = False
 
 
@@ -184,7 +182,19 @@ def create_director_router(
         readiness_snapshot = None
         hardware = hardware_profile() if get_hardware is not None else {}
         runtime_settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
-        if get_hardware is not None:
+        configured_provider = str(runtime_settings.get("primary_provider") or "qwen").strip().lower()
+        provider = request.provider if request.provider != "automatic" else configured_provider
+        if request.model_id and request.model_id.startswith("hf_qwen"):
+            provider = "qwen"
+        if provider == "nemotron":
+            model_id = request.model_id or str(runtime_settings.get("primary_model") or "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16")
+            if not str(runtime_settings.get("primary_endpoint") or "").strip():
+                raise HTTPException(422, {
+                    "message": "Nemotron Director endpoint is not configured",
+                    "hint": "Set the primary endpoint in Settings > AI Director, then retry.",
+                    "code": "DIRECTOR_ENDPOINT_REQUIRED",
+                })
+        elif get_hardware is not None:
             try:
                 readiness = resolve_director_readiness(
                     hardware,
@@ -213,14 +223,14 @@ def create_director_router(
                 "renderer": readiness.renderer.model_dump(mode="json"),
                 "hardware_tier": readiness.hardware_tier,
             }
-        if get_models().installed_path(model_id) is None:
+        if provider == "qwen" and get_models().installed_path(model_id) is None:
             raise HTTPException(
                 422, {"message": f"Director model {model_id} is not installed",
                       "hint": "Install the resolved model in Models, then retry. The current draft was not changed.",
                       "code": "DIRECTOR_MODEL_NOT_INSTALLED", "model_id": model_id,
                       "draft_unchanged": True}
             )
-        if request.require_audio_native and model_id not in {
+        if provider == "qwen" and request.require_audio_native and model_id not in {
             AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID,
         }:
             raise HTTPException(422, {
@@ -268,6 +278,15 @@ def create_director_router(
             "context_digest": context_digest,
             "context_revision": int(workflow.get("context_revision") or project.revision),
             "model_id": model_id,
+            "provider": provider,
+            "director_quality": request.director_quality or runtime_settings.get("default_quality", "standard"),
+            "director_provider_settings": {
+                key: runtime_settings.get(key) for key in (
+                    "primary_model", "primary_endpoint", "specialist_enabled",
+                    "specialist_model", "specialist_endpoint",
+                    "specialist_routing", "timeout_s",
+                )
+            },
             "require_audio_native": request.require_audio_native,
             "mode": request.mode,
             "renderer_engine": request.renderer_engine,
@@ -283,20 +302,21 @@ def create_director_router(
             "cuda_graphs": bool(runtime_settings.get("cuda_graphs", False)),
             "vram_gb": float(hardware.get("llama_vram_gb") or hardware.get("vram_gb") or 0),
         }
-        if model_id in {AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID}:
+        if provider == "nemotron" or model_id in {AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID}:
             audio_meta = project.meta.get("audio") or {}
             filename = str(audio_meta.get("filename") or "").strip()
             if not filename:
-                raise HTTPException(422, {
-                    "message": "Audio-native Director requires project audio",
-                    "hint": "Choose and analyze the complete source track, then retry.",
-                    "code": "DIRECTOR_AUDIO_REQUIRED",
-                })
-            audio_path = get_store().project_dir(project_id) / "assets" / "audio" / filename
-            if not audio_path.is_file():
-                raise HTTPException(422, "The project audio file is missing")
+                if request.require_audio_native:
+                    raise HTTPException(422, {
+                        "message": "Audio-native Director requires project audio",
+                        "hint": "Choose and analyze the complete source track, then retry.",
+                        "code": "DIRECTOR_AUDIO_REQUIRED",
+                    })
             analysis = deepcopy(project.meta.get("analysis") or {})
-            payload["audio_path"] = str(audio_path.resolve())
+            if filename:
+                audio_path = get_store().project_dir(project_id) / "assets" / "audio" / filename
+                if audio_path.is_file():
+                    payload["audio_path"] = str(audio_path.resolve())
             payload["audio_evidence"] = {
                 "signal_analysis": analysis.get("signal_analysis") or {
                     "status": "complete" if analysis.get("features") else "unavailable",
@@ -326,7 +346,7 @@ def create_director_router(
 
             def persist_generation(current, active_job):
                 current.meta["workspace_command"] = {
-                    "provider": "internal_qwen", "model": model_id,
+                    "provider": provider, "model": model_id,
                     "brief": request.instruction, "style": "", "native_audio": False,
                 }
                 if workflow:

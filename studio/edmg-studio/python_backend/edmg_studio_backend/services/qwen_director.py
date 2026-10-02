@@ -102,6 +102,10 @@ def run_director_job(
 ) -> dict:
     """Worker entry point. Recheck installed weights and live memory before loading."""
     _check_canceled(cancel_check)
+    if payload.get("provider") == "nemotron":
+        from .director_providers import run_nemotron_director_job
+
+        return run_nemotron_director_job(payload, progress_fn=progress_fn)
     from .audio_native_director import is_audio_native_model, run_audio_native_director_job
 
     if is_audio_native_model(payload.get("model_id")):

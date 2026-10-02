@@ -66,7 +66,31 @@
                         <Button AutomationProperties.AutomationId="SettingsRuntimeClearEngine" Content="Clear selected engine cache" Click="ClearRuntimeEngine_Click" HorizontalAlignment="Left" />
                     </StackPanel>
                 </Expander>
-                <Expander Header="Local Director runtime" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="True">
+                <Expander Header="AI Director · Nemotron + Cosmos" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="True">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Nemotron is the permanent Director. Cosmos is optional specialist evidence in Advanced mode; validated plans still pass through EDMG's deterministic review/apply boundary." TextWrapping="Wrap" />
+                        <ComboBox x:Name="DirectorQualityCombo" Header="Director quality" SelectedIndex="1">
+                            <ComboBoxItem Content="Fast" Tag="fast" />
+                            <ComboBoxItem Content="Standard" Tag="standard" />
+                            <ComboBoxItem Content="Advanced" Tag="advanced" />
+                        </ComboBox>
+                        <TextBox x:Name="DirectorPrimaryModel" Header="Primary Director" Text="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16" IsReadOnly="True" />
+                        <TextBox x:Name="DirectorPrimaryEndpoint" Header="Nemotron OpenAI-compatible / NIM endpoint" PlaceholderText="http://127.0.0.1:8000/v1" />
+                        <TextBlock Opacity="0.72" Text="For authenticated endpoints, provide EDMG_NEMOTRON_API_KEY through the backend secret environment. Studio never persists or displays it." TextWrapping="Wrap" />
+                        <CheckBox x:Name="DirectorSpecialistEnabled" Content="Enable Cosmos Reason2 specialist" IsChecked="True" />
+                        <TextBox x:Name="DirectorSpecialistModel" Header="Advanced video specialist" Text="nvidia/Cosmos-Reason2-8B" IsReadOnly="True" />
+                        <TextBox x:Name="DirectorSpecialistEndpoint" Header="Cosmos OpenAI-compatible / NIM endpoint" PlaceholderText="http://127.0.0.1:8001/v1" />
+                        <TextBlock Opacity="0.72" Text="For authenticated specialist endpoints, provide EDMG_COSMOS_API_KEY through the backend secret environment." TextWrapping="Wrap" />
+                        <ComboBox x:Name="DirectorSpecialistRouting" Header="Specialist routing" SelectedIndex="0">
+                            <ComboBoxItem Content="Automatic" Tag="automatic" />
+                            <ComboBoxItem Content="Always for video" Tag="always_video" />
+                            <ComboBoxItem Content="Off" Tag="off" />
+                        </ComboBox>
+                        <TextBlock x:Name="DirectorConfigurationStatus" Text="Refresh to load Director configuration." TextWrapping="Wrap" />
+                        <Button Content="Save AI Director settings" Click="SaveDirectorSettings_Click" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Expander>
+                <Expander Header="Legacy local Qwen fallback runtime" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <StackPanel Spacing="12">
                         <TextBlock Text="Manages the local OpenAI-compatible Qwen endpoint in WSL. This is separate from video-render TensorRT acceleration above." TextWrapping="Wrap" />
                         <StackPanel Orientation="Horizontal" Spacing="8">

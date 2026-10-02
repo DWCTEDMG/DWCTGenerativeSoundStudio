@@ -23,7 +23,11 @@ public sealed record DirectorGenerationRequest(
     [property: JsonPropertyName("model_id")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ModelId = null,
-    [property: JsonPropertyName("require_audio_native")] bool RequireAudioNative = false);
+    [property: JsonPropertyName("require_audio_native")] bool RequireAudioNative = false,
+    [property: JsonPropertyName("provider")] string Provider = "automatic",
+    [property: JsonPropertyName("director_quality")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? DirectorQuality = null);
 
 public sealed record DirectorApplyRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision);

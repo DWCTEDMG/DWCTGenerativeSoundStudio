@@ -146,7 +146,7 @@
                             <TextBox x:Name="CommandBrief" Header="Creative brief" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80" AutomationProperties.AutomationId="Workspace.Command.Brief" />
                             <TextBox x:Name="CommandStyle" Header="Visual style" AutomationProperties.AutomationId="Workspace.Command.Style" />
                             <ComboBox x:Name="CommandProvider" Header="Creative model provider" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandProvider_SelectionChanged">
-                                <ComboBoxItem Content="Internal Qwen Director" Tag="internal_qwen" />
+                                <ComboBoxItem Content="Nemotron Omni Director (configured endpoint)" Tag="internal_qwen" />
                                 <ComboBoxItem Content="Configured provider" Tag="configured" />
                                 <ComboBoxItem Content="Qwen / other model through Ollama" Tag="ollama" />
                                 <ComboBoxItem Content="OpenAI-compatible endpoint" Tag="openai_compat" />
@@ -154,7 +154,8 @@
                                 <ComboBoxItem Content="Manual / local planning" Tag="local" />
                             </ComboBox>
                             <ComboBox x:Name="CommandDirectorModel" Header="Director listening model" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandDirectorModel_SelectionChanged">
-                                <ComboBoxItem Content="Automatic (prefer audio-native Qwen)" Tag="" />
+                                <ComboBoxItem Content="Automatic (Nemotron Omni default)" Tag="" />
+                                <ComboBoxItem Content="Nemotron 3 Nano Omni 30B-A3B Reasoning · BF16" Tag="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16" />
                                 <ComboBoxItem Content="Qwen3-Omni-30B-A3B Thinking · audio native" Tag="hf_qwen3_omni_30b_a3b_thinking_director" />
                                 <ComboBoxItem Content="Qwen2.5-Omni-7B · audio-native fallback" Tag="hf_qwen25_omni_7b_director" />
                                 <ComboBoxItem Content="Qwen3-VL-8B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_8b_gguf_director" />
