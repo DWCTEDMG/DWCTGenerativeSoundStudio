@@ -66,20 +66,20 @@ def test_nemotron_provider_repairs_invalid_json_once(monkeypatch):
 
 def test_advanced_job_degrades_when_cosmos_is_unavailable(monkeypatch):
     class Nemotron:
-        def __init__(self, _config): pass
+        def __init__(self, _path, **_kwargs): pass
         def plan(self, **_kwargs): return DirectorPlan.model_validate(_plan())
 
     class Cosmos:
-        def __init__(self, _config): pass
+        def __init__(self, _path, **_kwargs): pass
         def analyze(self, _request): raise ValueError("offline")
 
-    monkeypatch.setattr(director_providers, "OpenAICompatibleNemotronProvider", Nemotron)
-    monkeypatch.setattr(director_providers, "OpenAICompatibleCosmosProvider", Cosmos)
+    monkeypatch.setattr(director_providers, "LocalNemotronProvider", Nemotron)
+    monkeypatch.setattr(director_providers, "LocalCosmosProvider", Cosmos)
     result = director_providers.run_nemotron_director_job({
         "document": _document(), "instruction": "Direct", "source_revision": 4,
         "director_quality": "advanced", "video_assets": ["reference.mp4"],
         "director_provider_settings": {
-            "primary_endpoint": "http://nemotron/v1", "specialist_endpoint": "http://cosmos/v1",
+            "primary_model_path": "C:/models/nemotron", "specialist_model_path": "C:/models/cosmos",
             "specialist_enabled": True, "specialist_routing": "automatic",
         },
     })
@@ -94,7 +94,7 @@ def test_runtime_settings_default_to_nemotron_and_sanitize_routing(tmp_path):
         "primary_endpoint": "http://localhost:8000/v1/",
     })
     assert settings["primary_provider"] == "nemotron"
-    assert settings["primary_model"] == "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16"
-    assert settings["primary_endpoint"] == "http://localhost:8000/v1"
+    assert settings["primary_model"] == "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16"
+    assert "primary_endpoint" not in settings
     assert settings["default_quality"] == "advanced"
     assert settings["specialist_routing"] == "always_video"

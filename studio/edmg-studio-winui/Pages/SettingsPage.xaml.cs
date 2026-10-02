@@ -156,14 +156,10 @@ public sealed partial class SettingsPage : Page
     {
         JsonObject response = StudioPageHelpers.ToObject(value);
         JsonObject settings = response["settings"] as JsonObject ?? response;
-        DirectorPrimaryModel.Text = settings["primary_model"]?.GetValue<string>() ?? "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16";
-        DirectorPrimaryEndpoint.Text = settings["primary_endpoint"]?.GetValue<string>() ?? "http://127.0.0.1:8000/v1";
         DirectorSpecialistEnabled.IsChecked = settings["specialist_enabled"]?.GetValue<bool?>() ?? true;
-        DirectorSpecialistModel.Text = settings["specialist_model"]?.GetValue<string>() ?? "nvidia/Cosmos-Reason2-8B";
-        DirectorSpecialistEndpoint.Text = settings["specialist_endpoint"]?.GetValue<string>() ?? "http://127.0.0.1:8001/v1";
         SelectComboValue(DirectorQualityCombo, settings["default_quality"]?.GetValue<string>() ?? "standard");
         SelectComboValue(DirectorSpecialistRouting, settings["specialist_routing"]?.GetValue<string>() ?? "automatic");
-        DirectorConfigurationStatus.Text = "Nemotron is authoritative; Cosmos is proposal evidence only. Plans require schema validation before review/apply.";
+        DirectorConfigurationStatus.Text = "Nemotron and Cosmos are local Studio-managed models. Installation, licensing, and file validation are available on Models; generated plans still require review/apply.";
     }
 
     private async void SaveDirectorSettings_Click(object sender, RoutedEventArgs e)
@@ -173,12 +169,8 @@ public sealed partial class SettingsPage : Page
             JsonObject payload = new()
             {
                 ["primary_provider"] = "nemotron",
-                ["primary_model"] = DirectorPrimaryModel.Text.Trim(),
-                ["primary_endpoint"] = DirectorPrimaryEndpoint.Text.Trim(),
                 ["default_quality"] = SelectedTag(DirectorQualityCombo, "standard"),
                 ["specialist_enabled"] = DirectorSpecialistEnabled.IsChecked == true,
-                ["specialist_model"] = DirectorSpecialistModel.Text.Trim(),
-                ["specialist_endpoint"] = DirectorSpecialistEndpoint.Text.Trim(),
                 ["specialist_routing"] = SelectedTag(DirectorSpecialistRouting, "automatic"),
             };
             ApplyDirectorSettings(await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(payload)));

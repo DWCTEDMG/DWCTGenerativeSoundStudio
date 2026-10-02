@@ -10,7 +10,7 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class WorkspacePage
 {
-    private const string DefaultQwenModelId = "hf_qwen3_omni_30b_a3b_thinking_director";
+    private const string DefaultDirectorModelId = "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16";
     private const string ManagedWhisperModelId = "hf_whisper_large_v3_turbo_internal";
 
     public ObservableCollection<WorkspaceDirectionSceneItem> CommandProposalItems { get; } = [];
@@ -215,7 +215,7 @@ public sealed partial class WorkspacePage
                     : $"Qwen: unavailable - {label}. {reason}";
                 return;
             }
-            if (string.IsNullOrWhiteSpace(modelId)) modelId = DefaultQwenModelId;
+            if (string.IsNullOrWhiteSpace(modelId)) modelId = DefaultDirectorModelId;
             ModelRuntimeStatus status = await App.Services.ApiClient.GetModelRuntimeReadinessAsync(modelId, token);
             CommandQwenStatus.Text = WorkspaceReadinessSummary.Model("Qwen", status);
         }

@@ -68,19 +68,15 @@
                 </Expander>
                 <Expander Header="AI Director · Nemotron + Cosmos" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="True">
                     <StackPanel Spacing="12">
-                        <TextBlock Text="Nemotron is the permanent Director. Cosmos is optional specialist evidence in Advanced mode; validated plans still pass through EDMG's deterministic review/apply boundary." TextWrapping="Wrap" />
+                        <TextBlock Text="Nemotron is Studio's default managed Director. Cosmos is its optional visual-reasoning specialist in Advanced mode. Install and validate both on the Models page; no endpoint configuration is required." TextWrapping="Wrap" />
                         <ComboBox x:Name="DirectorQualityCombo" Header="Director quality" SelectedIndex="1">
                             <ComboBoxItem Content="Fast" Tag="fast" />
                             <ComboBoxItem Content="Standard" Tag="standard" />
                             <ComboBoxItem Content="Advanced" Tag="advanced" />
                         </ComboBox>
-                        <TextBox x:Name="DirectorPrimaryModel" Header="Primary Director" Text="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16" IsReadOnly="True" />
-                        <TextBox x:Name="DirectorPrimaryEndpoint" Header="Nemotron OpenAI-compatible / NIM endpoint" PlaceholderText="http://127.0.0.1:8000/v1" />
-                        <TextBlock Opacity="0.72" Text="For authenticated endpoints, provide EDMG_NEMOTRON_API_KEY through the backend secret environment. Studio never persists or displays it." TextWrapping="Wrap" />
+                        <TextBox Header="Primary Director" Text="NVIDIA Nemotron 3 Nano Omni 30B-A3B (managed in Models)" IsReadOnly="True" />
                         <CheckBox x:Name="DirectorSpecialistEnabled" Content="Enable Cosmos Reason2 specialist" IsChecked="True" />
-                        <TextBox x:Name="DirectorSpecialistModel" Header="Advanced video specialist" Text="nvidia/Cosmos-Reason2-8B" IsReadOnly="True" />
-                        <TextBox x:Name="DirectorSpecialistEndpoint" Header="Cosmos OpenAI-compatible / NIM endpoint" PlaceholderText="http://127.0.0.1:8001/v1" />
-                        <TextBlock Opacity="0.72" Text="For authenticated specialist endpoints, provide EDMG_COSMOS_API_KEY through the backend secret environment." TextWrapping="Wrap" />
+                        <TextBox Header="Advanced visual specialist" Text="NVIDIA Cosmos Reason2 8B (managed in Models)" IsReadOnly="True" />
                         <ComboBox x:Name="DirectorSpecialistRouting" Header="Specialist routing" SelectedIndex="0">
                             <ComboBoxItem Content="Automatic" Tag="automatic" />
                             <ComboBoxItem Content="Always for video" Tag="always_video" />

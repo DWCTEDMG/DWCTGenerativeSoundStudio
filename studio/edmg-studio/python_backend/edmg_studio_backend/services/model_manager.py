@@ -383,6 +383,10 @@ def _normalize_catalog_entry(entry: dict[str, Any]) -> dict[str, Any]:
 # same repository. Studio's internal renderer only needs one runnable PyTorch
 # Diffusers layout. These profiles make that selection explicit and testable.
 _HF_METADATA_PATTERNS = (
+    "*.py",
+    "**/*.py",
+    "*.jinja",
+    "**/*.jinja",
     "*.json",
     "**/*.json",
     "*.txt",

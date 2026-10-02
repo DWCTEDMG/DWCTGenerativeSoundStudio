@@ -8,12 +8,10 @@ from .render_settings import _config_dir
 
 DEFAULT_DIRECTOR_RUNTIME_SETTINGS: dict[str, Any] = {
     "primary_provider": "nemotron",
-    "primary_model": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
-    "primary_endpoint": "http://127.0.0.1:8000/v1",
+    "primary_model": "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16",
     "default_quality": "standard",
     "specialist_enabled": True,
-    "specialist_model": "nvidia/Cosmos-Reason2-8B",
-    "specialist_endpoint": "http://127.0.0.1:8001/v1",
+    "specialist_model": "hf_cosmos_reason2_8b",
     "specialist_routing": "automatic",
     "timeout_s": 180,
     "runtime_path": "",
@@ -99,14 +97,14 @@ class DirectorRuntimeSettingsStore:
         if dense_device_map not in _DENSE_DEVICE_MAPS:
             dense_device_map = "balanced_low_0"
         return {
-            "primary_provider": str(payload.get("primary_provider") or "nemotron").strip().lower(),
-            "primary_model": str(payload.get("primary_model") or DEFAULT_DIRECTOR_RUNTIME_SETTINGS["primary_model"]).strip(),
-            "primary_endpoint": str(payload.get("primary_endpoint") or DEFAULT_DIRECTOR_RUNTIME_SETTINGS["primary_endpoint"]).strip().rstrip("/"),
+            "primary_provider": "nemotron",
+            # These identities are owned by Studio's pinned catalogue. Legacy
+            # endpoint fields are deliberately discarded during migration.
+            "primary_model": DEFAULT_DIRECTOR_RUNTIME_SETTINGS["primary_model"],
             "default_quality": str(payload.get("default_quality") or "standard").strip().lower()
                 if str(payload.get("default_quality") or "standard").strip().lower() in {"fast", "standard", "advanced"} else "standard",
             "specialist_enabled": bool(payload.get("specialist_enabled", True)),
-            "specialist_model": str(payload.get("specialist_model") or DEFAULT_DIRECTOR_RUNTIME_SETTINGS["specialist_model"]).strip(),
-            "specialist_endpoint": str(payload.get("specialist_endpoint") or DEFAULT_DIRECTOR_RUNTIME_SETTINGS["specialist_endpoint"]).strip().rstrip("/"),
+            "specialist_model": DEFAULT_DIRECTOR_RUNTIME_SETTINGS["specialist_model"],
             "specialist_routing": str(payload.get("specialist_routing") or "automatic").strip().lower()
                 if str(payload.get("specialist_routing") or "automatic").strip().lower() in {"automatic", "always_video", "off"} else "automatic",
             "timeout_s": _bounded_int(payload.get("timeout_s"), default=180, minimum=10, maximum=1800),

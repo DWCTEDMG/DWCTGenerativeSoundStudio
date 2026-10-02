@@ -29,6 +29,9 @@ from ..revisions import RevisionRoute, revision_context
 from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID
 from ..services.qwen_director import validate_proposal
 
+NEMOTRON_CATALOG_ID = "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16"
+COSMOS_REASON2_CATALOG_ID = "hf_cosmos_reason2_8b"
+
 
 class DirectorUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -66,6 +69,8 @@ def create_director_router(
         """Return install availability and managed runtime qualification without loading weights."""
 
         model_ids = (
+            NEMOTRON_CATALOG_ID,
+            COSMOS_REASON2_CATALOG_ID,
             AUDIO_NATIVE_DIRECTOR_MODEL_ID,
             AUDIO_NATIVE_FALLBACK_MODEL_ID,
             STANDARD_DIRECTOR_MODEL_ID,
@@ -182,17 +187,20 @@ def create_director_router(
         readiness_snapshot = None
         hardware = hardware_profile() if get_hardware is not None else {}
         runtime_settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
-        configured_provider = str(runtime_settings.get("primary_provider") or "qwen").strip().lower()
+        configured_provider = str(runtime_settings.get("primary_provider") or "nemotron").strip().lower()
         provider = request.provider if request.provider != "automatic" else configured_provider
         if request.model_id and request.model_id.startswith("hf_qwen"):
             provider = "qwen"
         if provider == "nemotron":
-            model_id = request.model_id or str(runtime_settings.get("primary_model") or "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16")
-            if not str(runtime_settings.get("primary_endpoint") or "").strip():
+            model_id = NEMOTRON_CATALOG_ID
+            primary_path = get_models().installed_path(NEMOTRON_CATALOG_ID)
+            if primary_path is None:
                 raise HTTPException(422, {
-                    "message": "Nemotron Director endpoint is not configured",
-                    "hint": "Set the primary endpoint in Settings > AI Director, then retry.",
-                    "code": "DIRECTOR_ENDPOINT_REQUIRED",
+                    "message": "NVIDIA Nemotron Director is not installed",
+                    "hint": "Open Models, accept the NVIDIA license, and install Nemotron 3 Nano Omni.",
+                    "code": "DIRECTOR_MODEL_NOT_INSTALLED",
+                    "model_id": NEMOTRON_CATALOG_ID,
+                    "draft_unchanged": True,
                 })
         elif get_hardware is not None:
             try:
@@ -282,9 +290,8 @@ def create_director_router(
             "director_quality": request.director_quality or runtime_settings.get("default_quality", "standard"),
             "director_provider_settings": {
                 key: runtime_settings.get(key) for key in (
-                    "primary_model", "primary_endpoint", "specialist_enabled",
-                    "specialist_model", "specialist_endpoint",
-                    "specialist_routing", "timeout_s",
+                    "primary_model", "specialist_enabled", "specialist_model",
+                    "specialist_routing", "timeout_s", "dense_device_map",
                 )
             },
             "require_audio_native": request.require_audio_native,
@@ -302,6 +309,12 @@ def create_director_router(
             "cuda_graphs": bool(runtime_settings.get("cuda_graphs", False)),
             "vram_gb": float(hardware.get("llama_vram_gb") or hardware.get("vram_gb") or 0),
         }
+        if provider == "nemotron":
+            primary_path = get_models().installed_path(NEMOTRON_CATALOG_ID)
+            payload["director_provider_settings"]["primary_model_path"] = str(primary_path)
+            specialist_path = get_models().installed_path(COSMOS_REASON2_CATALOG_ID)
+            if specialist_path is not None:
+                payload["director_provider_settings"]["specialist_model_path"] = str(specialist_path)
         if provider == "nemotron" or model_id in {AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID}:
             audio_meta = project.meta.get("audio") or {}
             filename = str(audio_meta.get("filename") or "").strip()
