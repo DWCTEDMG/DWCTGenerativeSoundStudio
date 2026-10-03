@@ -322,12 +322,12 @@ def test_director_generation_persists_resolved_workspace_policy(tmp_path):
 
     assert response.status_code == 200, response.text
     job = jobs.get(project.id, response.json()["job_id"])
-    assert job.payload["model_id"] == "hf_qwen3_vl_8b_director"
+    assert job.payload["model_id"] == "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16"
+    assert job.payload["provider"] == "nemotron"
     assert job.payload["mode"] == "fast"
     assert job.payload["renderer_engine"] == "external"
     assert job.payload["allow_external"] is True
-    assert job.payload["readiness"]["director"]["ready"] is True
-    assert job.payload["readiness"]["renderer"]["engine"] == "external"
+    assert job.payload["director_provider_settings"]["primary_model_path"] == str(tmp_path)
     assert job.payload["runtime_path"] == "C:\\Studio\\llama-server.exe"
     assert job.payload["gpu_layers"] == "7"
     assert job.payload["gpu_devices"] == "0,1,2"
