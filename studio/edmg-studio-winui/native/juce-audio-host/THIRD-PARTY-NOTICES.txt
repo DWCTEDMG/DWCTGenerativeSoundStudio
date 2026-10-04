@@ -1,0 +1,9 @@
+JUCE Framework
+Version: 8.0.0
+Source: https://github.com/juce-framework/JUCE/tree/8.0.0
+Modules used: juce_audio_utils, juce_core
+License: JUCE modules are dual-licensed under AGPLv3 and the commercial JUCE license.
+Terms: https://juce.com/legal/juce-8-licence/
+
+This notice records the dependency and does not select a license or authorize redistribution.
+Release approval must verify that the chosen JUCE license covers the distributed binary.

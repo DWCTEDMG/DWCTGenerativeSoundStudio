@@ -1,9 +1,9 @@
-using System.Text.Json;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Text.Json;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 
@@ -11,1247 +11,1334 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
 {
-    public bool HasUnsavedEdits => _isVariantDirty;
-    private static readonly StudioJsonContext _indentedJsonContext =
+  public bool HasUnsavedEdits { get; private set; }
+  private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
-    private readonly StudioSessionService _session = App.Services.Session;
-    private CancellationTokenSource? _operationCancellation;
-    private List<ProjectDto> _projects = [];
-    private ProjectDto? _project;
-    private PlanDto? _plan;
-    private int _selectedVariantIndex = -1;
-    private int _selectedSceneIndex = -1;
-    private bool _isLoadingProject;
-    private bool _isOperationBusy;
-    private bool _isVariantDirty;
-    private bool _suppressSceneEditorChanges;
-    private bool _suppressSceneSelection;
-    private bool _pageLoaded;
-    private string? _workflowDraftId;
-    private string _workflowStatus = "not_prepared";
-    private int _workflowVariantIndex;
-    private long _workflowRevision;
+  private readonly StudioSessionService _session = App.Services.Session;
+  private CancellationTokenSource? _operationCancellation;
+  private List<ProjectDto> _projects = [];
+  private ProjectDto? _project;
+  private PlanDto? _plan;
+  private int _selectedVariantIndex = -1;
+  private int _selectedSceneIndex = -1;
+  private bool _isLoadingProject;
+  private bool _isOperationBusy;
+  private bool _suppressSceneEditorChanges;
+  private bool _suppressSceneSelection;
+  private bool _pageLoaded;
+  private string? _workflowDraftId;
+  private string _workflowStatus = "not_prepared";
+  private int _workflowVariantIndex;
+  private long _workflowRevision;
 
-    private PlanVariantDto? SelectedVariant =>
-        _plan is not null &&
-        _selectedVariantIndex >= 0 &&
-        _selectedVariantIndex < _plan.Variants.Count
-            ? _plan.Variants[_selectedVariantIndex]
-            : null;
+  private PlanVariantDto? SelectedVariant =>
+      _plan is not null &&
+      _selectedVariantIndex >= 0 &&
+      _selectedVariantIndex < _plan.Variants.Count
+          ? _plan.Variants[_selectedVariantIndex]
+          : null;
 
-    private PlanSceneDto? SelectedScene =>
-        SelectedVariant is { } variant &&
-        _selectedSceneIndex >= 0 &&
-        _selectedSceneIndex < variant.Scenes.Count
-            ? variant.Scenes[_selectedSceneIndex]
-            : null;
+  private PlanSceneDto? SelectedScene =>
+      SelectedVariant is { } variant &&
+      _selectedSceneIndex >= 0 &&
+      _selectedSceneIndex < variant.Scenes.Count
+          ? variant.Scenes[_selectedSceneIndex]
+          : null;
 
-    public AiPlannerLabPage()
+  public AiPlannerLabPage()
+  {
+    InitializeComponent();
+    Loaded += AiPlannerLabPage_Loaded;
+    Unloaded += AiPlannerLabPage_Unloaded;
+  }
+
+  private async void AiPlannerLabPage_Loaded(object sender, RoutedEventArgs e)
+  {
+    _pageLoaded = true;
+    await RefreshAsync();
+  }
+
+  private void AiPlannerLabPage_Unloaded(object sender, RoutedEventArgs e)
+  {
+    _pageLoaded = false;
+    _operationCancellation?.Cancel();
+  }
+
+  public Task RefreshAsync(CancellationToken cancellationToken = default)
+  {
+    if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
     {
-        InitializeComponent();
-        Loaded += AiPlannerLabPage_Loaded;
-        Unloaded += AiPlannerLabPage_Unloaded;
+      return Task.CompletedTask;
     }
 
-    private async void AiPlannerLabPage_Loaded(object sender, RoutedEventArgs e)
+    if (HasUnsavedEdits)
     {
-        _pageLoaded = true;
-        await RefreshAsync();
+      ShowStatus(InfoBarSeverity.Warning, "Planner edits retained", "Save your scene refinements before refreshing the shared Workspace plan.");
+      return Task.CompletedTask;
+    }
+    return LoadAsync(cancellationToken);
+  }
+
+  public async Task<bool> SavePendingWorkspaceDraftAsync(CancellationToken cancellationToken = default)
+  {
+    if (ProjectComboBox.SelectedItem is ProjectDto project)
+    {
+      await RefreshProjectRevisionAsync(project.Id, cancellationToken);
     }
 
-    private void AiPlannerLabPage_Unloaded(object sender, RoutedEventArgs e)
-    {
-        _pageLoaded = false;
-        _operationCancellation?.Cancel();
-    }
+    return await SaveSelectedVariantAsync(cancellationToken);
+  }
 
-    public Task RefreshAsync(CancellationToken cancellationToken = default)
-    {
-        if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
-            return Task.CompletedTask;
-        if (_isVariantDirty)
+  private async Task LoadAsync(CancellationToken externalCancellationToken = default)
+  {
+    await RunOperationAsync(
+        "Loading Planner context",
+        async cancellationToken =>
         {
-            ShowStatus(InfoBarSeverity.Warning, "Planner edits retained", "Save your scene refinements before refreshing the shared Workspace plan.");
-            return Task.CompletedTask;
-        }
-        return LoadAsync(cancellationToken);
-    }
+          ProjectListResponse projectsResponse = await App.Services.ApiClient.GetProjectsAsync(cancellationToken);
+          _projects = projectsResponse.Projects;
+          ProjectComboBox.ItemsSource = _projects;
 
-    public async Task<bool> SavePendingWorkspaceDraftAsync(CancellationToken cancellationToken = default)
-    {
-        if (ProjectComboBox.SelectedItem is ProjectDto project) await RefreshProjectRevisionAsync(project.Id, cancellationToken);
-        return await SaveSelectedVariantAsync(cancellationToken);
-    }
-
-    private async Task LoadAsync(CancellationToken externalCancellationToken = default)
-    {
-        await RunOperationAsync(
-            "Loading Planner context",
-            async cancellationToken =>
-            {
-                var projectsResponse = await App.Services.ApiClient.GetProjectsAsync(cancellationToken);
-                _projects = projectsResponse.Projects;
-                ProjectComboBox.ItemsSource = _projects;
-
-                var activeProjectId = _session.ActiveProjectId;
-                var selectedProject = _projects.FirstOrDefault(project => project.Id == activeProjectId)
-                                      ?? _projects.FirstOrDefault();
-                if (selectedProject is null)
-                {
-                    ClearPlan();
-                    ShowStatus(InfoBarSeverity.Warning, "No project", "Create a project in Workspace before using Planner.");
-                    return;
-                }
-
-                _isLoadingProject = true;
-                ProjectComboBox.SelectedItem = selectedProject;
-                _isLoadingProject = false;
-                await LoadProjectAsync(selectedProject.Id, cancellationToken);
-                await LoadAiReadinessAsync(cancellationToken);
-                ShowStatus(InfoBarSeverity.Success, "Planner ready", $"Loaded {selectedProject.Name}.");
-            }, externalCancellationToken: externalCancellationToken);
-    }
-
-    private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
-    {
-        var response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-        var workflow = await App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        _project = response.Project;
-        _session.ActiveProjectId = response.Project.Id;
-        if (response.VisualDna.ValueKind == JsonValueKind.Object)
-        {
-            VisualDnaTextBox.Text = FormatJson(response.VisualDna);
-        }
-
-        ReadWorkflow(workflow);
-        if (workflow.TryGetProperty("plan", out var sharedPlan) && sharedPlan.ValueKind == JsonValueKind.Object)
-        {
-            _plan = JsonSerializer.Deserialize(sharedPlan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
-            PresentPlan();
-        }
-        else if (response.Project.HasPlan &&
-            response.Project.Meta.TryGetProperty("last_plan", out var planJson) &&
-            planJson.ValueKind == JsonValueKind.Object)
-        {
-            _plan = JsonSerializer.Deserialize(planJson.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
-            PresentPlan();
-        }
-        else
-        {
+          string activeProjectId = _session.ActiveProjectId;
+          ProjectDto? selectedProject = _projects.FirstOrDefault(project => project.Id == activeProjectId)
+                                  ?? _projects.FirstOrDefault();
+          if (selectedProject is null)
+          {
             ClearPlan();
-        }
-    }
-
-    private void ReadWorkflow(JsonElement workflow)
-    {
-        _workflowRevision = workflow.GetProperty("revision").GetInt64();
-        _workflowStatus = workflow.GetProperty("status").GetString() ?? "not_prepared";
-        _workflowDraftId = null;
-        if (workflow.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.Object)
-        {
-            _workflowDraftId = draft.GetProperty("draft_id").GetString();
-            _workflowVariantIndex = draft.TryGetProperty("variant_index", out var index) ? index.GetInt32() : 0;
-        }
-    }
-
-    private async Task LoadAiReadinessAsync(CancellationToken cancellationToken)
-    {
-        var response = await App.Services.ApiClient.GetAiReadinessAsync(cancellationToken);
-        var configuration = response.AiConfiguration;
-        var readiness = configuration.IsReady switch
-        {
-            true => "ready",
-            false => "not ready",
-            null => "status unknown",
-        };
-        var provider = string.IsNullOrWhiteSpace(configuration.Label)
-            ? configuration.Provider
-            : configuration.Label;
-        var model = string.IsNullOrWhiteSpace(configuration.Model) ? string.Empty : $" · {configuration.Model}";
-        ProviderStatusText.Text = $"{provider} · {readiness}{model}" +
-                                  (string.IsNullOrWhiteSpace(configuration.Warning)
-                                      ? string.Empty
-                                      : $"\n{configuration.Warning}");
-    }
-
-    private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isLoadingProject || ProjectComboBox.SelectedItem is not ProjectDto project)
-        {
+            ShowStatus(InfoBarSeverity.Warning, "No project", "Create a project in Workspace before using Planner.");
             return;
-        }
+          }
 
-        if (!string.Equals(project.Id, _session.ActiveProjectId, StringComparison.Ordinal) &&
-            !CanReplacePlan("switching projects"))
-        {
-            RestoreActiveProjectSelection();
-            return;
-        }
+          _isLoadingProject = true;
+          ProjectComboBox.SelectedItem = selectedProject;
+          _isLoadingProject = false;
+          await LoadProjectAsync(selectedProject.Id, cancellationToken);
+          await LoadAiReadinessAsync(cancellationToken);
+          ShowStatus(InfoBarSeverity.Success, "Planner ready", $"Loaded {selectedProject.Name}.");
+        }, externalCancellationToken: externalCancellationToken);
+  }
 
-        await RunOperationAsync(
-            "Switching project",
-            cancellationToken => LoadProjectAsync(project.Id, cancellationToken),
-            successMessage: $"Planner is now using {project.Name}.");
+  private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
+  {
+    ProjectResponse response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+    JsonElement workflow = await App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
+    _project = response.Project;
+    _session.ActiveProjectId = response.Project.Id;
+    if (response.VisualDna.ValueKind == JsonValueKind.Object)
+    {
+      VisualDnaTextBox.Text = FormatJson(response.VisualDna);
     }
 
-    private async void RefreshPlannerButton_Click(object sender, RoutedEventArgs e)
+    ReadWorkflow(workflow);
+    if (workflow.TryGetProperty("plan", out JsonElement sharedPlan) && sharedPlan.ValueKind == JsonValueKind.Object)
     {
-        if (!CanReplacePlan("refreshing Planner"))
-        {
-            return;
-        }
+      _plan = JsonSerializer.Deserialize(sharedPlan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
+      PresentPlan();
+    }
+    else if (response.Project.HasPlan &&
+        response.Project.Meta.TryGetProperty("last_plan", out JsonElement planJson) &&
+        planJson.ValueKind == JsonValueKind.Object)
+    {
+      _plan = JsonSerializer.Deserialize(planJson.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
+      PresentPlan();
+    }
+    else
+    {
+      ClearPlan();
+    }
+  }
 
-        await RefreshAsync();
+  private void ReadWorkflow(JsonElement workflow)
+  {
+    _workflowRevision = workflow.GetProperty("revision").GetInt64();
+    _workflowStatus = workflow.GetProperty("status").GetString() ?? "not_prepared";
+    _workflowDraftId = null;
+    if (workflow.TryGetProperty("draft", out JsonElement draft) && draft.ValueKind == JsonValueKind.Object)
+    {
+      _workflowDraftId = draft.GetProperty("draft_id").GetString();
+      _workflowVariantIndex = draft.TryGetProperty("variant_index", out JsonElement index) ? index.GetInt32() : 0;
+    }
+  }
+
+  private async Task LoadAiReadinessAsync(CancellationToken cancellationToken)
+  {
+    AiReadinessResponse response = await App.Services.ApiClient.GetAiReadinessAsync(cancellationToken);
+    AiProviderConfiguration configuration = response.AiConfiguration;
+    string readiness = configuration.IsReady switch
+    {
+      true => "ready",
+      false => "not ready",
+      null => "status unknown",
+    };
+    string provider = string.IsNullOrWhiteSpace(configuration.Label)
+        ? configuration.Provider
+        : configuration.Label;
+    string model = string.IsNullOrWhiteSpace(configuration.Model) ? string.Empty : $" · {configuration.Model}";
+    ProviderStatusText.Text = $"{provider} · {readiness}{model}" +
+                              (string.IsNullOrWhiteSpace(configuration.Warning)
+                                  ? string.Empty
+                                  : $"\n{configuration.Warning}");
+  }
+
+  private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_isLoadingProject || ProjectComboBox.SelectedItem is not ProjectDto project)
+    {
+      return;
     }
 
-    private async void GeneratePlanButton_Click(object sender, RoutedEventArgs e)
+    if (!string.Equals(project.Id, _session.ActiveProjectId, StringComparison.Ordinal) &&
+        !CanReplacePlan("switching projects"))
     {
-        if (!CanReplacePlan("generating a new plan"))
-        {
-            return;
-        }
-
-        if (ProjectComboBox.SelectedItem is not ProjectDto project)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Select a project", "Planner needs an active project.");
-            return;
-        }
-
-        var request = BuildPlanRequest();
-        var errors = PlannerWorkflow.Validate(request);
-        if (errors.Count > 0)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Review Planner settings", string.Join(Environment.NewLine, errors));
-            return;
-        }
-
-        var mode = (PlanningModeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
-        await RunOperationAsync(
-            "Generating plan variants",
-            async cancellationToken =>
-            {
-                _plan = await App.Services.ApiClient.GeneratePlanAsync(project.Id, request, mode, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                await LoadProjectAsync(project.Id, cancellationToken);
-            },
-            successMessage: $"Generated {_plan?.Variants.Count ?? 0} plan variants.");
+      RestoreActiveProjectSelection();
+      return;
     }
 
-    private PlanRequest BuildPlanRequest()
-    {
-        var creativeSettings = new PlannerCreativeSettings(
-            CreativeBriefTextBox.Text,
-            VisualDnaTextBox.Text,
-            ConstraintsTextBox.Text,
-            PromptSeedTextBox.Text,
-            DirectorPresetComboBox.Text,
-            MotionPresetComboBox.Text,
-            AnimationPresetComboBox.Text,
-            RenderPresetComboBox.Text,
-            ConductorIntentTextBox.Text);
+    await RunOperationAsync(
+        "Switching project",
+        cancellationToken => LoadProjectAsync(project.Id, cancellationToken),
+        successMessage: $"Planner is now using {project.Name}.");
+  }
 
-        return new PlanRequest(
-            NullIfWhiteSpace(TitleTextBox.Text),
-            NullIfWhiteSpace(CreativeBriefTextBox.Text),
-            NullIfWhiteSpace(PlannerWorkflow.BuildStylePreferences(creativeSettings)),
-            (int)VariantCountNumberBox.Value,
-            (int)SceneCountNumberBox.Value,
-            StudioPageHelpers.ExpectedRevision(_project));
+  private async void RefreshPlannerButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (!CanReplacePlan("refreshing Planner"))
+    {
+      return;
     }
 
-    private void PresentPlan()
+    await RefreshAsync();
+  }
+
+  private async void GeneratePlanButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (!CanReplacePlan("generating a new plan"))
     {
-        _isVariantDirty = false;
-        var items = _plan?.Variants
+      return;
+    }
+
+    if (ProjectComboBox.SelectedItem is not ProjectDto project)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Select a project", "Planner needs an active project.");
+      return;
+    }
+
+    PlanRequest request = BuildPlanRequest();
+    IReadOnlyList<string> errors = PlannerWorkflow.Validate(request);
+    if (errors.Count > 0)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Review Planner settings", string.Join(Environment.NewLine, errors));
+      return;
+    }
+
+    string mode = (PlanningModeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
+    await RunOperationAsync(
+        "Generating plan variants",
+        async cancellationToken =>
+        {
+          _plan = await App.Services.ApiClient.GeneratePlanAsync(project.Id, request, mode, cancellationToken);
+          cancellationToken.ThrowIfCancellationRequested();
+          await LoadProjectAsync(project.Id, cancellationToken);
+        },
+        successMessage: $"Generated {_plan?.Variants.Count ?? 0} plan variants.");
+  }
+
+  private PlanRequest BuildPlanRequest()
+  {
+    PlannerCreativeSettings creativeSettings = new(
+        CreativeBriefTextBox.Text,
+        VisualDnaTextBox.Text,
+        ConstraintsTextBox.Text,
+        PromptSeedTextBox.Text,
+        DirectorPresetComboBox.Text,
+        MotionPresetComboBox.Text,
+        AnimationPresetComboBox.Text,
+        RenderPresetComboBox.Text,
+        ConductorIntentTextBox.Text);
+
+    return new PlanRequest(
+        NullIfWhiteSpace(TitleTextBox.Text),
+        NullIfWhiteSpace(CreativeBriefTextBox.Text),
+        NullIfWhiteSpace(PlannerWorkflow.BuildStylePreferences(creativeSettings)),
+        (int)VariantCountNumberBox.Value,
+        (int)SceneCountNumberBox.Value,
+        StudioPageHelpers.ExpectedRevision(_project));
+  }
+
+  private void PresentPlan()
+  {
+    HasUnsavedEdits = false;
+    List<PlannerVariantItem> items = _plan?.Variants
             .Select((variant, index) => new PlannerVariantItem(variant, index))
             .ToList() ?? [];
-        VariantListView.ItemsSource = items;
-        RawPlanTextBox.Text = _plan is null
-            ? string.Empty
-            : JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>());
+    VariantListView.ItemsSource = items;
+    RawPlanTextBox.Text = _plan is null
+        ? string.Empty
+        : JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>());
 
-        if (items.Count == 0)
-        {
-            _selectedVariantIndex = -1;
-            _selectedSceneIndex = -1;
-            SceneListView.ItemsSource = null;
-            VariantTitleText.Text = "No variants";
-            VariantLoglineText.Text = "Generate or import a plan to begin.";
-            ClearSceneEditor();
-            return;
-        }
-
-        var preferredIndex = Math.Clamp(_session.SelectedVariantIndex, 0, items.Count - 1);
-        VariantListView.SelectedIndex = preferredIndex;
-        SelectVariant(items[preferredIndex]);
+    if (items.Count == 0)
+    {
+      _selectedVariantIndex = -1;
+      _selectedSceneIndex = -1;
+      SceneListView.ItemsSource = null;
+      VariantTitleText.Text = "No variants";
+      VariantLoglineText.Text = "Generate or import a plan to begin.";
+      ClearSceneEditor();
+      return;
     }
 
-    private void VariantListView_ItemClick(object sender, ItemClickEventArgs e)
+    int preferredIndex = Math.Clamp(_session.SelectedVariantIndex, 0, items.Count - 1);
+    VariantListView.SelectedIndex = preferredIndex;
+    SelectVariant(items[preferredIndex]);
+  }
+
+  private void VariantListView_ItemClick(object sender, ItemClickEventArgs e)
+  {
+    if (e.ClickedItem is PlannerVariantItem item)
     {
-        if (e.ClickedItem is PlannerVariantItem item)
-        {
-            if (item.Position != _selectedVariantIndex && !CommitPendingSceneEdits())
-            {
-                VariantListView.SelectedIndex = _selectedVariantIndex;
-                return;
-            }
+      if (item.Position != _selectedVariantIndex && !CommitPendingSceneEdits())
+      {
+        VariantListView.SelectedIndex = _selectedVariantIndex;
+        return;
+      }
 
-            if (item.Position != _selectedVariantIndex && _isVariantDirty)
-            {
-                VariantListView.SelectedIndex = _selectedVariantIndex;
-                ShowStatus(
-                    InfoBarSeverity.Warning,
-                    "Save scene edits",
-                    "Save the current variant before switching to another variant.");
-                return;
-            }
-
-            SelectVariant(item);
-        }
-    }
-
-    private void SelectVariant(PlannerVariantItem item)
-    {
-        _selectedVariantIndex = item.Position;
-        _session.SelectedVariantIndex = item.Position;
-        VariantTitleText.Text = item.DisplayName;
-        VariantLoglineText.Text = string.IsNullOrWhiteSpace(item.Variant.Logline)
-            ? $"{item.Variant.SceneCount} scenes"
-            : item.Variant.Logline;
-        RefreshSceneList();
-        PresentSchedule();
-    }
-
-    private void PresentSchedule()
-    {
-        var draft = SelectedVariant?.ScheduleDraft;
-        if (draft is null)
-        {
-            ScheduleSummaryText.Text = "This legacy variant has no schedule draft yet. Use Regenerate Draft to prepare one.";
-            ScheduleWarningsText.Text = string.Empty;
-            ScheduleDetailsTextBox.Text = string.Empty;
-            return;
-        }
-        ScheduleSummaryText.Text = string.Join(" · ", draft.Summary.Select(item => $"{item.Value} {item.Key.Replace('_', ' ')}"));
-        if (_workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
-            ScheduleSummaryText.Text = $"Shared Workspace draft ({_workflowStatus}) · Reactive Lab is filled automatically. " + ScheduleSummaryText.Text;
-        ScheduleWarningsText.Text = string.Join(Environment.NewLine, draft.Warnings);
-        var lines = new List<string>();
-        foreach (string group in new[] { "prompt_anchors", "image_anchors", "camera_keys", "motion_keys", "markers" })
-        {
-            if (draft.AdditionalData?.TryGetValue(group, out var points) != true || points.ValueKind != JsonValueKind.Array)
-                continue;
-            lines.Add(group.Replace('_', ' ').ToUpperInvariant());
-            foreach (var point in points.EnumerateArray())
-            {
-                if (point.ValueKind != JsonValueKind.Object) continue;
-                string time = point.TryGetProperty("t", out var stamp) ? stamp.ToString() : "?";
-                string reason = point.TryGetProperty("reason", out var why) ? why.ToString() : string.Empty;
-                string detail = point.TryGetProperty("prompt", out var prompt) ? prompt.ToString()
-                    : point.TryGetProperty("state", out var state) ? state.ToString()
-                    : point.TryGetProperty("motion_score", out var motion) ? $"Motion intensity {motion}" : string.Empty;
-                lines.Add($"{time}s — {reason}. {detail}");
-            }
-            lines.Add(string.Empty);
-        }
-        ScheduleDetailsTextBox.Text = string.Join(Environment.NewLine, lines);
-    }
-
-    private async void RegenerateScheduleButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_project is not { } project || SelectedVariant is null || _isOperationBusy) return;
-        if (!await SaveSelectedVariantAsync()) return;
-        await RunOperationAsync("Regenerating schedule draft", async cancellationToken =>
-        {
-            var response = await App.Services.ApiClient.RegeneratePlannerScheduleAsync(project.Id,
-                new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision }, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!response.Ok || response.Draft is null) throw new InvalidDataException("The backend returned no schedule draft.");
-            // Saving scene edits may replace the variant instance.
-            if (SelectedVariant is { } current) current.ScheduleDraft = response.Draft;
-            PresentSchedule();
-            await LoadProjectAsync(project.Id, cancellationToken);
-        }, "Draft regenerated. Review it before approval; Timeline is unchanged.");
-    }
-
-    private async void SaveWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProjectComboBox.SelectedItem is not ProjectDto || _selectedVariantIndex < 0)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Select a variant", "Choose the variant to save to the Workspace draft.");
-            return;
-        }
-
-        if (!await SaveSelectedVariantAsync()) return;
+      if (item.Position != _selectedVariantIndex && HasUnsavedEdits)
+      {
+        VariantListView.SelectedIndex = _selectedVariantIndex;
         ShowStatus(
+            InfoBarSeverity.Warning,
+            "Save scene edits",
+            "Save the current variant before switching to another variant.");
+        return;
+      }
+
+      SelectVariant(item);
+    }
+  }
+
+  private void SelectVariant(PlannerVariantItem item)
+  {
+    _selectedVariantIndex = item.Position;
+    _session.SelectedVariantIndex = item.Position;
+    VariantTitleText.Text = item.DisplayName;
+    VariantLoglineText.Text = string.IsNullOrWhiteSpace(item.Variant.Logline)
+        ? $"{item.Variant.SceneCount} scenes"
+        : item.Variant.Logline;
+    RefreshSceneList();
+    PresentSchedule();
+  }
+
+  private void PresentSchedule()
+  {
+    PlannerScheduleDraft? draft = SelectedVariant?.ScheduleDraft;
+    if (draft is null)
+    {
+      ScheduleSummaryText.Text = "This legacy variant has no schedule draft yet. Use Regenerate Draft to prepare one.";
+      ScheduleWarningsText.Text = string.Empty;
+      ScheduleDetailsTextBox.Text = string.Empty;
+      return;
+    }
+    ScheduleSummaryText.Text = string.Join(" · ", draft.Summary.Select(item => $"{item.Value} {item.Key.Replace('_', ' ')}"));
+    if (_workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
+    {
+      ScheduleSummaryText.Text = $"Shared Workspace draft ({_workflowStatus}) · Reactive Lab is filled automatically. " + ScheduleSummaryText.Text;
+    }
+
+    ScheduleWarningsText.Text = string.Join(Environment.NewLine, draft.Warnings);
+    List<string> lines = new();
+    foreach (string group in new[] { "prompt_anchors", "image_anchors", "camera_keys", "motion_keys", "markers" })
+    {
+      if (draft.AdditionalData?.TryGetValue(group, out JsonElement points) != true || points.ValueKind != JsonValueKind.Array)
+      {
+        continue;
+      }
+
+      lines.Add(group.Replace('_', ' ').ToUpperInvariant());
+      foreach (JsonElement point in points.EnumerateArray())
+      {
+        if (point.ValueKind != JsonValueKind.Object)
+        {
+          continue;
+        }
+
+        string time = point.TryGetProperty("t", out JsonElement stamp) ? stamp.ToString() : "?";
+        string reason = point.TryGetProperty("reason", out JsonElement why) ? why.ToString() : string.Empty;
+        string detail = point.TryGetProperty("prompt", out JsonElement prompt) ? prompt.ToString()
+            : point.TryGetProperty("state", out JsonElement state) ? state.ToString()
+            : point.TryGetProperty("motion_score", out JsonElement motion) ? $"Motion intensity {motion}" : string.Empty;
+        lines.Add($"{time}s — {reason}. {detail}");
+      }
+      lines.Add(string.Empty);
+    }
+    ScheduleDetailsTextBox.Text = string.Join(Environment.NewLine, lines);
+  }
+
+  private async void RegenerateScheduleButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (_project is not { } project || SelectedVariant is null || _isOperationBusy)
+    {
+      return;
+    }
+
+    if (!await SaveSelectedVariantAsync())
+    {
+      return;
+    }
+
+    await RunOperationAsync("Regenerating schedule draft", async cancellationToken =>
+        {
+          PlannerScheduleResponse response = await App.Services.ApiClient.RegeneratePlannerScheduleAsync(project.Id,
+                new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision }, cancellationToken);
+          cancellationToken.ThrowIfCancellationRequested();
+          if (!response.Ok || response.Draft is null)
+          {
+            throw new InvalidDataException("The backend returned no schedule draft.");
+          }
+          // Saving scene edits may replace the variant instance.
+          if (SelectedVariant is { } current)
+          {
+            current.ScheduleDraft = response.Draft;
+          }
+
+          PresentSchedule();
+          await LoadProjectAsync(project.Id, cancellationToken);
+        }, "Draft regenerated. Review it before approval; Timeline is unchanged.");
+  }
+
+  private async void SaveWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (ProjectComboBox.SelectedItem is not ProjectDto || _selectedVariantIndex < 0)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Select a variant", "Choose the variant to save to the Workspace draft.");
+      return;
+    }
+
+    if (!await SaveSelectedVariantAsync())
+    {
+      return;
+    }
+
+    ShowStatus(
             InfoBarSeverity.Success,
             "Plan draft saved",
             "The selected scenes and regenerated prompt/keyframe schedule are saved. Apply in Workspace when you are ready to update Timeline.");
-    }
-    private void SceneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  }
+  private void SceneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_suppressSceneSelection || SceneListView.SelectedItem is not PlannerSceneItem item)
     {
-        if (_suppressSceneSelection || SceneListView.SelectedItem is not PlannerSceneItem item)
-        {
-            return;
-        }
-
-        int previousIndex = _selectedSceneIndex;
-        if (item.Index != previousIndex && !CommitPendingSceneEdits())
-        {
-            SetSceneListSelection(previousIndex);
-            return;
-        }
-
-        SelectScene(item.Index);
+      return;
     }
 
-    private void SceneTimingNumberBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args) =>
-        MarkSceneEditorDirty();
-
-    private void ScenePromptTextBox_TextChanged(object sender, TextChangedEventArgs e) =>
-        MarkSceneEditorDirty();
-
-    private void PreviousSceneButton_Click(object sender, RoutedEventArgs e) =>
-        NavigateScene(-1);
-
-    private void NextSceneButton_Click(object sender, RoutedEventArgs e) =>
-        NavigateScene(1);
-
-    private void MoveSceneEarlierButton_Click(object sender, RoutedEventArgs e) =>
-        MoveSelectedScene(-1);
-
-    private void MoveSceneLaterButton_Click(object sender, RoutedEventArgs e) =>
-        MoveSelectedScene(1);
-
-    private void ApproveSceneButton_Click(object sender, RoutedEventArgs e)
+    int previousIndex = _selectedSceneIndex;
+    if (item.Index != previousIndex && !CommitPendingSceneEdits())
     {
-        if (!CommitPendingSceneEdits() || SelectedScene is not { } scene)
-        {
-            return;
-        }
-
-        ReplaceSelectedScene(
-            WorkspaceModelHelpers.SetSceneApproval(
-                scene,
-                !WorkspaceModelHelpers.IsSceneApproved(scene)));
+      SetSceneListSelection(previousIndex);
+      return;
     }
 
-    private void LockSceneButton_Click(object sender, RoutedEventArgs e)
+    SelectScene(item.Index);
+  }
+
+  private void SceneTimingNumberBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+  {
+    MarkSceneEditorDirty();
+  }
+
+  private void ScenePromptTextBox_TextChanged(object sender, TextChangedEventArgs e)
+  {
+    MarkSceneEditorDirty();
+  }
+
+  private void PreviousSceneButton_Click(object sender, RoutedEventArgs e)
+  {
+    NavigateScene(-1);
+  }
+
+  private void NextSceneButton_Click(object sender, RoutedEventArgs e)
+  {
+    NavigateScene(1);
+  }
+
+  private void MoveSceneEarlierButton_Click(object sender, RoutedEventArgs e)
+  {
+    MoveSelectedScene(-1);
+  }
+
+  private void MoveSceneLaterButton_Click(object sender, RoutedEventArgs e)
+  {
+    MoveSelectedScene(1);
+  }
+
+  private void ApproveSceneButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (!CommitPendingSceneEdits() || SelectedScene is not { } scene)
     {
-        if (SelectedScene is not { } scene)
-        {
-            return;
-        }
-
-        bool wasLocked = WorkspaceModelHelpers.IsSceneLocked(scene);
-        if (!wasLocked && !CommitPendingSceneEdits())
-        {
-            return;
-        }
-
-        scene = SelectedScene ?? scene;
-        ReplaceSelectedScene(WorkspaceModelHelpers.SetSceneLocked(scene, !wasLocked));
+      return;
     }
 
-    private void RepairSceneButton_Click(object sender, RoutedEventArgs e)
+    ReplaceSelectedScene(
+        WorkspaceModelHelpers.SetSceneApproval(
+            scene,
+            !WorkspaceModelHelpers.IsSceneApproved(scene)));
+  }
+
+  private void LockSceneButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (SelectedScene is not { } scene)
     {
-        if (!CommitPendingSceneEdits() || SelectedScene is not { } scene)
-        {
-            return;
-        }
-
-        if (WorkspaceModelHelpers.IsSceneLocked(scene))
-        {
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                "Scene locked",
-                "Unlock the scene before marking it for repair.");
-            return;
-        }
-
-        ReplaceSelectedScene(WorkspaceModelHelpers.MarkSceneNeedsRepair(scene));
+      return;
     }
 
-    private async void SaveScenesButton_Click(object sender, RoutedEventArgs e) =>
-        _ = await SaveSelectedVariantAsync();
-
-    private async void ImportPlanButton_Click(object sender, RoutedEventArgs e)
+    bool wasLocked = WorkspaceModelHelpers.IsSceneLocked(scene);
+    if (!wasLocked && !CommitPendingSceneEdits())
     {
-        if (!CanReplacePlan("importing a plan"))
-        {
-            return;
-        }
+      return;
+    }
 
-        if (ProjectComboBox.SelectedItem is not ProjectDto project)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Select a project", "Choose the destination project first.");
-            return;
-        }
+    scene = SelectedScene ?? scene;
+    ReplaceSelectedScene(WorkspaceModelHelpers.SetSceneLocked(scene, !wasLocked));
+  }
 
-        var picker = new FileOpenPicker();
-        InitializePicker(picker);
-        picker.FileTypeFilter.Add(".json");
-        var file = await picker.PickSingleFileAsync();
-        if (file is null)
-        {
-            return;
-        }
+  private void RepairSceneButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (!CommitPendingSceneEdits() || SelectedScene is not { } scene)
+    {
+      return;
+    }
 
-        try
-        {
-            var json = await FileIO.ReadTextAsync(file);
-            var request = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<PlannerLabImportRequest>())
+    if (WorkspaceModelHelpers.IsSceneLocked(scene))
+    {
+      ShowStatus(
+          InfoBarSeverity.Warning,
+          "Scene locked",
+          "Unlock the scene before marking it for repair.");
+      return;
+    }
+
+    ReplaceSelectedScene(WorkspaceModelHelpers.MarkSceneNeedsRepair(scene));
+  }
+
+  private async void SaveScenesButton_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await SaveSelectedVariantAsync();
+  }
+
+  private async void ImportPlanButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (!CanReplacePlan("importing a plan"))
+    {
+      return;
+    }
+
+    if (ProjectComboBox.SelectedItem is not ProjectDto project)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Select a project", "Choose the destination project first.");
+      return;
+    }
+
+    FileOpenPicker picker = new();
+    InitializePicker(picker);
+    picker.FileTypeFilter.Add(".json");
+    StorageFile? file = await picker.PickSingleFileAsync();
+    if (file is null)
+    {
+      return;
+    }
+
+    try
+    {
+      string json = await FileIO.ReadTextAsync(file);
+      PlannerLabImportRequest request = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<PlannerLabImportRequest>())
                           ?? throw new JsonException("The file did not contain a Planner import document.");
-            request.ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project);
-            await RunOperationAsync(
-                "Importing Planner document",
-                async cancellationToken =>
-                {
-                    var response = await App.Services.ApiClient.ImportPlannerLabAsync(project.Id, request, cancellationToken);
-                    if (!response.Ok) throw new InvalidDataException("The backend did not import the Planner document.");
-                    await LoadProjectAsync(project.Id, cancellationToken);
-                },
-                successMessage: $"Imported {file.Name}.");
-        }
-        catch (JsonException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Import failed", ex.Message);
-        }
+      request.ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project);
+      await RunOperationAsync(
+          "Importing Planner document",
+          async cancellationToken =>
+          {
+            PlannerLabImportResponse response = await App.Services.ApiClient.ImportPlannerLabAsync(project.Id, request, cancellationToken);
+            if (!response.Ok)
+            {
+              throw new InvalidDataException("The backend did not import the Planner document.");
+            }
+
+            await LoadProjectAsync(project.Id, cancellationToken);
+          },
+          successMessage: $"Imported {file.Name}.");
+    }
+    catch (JsonException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Import failed", ex.Message);
+    }
+  }
+
+  private async void ExportPlanButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (_plan is null || ProjectComboBox.SelectedItem is not ProjectDto project)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Nothing to export", "Generate or import a plan first.");
+      return;
     }
 
-    private async void ExportPlanButton_Click(object sender, RoutedEventArgs e)
+    FileSavePicker picker = new();
+    InitializePicker(picker);
+    picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+    picker.FileTypeChoices.Add("JSON document", [".json"]);
+    picker.SuggestedFileName = $"{SafeFileName(project.Name)}-plan";
+    StorageFile? file = await picker.PickSaveFileAsync();
+    if (file is null)
     {
-        if (_plan is null || ProjectComboBox.SelectedItem is not ProjectDto project)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Nothing to export", "Generate or import a plan first.");
-            return;
-        }
-
-        var picker = new FileSavePicker();
-        InitializePicker(picker);
-        picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
-        picker.FileTypeChoices.Add("JSON document", [".json"]);
-        picker.SuggestedFileName = $"{SafeFileName(project.Name)}-plan";
-        var file = await picker.PickSaveFileAsync();
-        if (file is null)
-        {
-            return;
-        }
-
-        await FileIO.WriteTextAsync(file, JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>()));
-        ShowStatus(InfoBarSeverity.Success, "Plan exported", file.Path);
+      return;
     }
 
-    private void RefreshSceneList()
+    await FileIO.WriteTextAsync(file, JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>()));
+    ShowStatus(InfoBarSeverity.Success, "Plan exported", file.Path);
+  }
+
+  private void RefreshSceneList()
+  {
+    PlanVariantDto? variant = SelectedVariant;
+    if (variant is null || variant.Scenes.Count == 0)
     {
-        var variant = SelectedVariant;
-        if (variant is null || variant.Scenes.Count == 0)
-        {
-            _selectedSceneIndex = -1;
-            SceneListView.ItemsSource = null;
-            ClearSceneEditor();
-            return;
-        }
-
-        int preferredIndex = _selectedSceneIndex >= 0
-            ? Math.Min(_selectedSceneIndex, variant.Scenes.Count - 1)
-            : 0;
-        var items = variant.Scenes
-            .Select((scene, index) => new PlannerSceneItem(scene, index, variant.Scenes.Count))
-            .ToList();
-
-        _suppressSceneSelection = true;
-        try
-        {
-            SceneListView.ItemsSource = items;
-            SceneListView.SelectedIndex = preferredIndex;
-        }
-        finally
-        {
-            _suppressSceneSelection = false;
-        }
-
-        SelectScene(preferredIndex);
+      _selectedSceneIndex = -1;
+      SceneListView.ItemsSource = null;
+      ClearSceneEditor();
+      return;
     }
 
-    private void SelectScene(int index)
+    int preferredIndex = _selectedSceneIndex >= 0
+        ? Math.Min(_selectedSceneIndex, variant.Scenes.Count - 1)
+        : 0;
+    List<PlannerSceneItem> items = variant.Scenes
+        .Select((scene, index) => new PlannerSceneItem(scene, index, variant.Scenes.Count))
+        .ToList();
+
+    _suppressSceneSelection = true;
+    try
     {
-        var variant = SelectedVariant;
-        if (variant is null || index < 0 || index >= variant.Scenes.Count)
-        {
-            ClearSceneEditor();
-            return;
-        }
-
-        _selectedSceneIndex = index;
-        var scene = variant.Scenes[index];
-        _suppressSceneEditorChanges = true;
-        try
-        {
-            SceneSelectionHint.Visibility = Visibility.Collapsed;
-            SceneEditorPanel.Visibility = Visibility.Visible;
-            ScenePositionText.Text = $"Scene {index + 1} of {variant.Scenes.Count}";
-            SceneStartNumberBox.Value = scene.StartSeconds;
-            SceneEndNumberBox.Value = scene.EndSeconds;
-            ScenePromptTextBox.Text = scene.Prompt;
-            SceneNegativePromptTextBox.Text = scene.NegativePrompt ?? string.Empty;
-            SceneSettingTextBox.Text = scene.Setting ?? string.Empty;
-            SceneShotTypeTextBox.Text = scene.ShotType ?? string.Empty;
-            SceneCharacterLockTextBox.Text = scene.CharacterLock ?? string.Empty;
-            SceneStyleLockTextBox.Text = scene.StyleLock ?? string.Empty;
-            SceneStartStateTextBox.Text = scene.StartState ?? string.Empty;
-            SceneEndStateTextBox.Text = scene.EndState ?? string.Empty;
-            SceneSubjectTextBox.Text = scene.Subject ?? string.Empty;
-            SceneActionTextBox.Text = scene.Action ?? string.Empty;
-            SceneCameraTextBox.Text = scene.Camera ?? string.Empty;
-            SceneMotionTextBox.Text = scene.Motion ?? string.Empty;
-            SceneEnvironmentMotionTextBox.Text = scene.EnvironmentMotion ?? string.Empty;
-            SceneContinuityTextBox.Text = scene.ContinuityInstruction ?? string.Empty;
-            SceneTransitionTextBox.Text = scene.Transition ?? string.Empty;
-        }
-        finally
-        {
-            _suppressSceneEditorChanges = false;
-        }
-
-        UpdateCurationControls();
+      SceneListView.ItemsSource = items;
+      SceneListView.SelectedIndex = preferredIndex;
+    }
+    finally
+    {
+      _suppressSceneSelection = false;
     }
 
-    private void ClearSceneEditor()
-    {
-        _selectedSceneIndex = -1;
-        _suppressSceneEditorChanges = true;
-        try
-        {
-            SceneSelectionHint.Text = "Select a scene to edit timing, prompts, approval, and continuity state.";
-            SceneSelectionHint.Visibility = Visibility.Visible;
-            SceneEditorPanel.Visibility = Visibility.Collapsed;
-            ScenePositionText.Text = string.Empty;
-            SceneStartNumberBox.Value = double.NaN;
-            SceneEndNumberBox.Value = double.NaN;
-            ScenePromptTextBox.Text = string.Empty;
-            SceneNegativePromptTextBox.Text = string.Empty;
-            SceneSettingTextBox.Text = string.Empty;
-            SceneShotTypeTextBox.Text = string.Empty;
-            SceneCharacterLockTextBox.Text = string.Empty;
-            SceneStyleLockTextBox.Text = string.Empty;
-            SceneStartStateTextBox.Text = string.Empty;
-            SceneEndStateTextBox.Text = string.Empty;
-            SceneSubjectTextBox.Text = string.Empty;
-            SceneActionTextBox.Text = string.Empty;
-            SceneCameraTextBox.Text = string.Empty;
-            SceneMotionTextBox.Text = string.Empty;
-            SceneEnvironmentMotionTextBox.Text = string.Empty;
-            SceneContinuityTextBox.Text = string.Empty;
-            SceneTransitionTextBox.Text = string.Empty;
-        }
-        finally
-        {
-            _suppressSceneEditorChanges = false;
-        }
+    SelectScene(preferredIndex);
+  }
 
-        UpdateCurationControls();
+  private void SelectScene(int index)
+  {
+    PlanVariantDto? variant = SelectedVariant;
+    if (variant is null || index < 0 || index >= variant.Scenes.Count)
+    {
+      ClearSceneEditor();
+      return;
     }
 
-    private void UpdateCurationControls()
+    _selectedSceneIndex = index;
+    PlanSceneDto scene = variant.Scenes[index];
+    _suppressSceneEditorChanges = true;
+    try
     {
-        var variant = SelectedVariant;
-        var scene = SelectedScene;
-        bool hasScene = scene is not null;
-        bool isLocked = scene is not null && WorkspaceModelHelpers.IsSceneLocked(scene);
-        bool canEdit = hasScene && !isLocked && !_isOperationBusy;
+      SceneSelectionHint.Visibility = Visibility.Collapsed;
+      SceneEditorPanel.Visibility = Visibility.Visible;
+      ScenePositionText.Text = $"Scene {index + 1} of {variant.Scenes.Count}";
+      SceneStartNumberBox.Value = scene.StartSeconds;
+      SceneEndNumberBox.Value = scene.EndSeconds;
+      ScenePromptTextBox.Text = scene.Prompt;
+      SceneNegativePromptTextBox.Text = scene.NegativePrompt ?? string.Empty;
+      SceneSettingTextBox.Text = scene.Setting ?? string.Empty;
+      SceneShotTypeTextBox.Text = scene.ShotType ?? string.Empty;
+      SceneCharacterLockTextBox.Text = scene.CharacterLock ?? string.Empty;
+      SceneStyleLockTextBox.Text = scene.StyleLock ?? string.Empty;
+      SceneStartStateTextBox.Text = scene.StartState ?? string.Empty;
+      SceneEndStateTextBox.Text = scene.EndState ?? string.Empty;
+      SceneSubjectTextBox.Text = scene.Subject ?? string.Empty;
+      SceneActionTextBox.Text = scene.Action ?? string.Empty;
+      SceneCameraTextBox.Text = scene.Camera ?? string.Empty;
+      SceneMotionTextBox.Text = scene.Motion ?? string.Empty;
+      SceneEnvironmentMotionTextBox.Text = scene.EnvironmentMotion ?? string.Empty;
+      SceneContinuityTextBox.Text = scene.ContinuityInstruction ?? string.Empty;
+      SceneTransitionTextBox.Text = scene.Transition ?? string.Empty;
+    }
+    finally
+    {
+      _suppressSceneEditorChanges = false;
+    }
 
-        SceneStartNumberBox.IsEnabled = canEdit;
-        SceneEndNumberBox.IsEnabled = canEdit;
-        ScenePromptTextBox.IsEnabled = canEdit;
-        SceneNegativePromptTextBox.IsEnabled = canEdit;
-        SceneSettingTextBox.IsEnabled = canEdit;
-        SceneShotTypeTextBox.IsEnabled = canEdit;
-        SceneCharacterLockTextBox.IsEnabled = canEdit;
-        SceneStyleLockTextBox.IsEnabled = canEdit;
-        SceneStartStateTextBox.IsEnabled = canEdit;
-        SceneEndStateTextBox.IsEnabled = canEdit;
-        SceneSubjectTextBox.IsEnabled = canEdit;
-        SceneActionTextBox.IsEnabled = canEdit;
-        SceneCameraTextBox.IsEnabled = canEdit;
-        SceneMotionTextBox.IsEnabled = canEdit;
-        SceneEnvironmentMotionTextBox.IsEnabled = canEdit;
-        SceneContinuityTextBox.IsEnabled = canEdit;
-        SceneTransitionTextBox.IsEnabled = canEdit;
-        PreviousSceneButton.IsEnabled = hasScene && _selectedSceneIndex > 0 && !_isOperationBusy;
-        NextSceneButton.IsEnabled =
-            hasScene &&
-            variant is not null &&
-            _selectedSceneIndex < variant.Scenes.Count - 1 &&
-            !_isOperationBusy;
-        MoveSceneEarlierButton.IsEnabled = canEdit && _selectedSceneIndex > 0;
-        MoveSceneLaterButton.IsEnabled =
-            canEdit &&
-            variant is not null &&
-            _selectedSceneIndex < variant.Scenes.Count - 1;
-        ApproveSceneButton.IsEnabled = hasScene && !_isOperationBusy;
-        LockSceneButton.IsEnabled = hasScene && !_isOperationBusy;
-        RepairSceneButton.IsEnabled = canEdit;
-        SaveScenesButton.IsEnabled = variant is not null && _isVariantDirty && !_isOperationBusy;
+    UpdateCurationControls();
+  }
 
-        if (scene is null)
-        {
-            SceneStateText.Text = "No scene selected.";
-            CurationStatusText.Text = string.Empty;
-            ApproveSceneButton.Content = "Approve";
-            LockSceneButton.Content = "Lock";
-            return;
-        }
+  private void ClearSceneEditor()
+  {
+    _selectedSceneIndex = -1;
+    _suppressSceneEditorChanges = true;
+    try
+    {
+      SceneSelectionHint.Text = "Select a scene to edit timing, prompts, approval, and continuity state.";
+      SceneSelectionHint.Visibility = Visibility.Visible;
+      SceneEditorPanel.Visibility = Visibility.Collapsed;
+      ScenePositionText.Text = string.Empty;
+      SceneStartNumberBox.Value = double.NaN;
+      SceneEndNumberBox.Value = double.NaN;
+      ScenePromptTextBox.Text = string.Empty;
+      SceneNegativePromptTextBox.Text = string.Empty;
+      SceneSettingTextBox.Text = string.Empty;
+      SceneShotTypeTextBox.Text = string.Empty;
+      SceneCharacterLockTextBox.Text = string.Empty;
+      SceneStyleLockTextBox.Text = string.Empty;
+      SceneStartStateTextBox.Text = string.Empty;
+      SceneEndStateTextBox.Text = string.Empty;
+      SceneSubjectTextBox.Text = string.Empty;
+      SceneActionTextBox.Text = string.Empty;
+      SceneCameraTextBox.Text = string.Empty;
+      SceneMotionTextBox.Text = string.Empty;
+      SceneEnvironmentMotionTextBox.Text = string.Empty;
+      SceneContinuityTextBox.Text = string.Empty;
+      SceneTransitionTextBox.Text = string.Empty;
+    }
+    finally
+    {
+      _suppressSceneEditorChanges = false;
+    }
 
-        bool isApproved = WorkspaceModelHelpers.IsSceneApproved(scene);
-        var stateParts = new List<string>
-        {
+    UpdateCurationControls();
+  }
+
+  private void UpdateCurationControls()
+  {
+    PlanVariantDto? variant = SelectedVariant;
+    PlanSceneDto? scene = SelectedScene;
+    bool hasScene = scene is not null;
+    bool isLocked = scene is not null && WorkspaceModelHelpers.IsSceneLocked(scene);
+    bool canEdit = hasScene && !isLocked && !_isOperationBusy;
+
+    SceneStartNumberBox.IsEnabled = canEdit;
+    SceneEndNumberBox.IsEnabled = canEdit;
+    ScenePromptTextBox.IsEnabled = canEdit;
+    SceneNegativePromptTextBox.IsEnabled = canEdit;
+    SceneSettingTextBox.IsEnabled = canEdit;
+    SceneShotTypeTextBox.IsEnabled = canEdit;
+    SceneCharacterLockTextBox.IsEnabled = canEdit;
+    SceneStyleLockTextBox.IsEnabled = canEdit;
+    SceneStartStateTextBox.IsEnabled = canEdit;
+    SceneEndStateTextBox.IsEnabled = canEdit;
+    SceneSubjectTextBox.IsEnabled = canEdit;
+    SceneActionTextBox.IsEnabled = canEdit;
+    SceneCameraTextBox.IsEnabled = canEdit;
+    SceneMotionTextBox.IsEnabled = canEdit;
+    SceneEnvironmentMotionTextBox.IsEnabled = canEdit;
+    SceneContinuityTextBox.IsEnabled = canEdit;
+    SceneTransitionTextBox.IsEnabled = canEdit;
+    PreviousSceneButton.IsEnabled = hasScene && _selectedSceneIndex > 0 && !_isOperationBusy;
+    NextSceneButton.IsEnabled =
+        hasScene &&
+        variant is not null &&
+        _selectedSceneIndex < variant.Scenes.Count - 1 &&
+        !_isOperationBusy;
+    MoveSceneEarlierButton.IsEnabled = canEdit && _selectedSceneIndex > 0;
+    MoveSceneLaterButton.IsEnabled =
+        canEdit &&
+        variant is not null &&
+        _selectedSceneIndex < variant.Scenes.Count - 1;
+    ApproveSceneButton.IsEnabled = hasScene && !_isOperationBusy;
+    LockSceneButton.IsEnabled = hasScene && !_isOperationBusy;
+    RepairSceneButton.IsEnabled = canEdit;
+    SaveScenesButton.IsEnabled = variant is not null && HasUnsavedEdits && !_isOperationBusy;
+
+    if (scene is null)
+    {
+      SceneStateText.Text = "No scene selected.";
+      CurationStatusText.Text = string.Empty;
+      ApproveSceneButton.Content = "Approve";
+      LockSceneButton.Content = "Lock";
+      return;
+    }
+
+    bool isApproved = WorkspaceModelHelpers.IsSceneApproved(scene);
+    List<string> stateParts = new()
+    {
             string.IsNullOrWhiteSpace(WorkspaceModelHelpers.GetSceneStatus(scene))
                 ? "draft"
                 : WorkspaceModelHelpers.GetSceneStatus(scene),
         };
-        if (isApproved)
-        {
-            stateParts.Add("approved");
-        }
-
-        if (isLocked)
-        {
-            stateParts.Add("locked");
-        }
-
-        SceneStateText.Text = $"State: {string.Join(" · ", stateParts.Distinct(StringComparer.OrdinalIgnoreCase))}";
-        CurationStatusText.Text = isLocked
-            ? "Unlock this scene to change timing, prompts, order, or repair state."
-            : _isVariantDirty
-                ? "This variant has unsaved scene changes."
-                : "Scene changes are synchronized with the saved variant.";
-        ApproveSceneButton.Content = isApproved ? "Clear approval" : "Approve";
-        LockSceneButton.Content = isLocked ? "Unlock" : "Lock";
+    if (isApproved)
+    {
+      stateParts.Add("approved");
     }
 
-    private void MarkSceneEditorDirty()
+    if (isLocked)
     {
-        if (_suppressSceneEditorChanges || SelectedScene is null)
-        {
-            return;
-        }
-
-        _isVariantDirty = true;
-        UpdateCurationControls();
+      stateParts.Add("locked");
     }
 
-    private bool CommitPendingSceneEdits()
+    SceneStateText.Text = $"State: {string.Join(" · ", stateParts.Distinct(StringComparer.OrdinalIgnoreCase))}";
+    CurationStatusText.Text = isLocked
+        ? "Unlock this scene to change timing, prompts, order, or repair state."
+        : HasUnsavedEdits
+            ? "This variant has unsaved scene changes."
+            : "Scene changes are synchronized with the saved variant.";
+    ApproveSceneButton.Content = isApproved ? "Clear approval" : "Approve";
+    LockSceneButton.Content = isLocked ? "Unlock" : "Lock";
+  }
+
+  private void MarkSceneEditorDirty()
+  {
+    if (_suppressSceneEditorChanges || SelectedScene is null)
     {
-        if (!_isVariantDirty || SelectedScene is not { } scene)
-        {
-            return true;
-        }
-
-        if (WorkspaceModelHelpers.IsSceneLocked(scene))
-        {
-            return true;
-        }
-
-        double start = SceneStartNumberBox.Value;
-        double end = SceneEndNumberBox.Value;
-        string prompt = ScenePromptTextBox.Text.Trim();
-        if (!double.IsFinite(start) || start < 0 ||
-            !double.IsFinite(end) || end <= start)
-        {
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                "Review scene timing",
-                "Scene timing must be finite and nonnegative, and the end must be later than the start.");
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(prompt))
-        {
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                "Review scene prompt",
-                "The scene prompt cannot be empty.");
-            return false;
-        }
-
-        ReplaceSelectedScene(
-            WorkspaceModelHelpers.CloneScene(
-                scene,
-                startSeconds: start,
-                endSeconds: end,
-                prompt: prompt,
-                negativePrompt: NullIfWhiteSpace(SceneNegativePromptTextBox.Text),
-                replaceNegativePrompt: true,
-                setting: NullIfWhiteSpace(SceneSettingTextBox.Text),
-                shotType: NullIfWhiteSpace(SceneShotTypeTextBox.Text),
-                characterLock: NullIfWhiteSpace(SceneCharacterLockTextBox.Text),
-                styleLock: NullIfWhiteSpace(SceneStyleLockTextBox.Text),
-                startState: NullIfWhiteSpace(SceneStartStateTextBox.Text),
-                endState: NullIfWhiteSpace(SceneEndStateTextBox.Text),
-                subject: NullIfWhiteSpace(SceneSubjectTextBox.Text),
-                action: NullIfWhiteSpace(SceneActionTextBox.Text),
-                camera: NullIfWhiteSpace(SceneCameraTextBox.Text),
-                motion: NullIfWhiteSpace(SceneMotionTextBox.Text),
-                environmentMotion: NullIfWhiteSpace(SceneEnvironmentMotionTextBox.Text),
-                continuity: NullIfWhiteSpace(SceneContinuityTextBox.Text),
-                transition: NullIfWhiteSpace(SceneTransitionTextBox.Text),
-                replaceStoryboardFields: true),
-            refreshList: false);
-        RefreshSceneList();
-        return true;
+      return;
     }
 
-    private void ReplaceSelectedScene(PlanSceneDto replacement, bool refreshList = true)
-    {
-        var variant = SelectedVariant;
-        if (variant is null || _selectedSceneIndex < 0 || _selectedSceneIndex >= variant.Scenes.Count)
-        {
-            return;
-        }
+    HasUnsavedEdits = true;
+    UpdateCurationControls();
+  }
 
-        var previous = variant.Scenes[_selectedSceneIndex];
-        if (_selectedSceneIndex > 0 && replacement.StartState != previous.StartState)
-        {
-            var predecessor = variant.Scenes[_selectedSceneIndex - 1];
-            variant.Scenes[_selectedSceneIndex - 1] = WorkspaceModelHelpers.CloneScene(
-                predecessor,
-                setting: predecessor.Setting, shotType: predecessor.ShotType,
-                characterLock: predecessor.CharacterLock, styleLock: predecessor.StyleLock,
-                startState: predecessor.StartState, endState: replacement.StartState,
-                subject: predecessor.Subject, action: predecessor.Action,
-                camera: predecessor.Camera, motion: predecessor.Motion,
-                environmentMotion: predecessor.EnvironmentMotion,
-                continuity: predecessor.ContinuityInstruction, transition: predecessor.Transition,
-                replaceStoryboardFields: true);
-        }
-        variant.Scenes[_selectedSceneIndex] = replacement;
-        var normalizedScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+  private bool CommitPendingSceneEdits()
+  {
+    if (!HasUnsavedEdits || SelectedScene is not { } scene)
+    {
+      return true;
+    }
+
+    if (WorkspaceModelHelpers.IsSceneLocked(scene))
+    {
+      return true;
+    }
+
+    double start = SceneStartNumberBox.Value;
+    double end = SceneEndNumberBox.Value;
+    string prompt = ScenePromptTextBox.Text.Trim();
+    if (!double.IsFinite(start) || start < 0 ||
+        !double.IsFinite(end) || end <= start)
+    {
+      ShowStatus(
+          InfoBarSeverity.Warning,
+          "Review scene timing",
+          "Scene timing must be finite and nonnegative, and the end must be later than the start.");
+      return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(prompt))
+    {
+      ShowStatus(
+          InfoBarSeverity.Warning,
+          "Review scene prompt",
+          "The scene prompt cannot be empty.");
+      return false;
+    }
+
+    ReplaceSelectedScene(
+        WorkspaceModelHelpers.CloneScene(
+            scene,
+            startSeconds: start,
+            endSeconds: end,
+            prompt: prompt,
+            negativePrompt: NullIfWhiteSpace(SceneNegativePromptTextBox.Text),
+            replaceNegativePrompt: true,
+            setting: NullIfWhiteSpace(SceneSettingTextBox.Text),
+            shotType: NullIfWhiteSpace(SceneShotTypeTextBox.Text),
+            characterLock: NullIfWhiteSpace(SceneCharacterLockTextBox.Text),
+            styleLock: NullIfWhiteSpace(SceneStyleLockTextBox.Text),
+            startState: NullIfWhiteSpace(SceneStartStateTextBox.Text),
+            endState: NullIfWhiteSpace(SceneEndStateTextBox.Text),
+            subject: NullIfWhiteSpace(SceneSubjectTextBox.Text),
+            action: NullIfWhiteSpace(SceneActionTextBox.Text),
+            camera: NullIfWhiteSpace(SceneCameraTextBox.Text),
+            motion: NullIfWhiteSpace(SceneMotionTextBox.Text),
+            environmentMotion: NullIfWhiteSpace(SceneEnvironmentMotionTextBox.Text),
+            continuity: NullIfWhiteSpace(SceneContinuityTextBox.Text),
+            transition: NullIfWhiteSpace(SceneTransitionTextBox.Text),
+            replaceStoryboardFields: true),
+        refreshList: false);
+    RefreshSceneList();
+    return true;
+  }
+
+  private void ReplaceSelectedScene(PlanSceneDto replacement, bool refreshList = true)
+  {
+    PlanVariantDto? variant = SelectedVariant;
+    if (variant is null || _selectedSceneIndex < 0 || _selectedSceneIndex >= variant.Scenes.Count)
+    {
+      return;
+    }
+
+    PlanSceneDto previous = variant.Scenes[_selectedSceneIndex];
+    if (_selectedSceneIndex > 0 && replacement.StartState != previous.StartState)
+    {
+      PlanSceneDto predecessor = variant.Scenes[_selectedSceneIndex - 1];
+      variant.Scenes[_selectedSceneIndex - 1] = WorkspaceModelHelpers.CloneScene(
+          predecessor,
+          setting: predecessor.Setting, shotType: predecessor.ShotType,
+          characterLock: predecessor.CharacterLock, styleLock: predecessor.StyleLock,
+          startState: predecessor.StartState, endState: replacement.StartState,
+          subject: predecessor.Subject, action: predecessor.Action,
+          camera: predecessor.Camera, motion: predecessor.Motion,
+          environmentMotion: predecessor.EnvironmentMotion,
+          continuity: predecessor.ContinuityInstruction, transition: predecessor.Transition,
+          replaceStoryboardFields: true);
+    }
+    variant.Scenes[_selectedSceneIndex] = replacement;
+    IReadOnlyList<PlanSceneDto> normalizedScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
             variant.Scenes,
             replacement.CharacterLock,
             replacement.StyleLock);
-        variant.Scenes.Clear();
-        variant.Scenes.AddRange(normalizedScenes);
-        _isVariantDirty = true;
-        SynchronizeRawPlan();
-        if (refreshList)
-        {
-            RefreshSceneList();
-        }
-        else
-        {
-            UpdateCurationControls();
-        }
+    variant.Scenes.Clear();
+    variant.Scenes.AddRange(normalizedScenes);
+    HasUnsavedEdits = true;
+    SynchronizeRawPlan();
+    if (refreshList)
+    {
+      RefreshSceneList();
+    }
+    else
+    {
+      UpdateCurationControls();
+    }
+  }
+
+  private void NavigateScene(int offset)
+  {
+    PlanVariantDto? variant = SelectedVariant;
+    int targetIndex = _selectedSceneIndex + offset;
+    if (variant is null || targetIndex < 0 || targetIndex >= variant.Scenes.Count)
+    {
+      return;
     }
 
-    private void NavigateScene(int offset)
+    if (!CommitPendingSceneEdits())
     {
-        var variant = SelectedVariant;
-        int targetIndex = _selectedSceneIndex + offset;
-        if (variant is null || targetIndex < 0 || targetIndex >= variant.Scenes.Count)
-        {
-            return;
-        }
-
-        if (!CommitPendingSceneEdits())
-        {
-            return;
-        }
-
-        SetSceneListSelection(targetIndex);
-        SelectScene(targetIndex);
+      return;
     }
 
-    private void MoveSelectedScene(int offset)
+    SetSceneListSelection(targetIndex);
+    SelectScene(targetIndex);
+  }
+
+  private void MoveSelectedScene(int offset)
+  {
+    PlanVariantDto? variant = SelectedVariant;
+    int targetIndex = _selectedSceneIndex + offset;
+    if (variant is null || SelectedScene is not { } scene ||
+        targetIndex < 0 || targetIndex >= variant.Scenes.Count)
     {
-        var variant = SelectedVariant;
-        int targetIndex = _selectedSceneIndex + offset;
-        if (variant is null || SelectedScene is not { } scene ||
-            targetIndex < 0 || targetIndex >= variant.Scenes.Count)
-        {
-            return;
-        }
+      return;
+    }
 
-        if (WorkspaceModelHelpers.IsSceneLocked(scene))
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Scene locked", "Unlock the scene before moving it.");
-            return;
-        }
+    if (WorkspaceModelHelpers.IsSceneLocked(scene))
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Scene locked", "Unlock the scene before moving it.");
+      return;
+    }
 
-        if (!CommitPendingSceneEdits())
-        {
-            return;
-        }
+    if (!CommitPendingSceneEdits())
+    {
+      return;
+    }
 
-        var normalizedCurrentScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+    IReadOnlyList<PlanSceneDto> normalizedCurrentScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
             variant.Scenes);
-        var reordered = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
+    IReadOnlyList<PlanSceneDto> reordered = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
             WorkspaceModelHelpers.MoveScene(normalizedCurrentScenes, _selectedSceneIndex, offset));
-        variant.Scenes.Clear();
-        variant.Scenes.AddRange(reordered);
-        _selectedSceneIndex = Math.Clamp(targetIndex, 0, variant.Scenes.Count - 1);
-        _isVariantDirty = true;
-        SynchronizeRawPlan();
-        RefreshSceneList();
+    variant.Scenes.Clear();
+    variant.Scenes.AddRange(reordered);
+    _selectedSceneIndex = Math.Clamp(targetIndex, 0, variant.Scenes.Count - 1);
+    HasUnsavedEdits = true;
+    SynchronizeRawPlan();
+    RefreshSceneList();
+  }
+
+  private void SetSceneListSelection(int index)
+  {
+    _suppressSceneSelection = true;
+    try
+    {
+      SceneListView.SelectedIndex = index;
+    }
+    finally
+    {
+      _suppressSceneSelection = false;
+    }
+  }
+
+  private async Task<bool> SaveSelectedVariantAsync(CancellationToken externalCancellationToken = default)
+  {
+    if (!CommitPendingSceneEdits())
+    {
+      return false;
     }
 
-    private void SetSceneListSelection(int index)
+    if (!HasUnsavedEdits && _workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
     {
-        _suppressSceneSelection = true;
-        try
-        {
-            SceneListView.SelectedIndex = index;
-        }
-        finally
-        {
-            _suppressSceneSelection = false;
-        }
+      return true;
     }
 
-    private async Task<bool> SaveSelectedVariantAsync(CancellationToken externalCancellationToken = default)
+    if (ProjectComboBox.SelectedItem is not ProjectDto project ||
+        SelectedVariant is not { } variant)
     {
-        if (!CommitPendingSceneEdits())
-        {
-            return false;
-        }
-
-        if (!_isVariantDirty && _workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
-        {
-            return true;
-        }
-
-        if (ProjectComboBox.SelectedItem is not ProjectDto project ||
-            SelectedVariant is not { } variant)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Cannot save scenes", "Select a project and plan variant first.");
-            return false;
-        }
-
-        int sceneIndex = _selectedSceneIndex;
-        bool saved = false;
-        await RunOperationAsync(
-            "Saving curated scenes",
-            async cancellationToken =>
-            {
-                var response = await App.Services.ApiClient.UpdatePlanVariantAsync(
-                    project.Id,
-                    _selectedVariantIndex,
-                    variant.Scenes,
-                    StudioPageHelpers.ExpectedRevision(_project),
-                    cancellationToken);
-                if (!response.Ok || response.Plan is null)
-                {
-                    throw new InvalidDataException("The backend did not return the normalized saved plan.");
-                }
-
-                _plan = response.Plan;
-                int normalizedVariantIndex = response.VariantIndex ?? _selectedVariantIndex;
-                if (normalizedVariantIndex < 0 || normalizedVariantIndex >= _plan.Variants.Count)
-                {
-                    throw new InvalidDataException("The backend returned an invalid saved variant index.");
-                }
-
-                _selectedVariantIndex = normalizedVariantIndex;
-                _selectedSceneIndex = sceneIndex;
-                _session.SelectedVariantIndex = _selectedVariantIndex;
-                PresentPlan();
-                ReadWorkflow(await App.Services.ApiClient.GetDirectorWorkflowAsync(project.Id, cancellationToken));
-                PresentSchedule();
-                await RefreshProjectRevisionAsync(project.Id, cancellationToken);
-                saved = true;
-            },
-            successMessage: "Curated scenes were saved to the project.",
-            externalCancellationToken: externalCancellationToken);
-        return saved;
+      ShowStatus(InfoBarSeverity.Warning, "Cannot save scenes", "Select a project and plan variant first.");
+      return false;
     }
 
-    private bool CanReplacePlan(string action)
-    {
-        if (!_isVariantDirty || CommitPendingSceneEdits() && !_isVariantDirty)
+    int sceneIndex = _selectedSceneIndex;
+    bool saved = false;
+    await RunOperationAsync(
+        "Saving curated scenes",
+        async cancellationToken =>
         {
-            return true;
-        }
+          UpdatePlanVariantResponse response = await App.Services.ApiClient.UpdatePlanVariantAsync(
+                project.Id,
+                _selectedVariantIndex,
+                variant.Scenes,
+                StudioPageHelpers.ExpectedRevision(_project),
+                cancellationToken);
+          if (!response.Ok || response.Plan is null)
+          {
+            throw new InvalidDataException("The backend did not return the normalized saved plan.");
+          }
 
-        ShowStatus(
-            InfoBarSeverity.Warning,
-            "Save scene edits",
-            $"Save the current variant before {action}.");
-        return false;
+          _plan = response.Plan;
+          int normalizedVariantIndex = response.VariantIndex ?? _selectedVariantIndex;
+          if (normalizedVariantIndex < 0 || normalizedVariantIndex >= _plan.Variants.Count)
+          {
+            throw new InvalidDataException("The backend returned an invalid saved variant index.");
+          }
+
+          _selectedVariantIndex = normalizedVariantIndex;
+          _selectedSceneIndex = sceneIndex;
+          _session.SelectedVariantIndex = _selectedVariantIndex;
+          PresentPlan();
+          ReadWorkflow(await App.Services.ApiClient.GetDirectorWorkflowAsync(project.Id, cancellationToken));
+          PresentSchedule();
+          await RefreshProjectRevisionAsync(project.Id, cancellationToken);
+          saved = true;
+        },
+        successMessage: "Curated scenes were saved to the project.",
+        externalCancellationToken: externalCancellationToken);
+    return saved;
+  }
+
+  private bool CanReplacePlan(string action)
+  {
+    if (!HasUnsavedEdits || (CommitPendingSceneEdits() && !HasUnsavedEdits))
+    {
+      return true;
     }
 
-    private void RestoreActiveProjectSelection()
-    {
-        var activeProject = _projects.FirstOrDefault(
+    ShowStatus(
+        InfoBarSeverity.Warning,
+        "Save scene edits",
+        $"Save the current variant before {action}.");
+    return false;
+  }
+
+  private void RestoreActiveProjectSelection()
+  {
+    ProjectDto? activeProject = _projects.FirstOrDefault(
             project => string.Equals(project.Id, _session.ActiveProjectId, StringComparison.Ordinal));
-        _isLoadingProject = true;
-        ProjectComboBox.SelectedItem = activeProject;
-        _isLoadingProject = false;
-    }
+    _isLoadingProject = true;
+    ProjectComboBox.SelectedItem = activeProject;
+    _isLoadingProject = false;
+  }
 
-    private void CancelPlannerButton_Click(object sender, RoutedEventArgs e) =>
-        _operationCancellation?.Cancel();
+  private void CancelPlannerButton_Click(object sender, RoutedEventArgs e)
+  {
+    _operationCancellation?.Cancel();
+  }
 
-    private void OpenWorkspaceButton_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+  private void OpenWorkspaceButton_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("workspace");
+  }
 
-    private void OpenTimelineButton_Click(object sender, RoutedEventArgs e) => App.Navigate("timeline");
+  private void OpenTimelineButton_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("timeline");
+  }
 
-    private void OpenRenderButton_Click(object sender, RoutedEventArgs e) => App.Navigate("render");
+  private void OpenRenderButton_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("render");
+  }
 
-    private async Task RunOperationAsync(
+  private async Task RunOperationAsync(
         string title,
         Func<CancellationToken, Task> operation,
         string? successMessage = null,
         Func<CancellationToken, Task>? afterSuccess = null,
         CancellationToken externalCancellationToken = default)
+  {
+    if (!_pageLoaded || _isOperationBusy)
     {
-        if (!_pageLoaded || _isOperationBusy) return;
-        _operationCancellation?.Cancel();
-        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
-        _operationCancellation = operationCancellation;
-        SetBusy(true);
-        ShowStatus(InfoBarSeverity.Informational, title, "Working…");
-        try
-        {
-            await operation(operationCancellation.Token);
-            operationCancellation.Token.ThrowIfCancellationRequested();
-            if (!_pageLoaded || !ReferenceEquals(_operationCancellation, operationCancellation)) return;
-            if (afterSuccess is not null)
-            {
-                await afterSuccess(operationCancellation.Token);
-            }
-
-            if (!string.IsNullOrWhiteSpace(successMessage))
-            {
-                ShowStatus(InfoBarSeverity.Success, "Planner updated", successMessage);
-            }
-        }
-        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Planner changes were requested.");
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            if (_pageLoaded && !operationCancellation.IsCancellationRequested)
-            {
-                try { await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token); }
-                catch (OperationCanceledException) { }
-                catch (Exception ex) { ShowStatus(InfoBarSeverity.Error, "Reload failed", StudioPageHelpers.GetErrorMessage(ex)); }
-            }
-        }
-        catch (StudioApiException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.UserFacingMessage);
-        }
-        catch (InvalidDataException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
-        }
-        catch (HttpRequestException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
-        }
-        catch (Exception ex)
-        {
-            // Event handlers must report malformed responses or platform failures,
-            // rather than let async-void exceptions terminate the desktop process.
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", StudioPageHelpers.GetErrorMessage(ex));
-        }
-        finally
-        {
-            operationCancellation.Dispose();
-            if (ReferenceEquals(_operationCancellation, operationCancellation))
-            {
-                _operationCancellation = null;
-                _isOperationBusy = false;
-                if (_pageLoaded) SetBusy(false);
-            }
-        }
+      return;
     }
 
-    private async Task RunOperationAsync<T>(
-        string title,
-        Func<CancellationToken, Task<T>> operation,
-        string? successMessage = null) =>
-        await RunOperationAsync(title, async cancellationToken => _ = await operation(cancellationToken), successMessage);
-
-    private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
+    _operationCancellation?.Cancel();
+    CancellationTokenSource operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
+    _operationCancellation = operationCancellation;
+    SetBusy(true);
+    ShowStatus(InfoBarSeverity.Informational, title, "Working…");
+    try
     {
-        ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        _project = refreshed.Project;
-        _session.ActiveProjectId = refreshed.Project.Id;
+      await operation(operationCancellation.Token);
+      operationCancellation.Token.ThrowIfCancellationRequested();
+      if (!_pageLoaded || !ReferenceEquals(_operationCancellation, operationCancellation))
+      {
+        return;
+      }
+
+      if (afterSuccess is not null)
+      {
+        await afterSuccess(operationCancellation.Token);
+      }
+
+      if (!string.IsNullOrWhiteSpace(successMessage))
+      {
+        ShowStatus(InfoBarSeverity.Success, "Planner updated", successMessage);
+      }
+    }
+    catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Planner changes were requested.");
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      if (_pageLoaded && !operationCancellation.IsCancellationRequested)
+      {
+        try { await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ShowStatus(InfoBarSeverity.Error, "Reload failed", StudioPageHelpers.GetErrorMessage(ex)); }
+      }
+    }
+    catch (StudioApiException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.UserFacingMessage);
+    }
+    catch (InvalidDataException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+    }
+    catch (HttpRequestException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+    }
+    catch (Exception ex)
+    {
+      // Event handlers must report malformed responses or platform failures,
+      // rather than let async-void exceptions terminate the desktop process.
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", StudioPageHelpers.GetErrorMessage(ex));
+    }
+    finally
+    {
+      operationCancellation.Dispose();
+      if (ReferenceEquals(_operationCancellation, operationCancellation))
+      {
+        _operationCancellation = null;
+        _isOperationBusy = false;
+        if (_pageLoaded)
+        {
+          SetBusy(false);
+        }
+      }
+    }
+  }
+
+  private async Task RunOperationAsync<T>(
+      string title,
+      Func<CancellationToken, Task<T>> operation,
+      string? successMessage = null)
+  {
+    await RunOperationAsync(title, async cancellationToken => _ = await operation(cancellationToken), successMessage);
+  }
+
+  private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
+  {
+    ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
+    _project = refreshed.Project;
+    _session.ActiveProjectId = refreshed.Project.Id;
+  }
+
+  private async Task HandleProjectRevisionConflictAsync(
+      ProjectRevisionConflictException conflict,
+      CancellationToken cancellationToken)
+  {
+    if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+    {
+      ShowStatus(
+          InfoBarSeverity.Warning,
+          "Project reload required",
+          "The failed change was not applied. Review your local Planner work, reload, then retry.");
+      return;
     }
 
-    private async Task HandleProjectRevisionConflictAsync(
-        ProjectRevisionConflictException conflict,
-        CancellationToken cancellationToken)
+    string? projectId = _project?.Id ?? _session.ActiveProjectId;
+    if (string.IsNullOrWhiteSpace(projectId))
     {
-        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
-        {
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                "Project reload required",
-                "The failed change was not applied. Review your local Planner work, reload, then retry.");
-            return;
-        }
-
-        string? projectId = _project?.Id ?? _session.ActiveProjectId;
-        if (string.IsNullOrWhiteSpace(projectId))
-        {
-            return;
-        }
-
-        try
-        {
-            await LoadProjectAsync(projectId, cancellationToken);
-            ShowStatus(
-                InfoBarSeverity.Informational,
-                "Project reloaded",
-                "The latest revision is loaded. Review the plan, then retry your change.");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (StudioApiException reloadError)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.UserFacingMessage);
-        }
-        catch (HttpRequestException reloadError)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
-        }
-        catch (JsonException reloadError)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
-        }
+      return;
     }
 
-    private void SetBusy(bool isBusy)
+    try
     {
-        _isOperationBusy = isBusy;
-        PlannerProgressRing.IsActive = isBusy;
-        PlannerProgressRing.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
-        CancelPlannerButton.IsEnabled = isBusy;
-        RefreshPlannerButton.IsEnabled = !isBusy;
-        GeneratePlanButton.IsEnabled = !isBusy;
-        RegenerateScheduleButton.IsEnabled = !isBusy && SelectedVariant is not null;
-        ProjectComboBox.IsEnabled = !isBusy;
-        UpdateCurationControls();
+      await LoadProjectAsync(projectId, cancellationToken);
+      ShowStatus(
+          InfoBarSeverity.Informational,
+          "Project reloaded",
+          "The latest revision is loaded. Review the plan, then retry your change.");
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (StudioApiException reloadError)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.UserFacingMessage);
+    }
+    catch (HttpRequestException reloadError)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+    }
+    catch (JsonException reloadError)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+    }
+  }
+
+  private void SetBusy(bool isBusy)
+  {
+    _isOperationBusy = isBusy;
+    PlannerProgressRing.IsActive = isBusy;
+    PlannerProgressRing.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
+    CancelPlannerButton.IsEnabled = isBusy;
+    RefreshPlannerButton.IsEnabled = !isBusy;
+    GeneratePlanButton.IsEnabled = !isBusy;
+    RegenerateScheduleButton.IsEnabled = !isBusy && SelectedVariant is not null;
+    ProjectComboBox.IsEnabled = !isBusy;
+    UpdateCurationControls();
+  }
+
+  private void ShowStatus(InfoBarSeverity severity, string title, string message)
+  {
+    if (!_pageLoaded)
+    {
+      return;
     }
 
-    private void ShowStatus(InfoBarSeverity severity, string title, string message)
+    if (!DispatcherQueue.HasThreadAccess)
     {
-        if (!_pageLoaded) return;
-        if (!DispatcherQueue.HasThreadAccess)
-        {
-            _ = DispatcherQueue.TryEnqueue(() => ShowStatus(severity, title, message));
-            return;
-        }
-        PlannerInfoBar.Severity = severity;
-        PlannerInfoBar.Title = title;
-        PlannerInfoBar.Message = message;
-        PlannerInfoBar.IsOpen = true;
+      _ = DispatcherQueue.TryEnqueue(() => ShowStatus(severity, title, message));
+      return;
     }
+    PlannerInfoBar.Severity = severity;
+    PlannerInfoBar.Title = title;
+    PlannerInfoBar.Message = message;
+    PlannerInfoBar.IsOpen = true;
+  }
 
-    private void ClearPlan()
-    {
-        _plan = null;
-        _selectedVariantIndex = -1;
-        _selectedSceneIndex = -1;
-        _isVariantDirty = false;
-        VariantListView.ItemsSource = null;
-        SceneListView.ItemsSource = null;
-        RawPlanTextBox.Text = string.Empty;
-        VariantTitleText.Text = "Select a variant";
-        VariantLoglineText.Text = "Generated scene structure and raw backend data will appear here.";
-        ClearSceneEditor();
-    }
+  private void ClearPlan()
+  {
+    _plan = null;
+    _selectedVariantIndex = -1;
+    _selectedSceneIndex = -1;
+    HasUnsavedEdits = false;
+    VariantListView.ItemsSource = null;
+    SceneListView.ItemsSource = null;
+    RawPlanTextBox.Text = string.Empty;
+    VariantTitleText.Text = "Select a variant";
+    VariantLoglineText.Text = "Generated scene structure and raw backend data will appear here.";
+    ClearSceneEditor();
+  }
 
-    private void SynchronizeRawPlan()
-    {
-        RawPlanTextBox.Text = _plan is null
-            ? string.Empty
-            : JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>());
-    }
+  private void SynchronizeRawPlan()
+  {
+    RawPlanTextBox.Text = _plan is null
+        ? string.Empty
+        : JsonSerializer.Serialize(_plan, StudioJson.GetTypeInfo<PlanDto>());
+  }
 
-    private static void InitializePicker(object picker)
-    {
-        var window = App.MainWindowInstance
+  private static void InitializePicker(object picker)
+  {
+    MainWindow window = App.MainWindowInstance
                      ?? throw new InvalidOperationException("The main window is not available.");
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-    }
+    nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+    WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+  }
 
-    private static string FormatJson(JsonElement value) =>
-        JsonSerializer.Serialize(value, _indentedJsonContext.JsonElement);
+  private static string FormatJson(JsonElement value)
+  {
+    return JsonSerializer.Serialize(value, _indentedJsonContext.JsonElement);
+  }
 
-    private static string? NullIfWhiteSpace(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  private static string? NullIfWhiteSpace(string? value)
+  {
+    return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  }
 
-    private static string SafeFileName(string value) =>
-        string.Concat(value.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
+  private static string SafeFileName(string value)
+  {
+    return string.Concat(value.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
+  }
 
-    private sealed record PlannerVariantItem(PlanVariantDto Variant, int Position)
+  private sealed record PlannerVariantItem(PlanVariantDto Variant, int Position)
+  {
+    public string DisplayName => Variant.DisplayName;
+
+    public string Summary =>
+        $"{Variant.SceneCount} scenes" +
+        (Variant.DurationSeconds is double duration ? $" · {duration:0.#} s" : string.Empty);
+  }
+
+  private sealed record PlannerSceneItem(PlanSceneDto Scene, int Index, int Total)
+  {
+    public string Position => $"Scene {Index + 1} of {Total}";
+
+    public string TimeRange => $"{Scene.StartSeconds:0.##}–{Scene.EndSeconds:0.##} s";
+
+    public string Prompt => Scene.Prompt;
+
+    public string NegativePrompt => string.IsNullOrWhiteSpace(Scene.NegativePrompt)
+        ? string.Empty
+        : $"Avoid: {Scene.NegativePrompt}";
+
+    public string MotionSummary
     {
-        public string DisplayName => Variant.DisplayName;
-
-        public string Summary =>
-            $"{Variant.SceneCount} scenes" +
-            (Variant.DurationSeconds is double duration ? $" · {duration:0.#} s" : string.Empty);
-    }
-
-    private sealed record PlannerSceneItem(PlanSceneDto Scene, int Index, int Total)
-    {
-        public string Position => $"Scene {Index + 1} of {Total}";
-
-        public string TimeRange => $"{Scene.StartSeconds:0.##}–{Scene.EndSeconds:0.##} s";
-
-        public string Prompt => Scene.Prompt;
-
-        public string NegativePrompt => string.IsNullOrWhiteSpace(Scene.NegativePrompt)
-            ? string.Empty
-            : $"Avoid: {Scene.NegativePrompt}";
-
-        public string MotionSummary
+      get
+      {
+        string?[] parts = new[]
         {
-            get
-            {
-                var parts = new[]
-                {
                     Scene.Action,
                     Scene.Motion,
                     Scene.EnvironmentMotion,
                     Scene.ContinuityInstruction,
                 };
-                return string.Join(
-                    " · ",
-                    parts.Where(value => !string.IsNullOrWhiteSpace(value)).Take(2));
-            }
-        }
+        return string.Join(
+            " · ",
+            parts.Where(value => !string.IsNullOrWhiteSpace(value)).Take(2));
+      }
+    }
 
-        public string StateSummary
+    public string StateSummary
+    {
+      get
+      {
+        List<string> parts = new()
         {
-            get
-            {
-                var parts = new List<string>
-                {
                     string.IsNullOrWhiteSpace(WorkspaceModelHelpers.GetSceneStatus(Scene))
                         ? "draft"
                         : WorkspaceModelHelpers.GetSceneStatus(Scene),
                 };
-                if (WorkspaceModelHelpers.IsSceneApproved(Scene))
-                {
-                    parts.Add("approved");
-                }
-
-                if (WorkspaceModelHelpers.IsSceneLocked(Scene))
-                {
-                    parts.Add("locked");
-                }
-
-                return string.Join(" · ", parts.Distinct(StringComparer.OrdinalIgnoreCase));
-            }
+        if (WorkspaceModelHelpers.IsSceneApproved(Scene))
+        {
+          parts.Add("approved");
         }
+
+        if (WorkspaceModelHelpers.IsSceneLocked(Scene))
+        {
+          parts.Add("locked");
+        }
+
+        return string.Join(" · ", parts.Distinct(StringComparer.OrdinalIgnoreCase));
+      }
     }
+  }
 }

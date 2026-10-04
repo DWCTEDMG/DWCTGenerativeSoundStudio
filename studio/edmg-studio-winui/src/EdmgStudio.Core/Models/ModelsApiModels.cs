@@ -5,210 +5,210 @@ namespace EdmgStudio.Core.Models;
 
 public sealed class ModelCatalogueResponse
 {
-    [JsonPropertyName("catalog")]
-    public IReadOnlyList<ModelCatalogueEntry>? Catalog { get; set; }
+  [JsonPropertyName("catalog")]
+  public IReadOnlyList<ModelCatalogueEntry>? Catalog { get; set; }
 
-    [JsonPropertyName("user")]
-    public IReadOnlyList<ModelCatalogueEntry>? User { get; set; }
+  [JsonPropertyName("user")]
+  public IReadOnlyList<ModelCatalogueEntry>? User { get; set; }
 
-    [JsonPropertyName("packs")]
-    public IReadOnlyList<ModelPackEntry>? Packs { get; set; }
+  [JsonPropertyName("packs")]
+  public IReadOnlyList<ModelPackEntry>? Packs { get; set; }
 
-    [JsonPropertyName("accepted")]
-    public IReadOnlyDictionary<string, JsonElement>? Accepted { get; set; }
+  [JsonPropertyName("accepted")]
+  public IReadOnlyDictionary<string, JsonElement>? Accepted { get; set; }
 
-    [JsonPropertyName("installed")]
-    public IReadOnlyDictionary<string, JsonElement>? Installed { get; set; }
+  [JsonPropertyName("installed")]
+  public IReadOnlyDictionary<string, JsonElement>? Installed { get; set; }
 
-    [JsonPropertyName("cloud")]
-    public JsonElement Cloud { get; set; }
+  [JsonPropertyName("cloud")]
+  public JsonElement Cloud { get; set; }
 
-    [JsonPropertyName("lanes")]
-    public JsonElement Lanes { get; set; }
+  [JsonPropertyName("lanes")]
+  public JsonElement Lanes { get; set; }
 
-    [JsonPropertyName("storage_mode")]
-    public string? StorageMode { get; set; }
+  [JsonPropertyName("storage_mode")]
+  public string? StorageMode { get; set; }
 
-    [JsonPropertyName("model_cache")]
-    public string? ModelCache { get; set; }
+  [JsonPropertyName("model_cache")]
+  public string? ModelCache { get; set; }
 
-    [JsonPropertyName("tensorrt_migration")]
-    public TensorRtMigrationStatus? TensorRtMigration { get; set; }
+  [JsonPropertyName("tensorrt_migration")]
+  public TensorRtMigrationStatus? TensorRtMigration { get; set; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed class ModelCatalogueEntry
 {
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
+  [JsonPropertyName("id")]
+  public string Id { get; set; } = string.Empty;
 
-    [JsonPropertyName("name")]
-    public string? Name { get; set; }
+  [JsonPropertyName("name")]
+  public string? Name { get; set; }
 
-    [JsonPropertyName("kind")]
-    public string? Kind { get; set; }
+  [JsonPropertyName("kind")]
+  public string? Kind { get; set; }
 
-    [JsonPropertyName("source")]
-    public string? Source { get; set; }
+  [JsonPropertyName("source")]
+  public string? Source { get; set; }
 
-    [JsonPropertyName("license_id")]
-    public string? LicenseId { get; set; }
+  [JsonPropertyName("license_id")]
+  public string? LicenseId { get; set; }
 
-    [JsonPropertyName("license_name")]
-    public string? LicenseName { get; set; }
+  [JsonPropertyName("license_name")]
+  public string? LicenseName { get; set; }
 
-    [JsonPropertyName("license_url")]
-    public string? LicenseUrl { get; set; }
+  [JsonPropertyName("license_url")]
+  public string? LicenseUrl { get; set; }
 
-    [JsonPropertyName("description")]
-    public string? Description { get; set; }
+  [JsonPropertyName("description")]
+  public string? Description { get; set; }
 
-    [JsonPropertyName("path")]
-    public string? Path { get; set; }
+  [JsonPropertyName("path")]
+  public string? Path { get; set; }
 
-    [JsonPropertyName("installed")]
-    public bool Installed { get; set; }
+  [JsonPropertyName("installed")]
+  public bool Installed { get; set; }
 
-    [JsonPropertyName("available")]
-    public bool Available { get; set; }
+  [JsonPropertyName("available")]
+  public bool Available { get; set; }
 
-    [JsonPropertyName("package_status")]
-    public ModelRuntimeStatus? PackageStatus { get; set; }
+  [JsonPropertyName("package_status")]
+  public ModelRuntimeStatus? PackageStatus { get; set; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed class ModelRuntimeStatus
 {
-    public ModelRuntimeStatus()
-    {
-    }
+  public ModelRuntimeStatus()
+  {
+  }
 
-    public ModelRuntimeStatus(
-        string packageId,
-        string runtimeState,
-        bool installed,
-        bool runtimeReady,
-        int validationLevel,
-        bool adapterReady,
-        bool smokeTestSupported,
-        bool hardwareKnown,
-        bool hardwareCompatible,
-        string? error,
-        IReadOnlyList<string>? blockers)
-    {
-        PackageId = packageId;
-        RuntimeState = runtimeState;
-        Installed = installed;
-        ExecutionReady = runtimeReady;
-        RuntimeReady = runtimeReady;
-        ValidationLevel = validationLevel;
-        AdapterReady = adapterReady;
-        SmokeTestSupported = smokeTestSupported;
-        HardwareKnown = hardwareKnown;
-        HardwareCompatible = hardwareCompatible;
-        Error = error;
-        Blockers = blockers;
-    }
+  public ModelRuntimeStatus(
+      string packageId,
+      string runtimeState,
+      bool installed,
+      bool runtimeReady,
+      int validationLevel,
+      bool adapterReady,
+      bool smokeTestSupported,
+      bool hardwareKnown,
+      bool hardwareCompatible,
+      string? error,
+      IReadOnlyList<string>? blockers)
+  {
+    PackageId = packageId;
+    RuntimeState = runtimeState;
+    Installed = installed;
+    ExecutionReady = runtimeReady;
+    RuntimeReady = runtimeReady;
+    ValidationLevel = validationLevel;
+    AdapterReady = adapterReady;
+    SmokeTestSupported = smokeTestSupported;
+    HardwareKnown = hardwareKnown;
+    HardwareCompatible = hardwareCompatible;
+    Error = error;
+    Blockers = blockers;
+  }
 
-    [JsonPropertyName("package_id")]
-    public string PackageId { get; set; } = string.Empty;
+  [JsonPropertyName("package_id")]
+  public string PackageId { get; set; } = string.Empty;
 
-    [JsonPropertyName("runtime_state")]
-    public string RuntimeState { get; set; } = string.Empty;
+  [JsonPropertyName("runtime_state")]
+  public string RuntimeState { get; set; } = string.Empty;
 
-    [JsonPropertyName("installed")]
-    public bool Installed { get; set; }
+  [JsonPropertyName("installed")]
+  public bool Installed { get; set; }
 
-    [JsonPropertyName("execution_ready")]
-    public bool ExecutionReady { get; set; }
+  [JsonPropertyName("execution_ready")]
+  public bool ExecutionReady { get; set; }
 
-    [JsonPropertyName("runtime_ready")]
-    public bool RuntimeReady { get; set; }
+  [JsonPropertyName("runtime_ready")]
+  public bool RuntimeReady { get; set; }
 
-    [JsonPropertyName("validation_level")]
-    public int ValidationLevel { get; set; }
+  [JsonPropertyName("validation_level")]
+  public int ValidationLevel { get; set; }
 
-    [JsonPropertyName("adapter_ready")]
-    public bool AdapterReady { get; set; }
+  [JsonPropertyName("adapter_ready")]
+  public bool AdapterReady { get; set; }
 
-    [JsonPropertyName("smoke_test_supported")]
-    public bool SmokeTestSupported { get; set; }
+  [JsonPropertyName("smoke_test_supported")]
+  public bool SmokeTestSupported { get; set; }
 
-    [JsonPropertyName("hardware_known")]
-    public bool HardwareKnown { get; set; }
+  [JsonPropertyName("hardware_known")]
+  public bool HardwareKnown { get; set; }
 
-    [JsonPropertyName("hardware_compatible")]
-    public bool HardwareCompatible { get; set; }
+  [JsonPropertyName("hardware_compatible")]
+  public bool HardwareCompatible { get; set; }
 
-    [JsonPropertyName("error")]
-    public string? Error { get; set; }
+  [JsonPropertyName("error")]
+  public string? Error { get; set; }
 
-    [JsonPropertyName("blockers")]
-    public IReadOnlyList<string>? Blockers { get; set; }
+  [JsonPropertyName("blockers")]
+  public IReadOnlyList<string>? Blockers { get; set; }
 
-    [JsonPropertyName("warnings")]
-    public IReadOnlyList<string>? Warnings { get; set; }
+  [JsonPropertyName("warnings")]
+  public IReadOnlyList<string>? Warnings { get; set; }
 
-    [JsonPropertyName("smoke_test_required")]
-    public bool SmokeTestRequired { get; set; } = true;
+  [JsonPropertyName("smoke_test_required")]
+  public bool SmokeTestRequired { get; set; } = true;
 
-    [JsonPropertyName("smoke_tested")]
-    public bool SmokeTested { get; set; }
+  [JsonPropertyName("smoke_tested")]
+  public bool SmokeTested { get; set; }
 
-    [JsonPropertyName("device")]
-    public string? Device { get; set; }
+  [JsonPropertyName("device")]
+  public string? Device { get; set; }
 
-    [JsonPropertyName("fingerprint")]
-    public string? Fingerprint { get; set; }
+  [JsonPropertyName("fingerprint")]
+  public string? Fingerprint { get; set; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed class ModelPackEntry
 {
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
+  [JsonPropertyName("id")]
+  public string Id { get; set; } = string.Empty;
 
-    [JsonPropertyName("name")]
-    public string? Name { get; set; }
+  [JsonPropertyName("name")]
+  public string? Name { get; set; }
 
-    [JsonPropertyName("models")]
-    public IReadOnlyList<string>? Models { get; set; }
+  [JsonPropertyName("models")]
+  public IReadOnlyList<string>? Models { get; set; }
 
-    [JsonPropertyName("description")]
-    public string? Description { get; set; }
+  [JsonPropertyName("description")]
+  public string? Description { get; set; }
 
-    [JsonPropertyName("package_type")]
-    public string? PackageType { get; set; }
+  [JsonPropertyName("package_type")]
+  public string? PackageType { get; set; }
 
-    [JsonPropertyName("download_size_bytes")]
-    public long? DownloadSizeBytes { get; set; }
+  [JsonPropertyName("download_size_bytes")]
+  public long? DownloadSizeBytes { get; set; }
 
-    [JsonPropertyName("runtime_components")]
-    public IReadOnlyList<ModelPackRuntimeComponent>? RuntimeComponents { get; set; }
+  [JsonPropertyName("runtime_components")]
+  public IReadOnlyList<ModelPackRuntimeComponent>? RuntimeComponents { get; set; }
 
-    [JsonPropertyName("installed")]
-    public bool Installed { get; set; }
+  [JsonPropertyName("installed")]
+  public bool Installed { get; set; }
 
-    [JsonPropertyName("runtime_ready")]
-    public bool RuntimeReady { get; set; }
+  [JsonPropertyName("runtime_ready")]
+  public bool RuntimeReady { get; set; }
 
-    [JsonPropertyName("readiness_state")]
-    public string? ReadinessState { get; set; }
+  [JsonPropertyName("readiness_state")]
+  public string? ReadinessState { get; set; }
 
-    [JsonPropertyName("blockers")]
-    public IReadOnlyList<string>? Blockers { get; set; }
+  [JsonPropertyName("blockers")]
+  public IReadOnlyList<string>? Blockers { get; set; }
 
-    [JsonPropertyName("license_accepted")]
-    public bool LicenseAccepted { get; set; }
+  [JsonPropertyName("license_accepted")]
+  public bool LicenseAccepted { get; set; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed record ModelPackRuntimeComponent(
@@ -234,21 +234,23 @@ public sealed record ModelTask(
     [property: JsonPropertyName("files_total")] int? FilesTotal,
     [property: JsonPropertyName("cancel_requested")] bool CancelRequested)
 {
-    public bool IsActive =>
-        string.Equals(Status, "queued", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(Status, "running", StringComparison.OrdinalIgnoreCase);
+  public bool IsActive =>
+      string.Equals(Status, "queued", StringComparison.OrdinalIgnoreCase)
+      || string.Equals(Status, "running", StringComparison.OrdinalIgnoreCase);
 
-    public double ClampedProgress => Math.Clamp(Progress ?? 0, 0, 1);
+  public double ClampedProgress => Math.Clamp(Progress ?? 0, 0, 1);
 
-    public bool HasProgress => Progress.HasValue;
+  public bool HasProgress => Progress.HasValue;
 
-    public string DisplayStage =>
-        !string.IsNullOrWhiteSpace(Stage) ? Stage :
-        !string.IsNullOrWhiteSpace(LastLog) ? LastLog :
-        Status;
+  public string DisplayStage =>
+      !string.IsNullOrWhiteSpace(Stage) ? Stage :
+      !string.IsNullOrWhiteSpace(LastLog) ? LastLog :
+      Status;
 
-    public static string Fingerprint(IEnumerable<ModelTask> tasks) =>
-        string.Join("|", tasks.Select(task => $"{task.Id}:{task.Status}:{task.CancelRequested}"));
+  public static string Fingerprint(IEnumerable<ModelTask> tasks)
+  {
+    return string.Join("|", tasks.Select(task => $"{task.Id}:{task.Status}:{task.CancelRequested}"));
+  }
 }
 
 public sealed record ModelTaskListResponse(

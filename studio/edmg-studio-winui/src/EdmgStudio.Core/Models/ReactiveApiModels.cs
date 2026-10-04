@@ -5,207 +5,196 @@ namespace EdmgStudio.Core.Models;
 
 public sealed class ReactiveLabApplyRequest
 {
-    private List<JsonElement> _keyframes = [];
-    private List<JsonElement> _beatMarkers = [];
-    private List<JsonElement> _cueEvents = [];
-    private List<JsonElement> _sections = [];
-    private List<JsonElement> _repairSuggestions = [];
+  [JsonPropertyName("metadata")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? Metadata { get; set; }
 
-    [JsonPropertyName("metadata")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Metadata { get; set; }
+  [JsonPropertyName("keyframes")]
+  public List<JsonElement> Keyframes { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("keyframes")]
-    public List<JsonElement> Keyframes { get => _keyframes; set => _keyframes = value ?? []; }
+  [JsonPropertyName("beat_markers")]
+  public List<JsonElement> BeatMarkers { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("beat_markers")]
-    public List<JsonElement> BeatMarkers { get => _beatMarkers; set => _beatMarkers = value ?? []; }
+  [JsonPropertyName("cue_events")]
+  public List<JsonElement> CueEvents { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("cue_events")]
-    public List<JsonElement> CueEvents { get => _cueEvents; set => _cueEvents = value ?? []; }
+  [JsonPropertyName("sections")]
+  public List<JsonElement> Sections { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("sections")]
-    public List<JsonElement> Sections { get => _sections; set => _sections = value ?? []; }
+  [JsonPropertyName("repair_suggestions")]
+  public List<JsonElement> RepairSuggestions { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("repair_suggestions")]
-    public List<JsonElement> RepairSuggestions { get => _repairSuggestions; set => _repairSuggestions = value ?? []; }
+  [JsonPropertyName("schedules")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? Schedules { get; set; }
 
-    [JsonPropertyName("schedules")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Schedules { get; set; }
+  [JsonPropertyName("handoff_manifest")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? HandoffManifest { get; set; }
 
-    [JsonPropertyName("handoff_manifest")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? HandoffManifest { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonPropertyName("overwrite_motion_track")]
+  public bool OverwriteMotionTrack { get; set; }
 
-    [JsonPropertyName("overwrite_motion_track")]
-    public bool OverwriteMotionTrack { get; set; }
+  [JsonPropertyName("overwrite_camera")]
+  public bool OverwriteCamera { get; set; }
 
-    [JsonPropertyName("overwrite_camera")]
-    public bool OverwriteCamera { get; set; }
-
-    [JsonPropertyName("expected_revision")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public long? ExpectedRevision { get; set; }
+  [JsonPropertyName("expected_revision")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public long? ExpectedRevision { get; set; }
 }
 
 public sealed class ReactiveLabApplyResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("timeline")]
-    public JsonElement Timeline { get; init; }
+  [JsonPropertyName("timeline")]
+  public JsonElement Timeline { get; init; }
 
-    [JsonPropertyName("visual_dna")]
-    public JsonElement VisualDna { get; init; }
+  [JsonPropertyName("visual_dna")]
+  public JsonElement VisualDna { get; init; }
 
-    [JsonPropertyName("visual_dna_hints")]
-    public JsonElement VisualDnaHints { get; init; }
+  [JsonPropertyName("visual_dna_hints")]
+  public JsonElement VisualDnaHints { get; init; }
 }
 
 public sealed record ReactiveMapping
 {
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+  [JsonPropertyName("id")]
+  public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
-    [JsonPropertyName("name")]
-    public string Name { get; set; } = "New mapping";
+  [JsonPropertyName("name")]
+  public string Name { get; set; } = "New mapping";
 
-    [JsonPropertyName("enabled")]
-    public bool IsEnabled { get; set; } = true;
+  [JsonPropertyName("enabled")]
+  public bool IsEnabled { get; set; } = true;
 
-    [JsonPropertyName("source_signal")]
-    public string SourceSignal { get; set; } = "energy";
+  [JsonPropertyName("source_signal")]
+  public string SourceSignal { get; set; } = "energy";
 
-    [JsonPropertyName("target_parameter")]
-    public string TargetParameter { get; set; } = "motion.strength";
+  [JsonPropertyName("target_parameter")]
+  public string TargetParameter { get; set; } = "motion.strength";
 
-    [JsonPropertyName("response_curve")]
-    public string ResponseCurve { get; set; } = "linear";
+  [JsonPropertyName("response_curve")]
+  public string ResponseCurve { get; set; } = "linear";
 
-    [JsonPropertyName("grammar")]
-    public string Grammar { get; set; } = "continuous";
+  [JsonPropertyName("grammar")]
+  public string Grammar { get; set; } = "continuous";
 
-    [JsonPropertyName("gain")]
-    public double Gain { get; set; } = 1;
+  [JsonPropertyName("gain")]
+  public double Gain { get; set; } = 1;
 
-    [JsonPropertyName("smoothing")]
-    public double Smoothing { get; set; } = 0.25;
+  [JsonPropertyName("smoothing")]
+  public double Smoothing { get; set; } = 0.25;
 
-    [JsonPropertyName("threshold")]
-    public double Threshold { get; set; } = 0.1;
+  [JsonPropertyName("threshold")]
+  public double Threshold { get; set; } = 0.1;
 
-    [JsonPropertyName("input_min")]
-    public double InputMinimum { get; set; }
+  [JsonPropertyName("input_min")]
+  public double InputMinimum { get; set; }
 
-    [JsonPropertyName("input_max")]
-    public double InputMaximum { get; set; } = 1;
+  [JsonPropertyName("input_max")]
+  public double InputMaximum { get; set; } = 1;
 
-    [JsonPropertyName("output_min")]
-    public double OutputMinimum { get; set; }
+  [JsonPropertyName("output_min")]
+  public double OutputMinimum { get; set; }
 
-    [JsonPropertyName("output_max")]
-    public double OutputMaximum { get; set; } = 1;
+  [JsonPropertyName("output_max")]
+  public double OutputMaximum { get; set; } = 1;
 
-    [JsonPropertyName("quantization")]
-    public string Quantization { get; set; } = "none";
+  [JsonPropertyName("quantization")]
+  public string Quantization { get; set; } = "none";
 
-    [JsonPropertyName("section")]
-    public string? Section { get; set; }
+  [JsonPropertyName("section")]
+  public string? Section { get; set; }
 
-    [JsonPropertyName("cue")]
-    public string? Cue { get; set; }
+  [JsonPropertyName("cue")]
+  public string? Cue { get; set; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed class ReactivePreset
 {
-    private List<ReactiveMapping> _mappings = [];
+  [JsonPropertyName("name")]
+  public string Name { get; set; } = string.Empty;
 
-    [JsonPropertyName("name")]
-    public string Name { get; set; } = string.Empty;
+  [JsonPropertyName("mappings")]
+  public List<ReactiveMapping> Mappings { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("mappings")]
-    public List<ReactiveMapping> Mappings { get => _mappings; set => _mappings = value ?? []; }
+  [JsonPropertyName("mapping_preset")]
+  public string MappingPreset { get; set; } = "cinematic";
 
-    [JsonPropertyName("mapping_preset")]
-    public string MappingPreset { get; set; } = "cinematic";
+  [JsonPropertyName("sensitivity")]
+  public double Sensitivity { get; set; } = 1;
 
-    [JsonPropertyName("sensitivity")]
-    public double Sensitivity { get; set; } = 1;
+  [JsonPropertyName("smoothing")]
+  public double Smoothing { get; set; } = 0.82;
 
-    [JsonPropertyName("smoothing")]
-    public double Smoothing { get; set; } = 0.82;
+  [JsonPropertyName("fps")]
+  public int FramesPerSecond { get; set; } = 30;
 
-    [JsonPropertyName("fps")]
-    public int FramesPerSecond { get; set; } = 30;
+  [JsonPropertyName("min_cut_frames")]
+  public int MinimumCutFrames { get; set; } = 12;
 
-    [JsonPropertyName("min_cut_frames")]
-    public int MinimumCutFrames { get; set; } = 12;
+  [JsonPropertyName("render_mode")]
+  public string RenderMode { get; set; } = "balanced";
 
-    [JsonPropertyName("render_mode")]
-    public string RenderMode { get; set; } = "balanced";
+  [JsonPropertyName("schedule_stride")]
+  public int ScheduleStride { get; set; } = 4;
 
-    [JsonPropertyName("schedule_stride")]
-    public int ScheduleStride { get; set; } = 4;
+  [JsonPropertyName("scaling")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? Scaling { get; set; }
 
-    [JsonPropertyName("scaling")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Scaling { get; set; }
-
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public sealed class ReactiveLabLocalState
 {
-    public const int CurrentVersion = 1;
+  public const int CurrentVersion = 1;
 
-    private ReactivePreset _current = new();
-    private List<ReactivePreset> _presets = [];
+  [JsonPropertyName("version")]
+  public int? Version { get; set; } = CurrentVersion;
 
-    [JsonPropertyName("version")]
-    public int? Version { get; set; } = CurrentVersion;
+  [JsonPropertyName("current")]
+  public ReactivePreset Current { get; set => field = value ?? new(); } = new();
 
-    [JsonPropertyName("current")]
-    public ReactivePreset Current { get => _current; set => _current = value ?? new(); }
+  [JsonPropertyName("presets")]
+  public List<ReactivePreset> Presets { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("presets")]
-    public List<ReactivePreset> Presets { get => _presets; set => _presets = value ?? []; }
+  [JsonPropertyName("workspace_draft_id")]
+  public string? WorkspaceDraftId { get; set; }
 
-    [JsonPropertyName("workspace_draft_id")]
-    public string? WorkspaceDraftId { get; set; }
+  [JsonPropertyName("workspace_draft_revision")]
+  public long? WorkspaceDraftRevision { get; set; }
 
-    [JsonPropertyName("workspace_draft_revision")]
-    public long? WorkspaceDraftRevision { get; set; }
+  [JsonPropertyName("workspace_draft")]
+  public JsonElement? WorkspaceDraft { get; set; }
 
-    [JsonPropertyName("workspace_draft")]
-    public JsonElement? WorkspaceDraft { get; set; }
-
-    public bool TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
+  public bool TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
+  {
+    if (Version is > CurrentVersion or < 1)
     {
-        if (Version is > CurrentVersion or < 1)
-        {
-            normalized = this;
-            return false;
-        }
-
-        Version = CurrentVersion;
-        WorkspaceDraftId = StudioWorkflowContext.NormalizeText(WorkspaceDraftId);
-        if (WorkspaceDraftRevision < 0)
-        {
-            WorkspaceDraftRevision = null;
-        }
-
-        normalized = this;
-        return true;
+      normalized = this;
+      return false;
     }
+
+    Version = CurrentVersion;
+    WorkspaceDraftId = StudioWorkflowContext.NormalizeText(WorkspaceDraftId);
+    if (WorkspaceDraftRevision < 0)
+    {
+      WorkspaceDraftRevision = null;
+    }
+
+    normalized = this;
+    return true;
+  }
 }
 
 public sealed record DirectorWorkflowRecovery(
@@ -216,212 +205,215 @@ public sealed record DirectorWorkflowRecovery(
     long? SelectionEndSample,
     long ContextRevision)
 {
-    public static DirectorWorkflowRecovery FromResponse(JsonElement workflow, string? fallbackJobId = null)
+  public static DirectorWorkflowRecovery FromResponse(JsonElement workflow, string? fallbackJobId = null)
+  {
+    string? jobId = Text(workflow, "director_job_id") ?? Text(workflow, "pending_director_job_id");
+    string? status = Text(workflow, "director_job_status") ?? Text(workflow, "pending_director_job_status");
+    string? reviewed = Text(workflow, "reviewed_director_job_id");
+    if (workflow.TryGetProperty("director_job", out JsonElement job) && job.ValueKind == JsonValueKind.Object)
     {
-        string? jobId = Text(workflow, "director_job_id") ?? Text(workflow, "pending_director_job_id");
-        string? status = Text(workflow, "director_job_status") ?? Text(workflow, "pending_director_job_status");
-        string? reviewed = Text(workflow, "reviewed_director_job_id");
-        if (workflow.TryGetProperty("director_job", out JsonElement job) && job.ValueKind == JsonValueKind.Object)
-        {
-            jobId ??= Text(job, "job_id") ?? Text(job, "id");
-            status ??= Text(job, "status");
-            reviewed ??= Text(job, "reviewed_job_id");
-            if (reviewed is null && jobId is not null && Bool(job, "reviewed")) reviewed = jobId;
-        }
+      jobId ??= Text(job, "job_id") ?? Text(job, "id");
+      status ??= Text(job, "status");
+      reviewed ??= Text(job, "reviewed_job_id");
+      if (reviewed is null && jobId is not null && Bool(job, "reviewed"))
+      {
+        reviewed = jobId;
+      }
+    }
 
-        jobId ??= StudioWorkflowContext.NormalizeText(fallbackJobId);
-        JsonElement context = workflow.TryGetProperty("timeline_context", out JsonElement value) && value.ValueKind == JsonValueKind.Object
-            ? value : default;
-        JsonElement range = context.ValueKind == JsonValueKind.Object &&
-                            context.TryGetProperty("selected_range", out JsonElement selectedRange) &&
-                            selectedRange.ValueKind == JsonValueKind.Object
-            ? selectedRange : context;
-        long? start = ExactLong(range, "selection_start_sample") ?? ExactLong(range, "start_sample");
-        long? end = ExactLong(range, "selection_end_sample") ?? ExactLong(range, "end_sample");
-        long revision = ExactLong(workflow, "context_revision") ?? ExactLong(context, "revision") ?? 0;
-        var normalized = new StudioWorkflowContext(
+    jobId ??= StudioWorkflowContext.NormalizeText(fallbackJobId);
+    JsonElement context = workflow.TryGetProperty("timeline_context", out JsonElement value) && value.ValueKind == JsonValueKind.Object
+        ? value : default;
+    JsonElement range = context.ValueKind == JsonValueKind.Object &&
+                        context.TryGetProperty("selected_range", out JsonElement selectedRange) &&
+                        selectedRange.ValueKind == JsonValueKind.Object
+        ? selectedRange : context;
+    long? start = ExactLong(range, "selection_start_sample") ?? ExactLong(range, "start_sample");
+    long? end = ExactLong(range, "selection_end_sample") ?? ExactLong(range, "end_sample");
+    long revision = ExactLong(workflow, "context_revision") ?? ExactLong(context, "revision") ?? 0;
+    StudioWorkflowContext normalized = new StudioWorkflowContext(
             TimelineSelectionStartSample: start,
             TimelineSelectionEndSample: end,
             ContextRevision: revision).Normalize();
-        return new(
-            StudioWorkflowContext.NormalizeText(jobId),
-            StudioWorkflowContext.NormalizeText(status),
-            StudioWorkflowContext.NormalizeText(reviewed),
-            normalized.TimelineSelectionStartSample,
-            normalized.TimelineSelectionEndSample,
-            normalized.ContextRevision);
-    }
+    return new(
+        StudioWorkflowContext.NormalizeText(jobId),
+        StudioWorkflowContext.NormalizeText(status),
+        StudioWorkflowContext.NormalizeText(reviewed),
+        normalized.TimelineSelectionStartSample,
+        normalized.TimelineSelectionEndSample,
+        normalized.ContextRevision);
+  }
 
-    private static string? Text(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString() : null;
+  private static string? Text(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.String
+          ? property.GetString() : null;
+  }
 
-    private static bool Bool(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.True;
+  private static bool Bool(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.True;
+  }
 
-    private static long? ExactLong(JsonElement value, string name)
-    {
-        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(name, out JsonElement property)) return null;
-        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out long number)) return number;
-        return property.ValueKind == JsonValueKind.String && long.TryParse(property.GetString(), out long text) ? text : null;
-    }
+  private static long? ExactLong(JsonElement value, string name)
+  {
+    return value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(name, out JsonElement property)
+      ? null
+      : property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out long number)
+          ? number
+          : property.ValueKind == JsonValueKind.String && long.TryParse(property.GetString(), out long text) ? text : null;
+  }
 }
 
 public sealed class ReactiveLabMetadata
 {
-    private List<ReactiveMapping> _mappings = [];
-    private ReactivePreset _settings = new();
+  [JsonPropertyName("source")]
+  public string Source { get; set; } = "winui";
 
-    [JsonPropertyName("source")]
-    public string Source { get; set; } = "winui";
+  [JsonPropertyName("selected_variant_index")]
+  public int? SelectedVariantIndex { get; set; }
 
-    [JsonPropertyName("selected_variant_index")]
-    public int? SelectedVariantIndex { get; set; }
+  [JsonPropertyName("mappings")]
+  public List<ReactiveMapping> Mappings { get; set => field = value ?? []; } = [];
 
-    [JsonPropertyName("mappings")]
-    public List<ReactiveMapping> Mappings { get => _mappings; set => _mappings = value ?? []; }
+  [JsonPropertyName("settings")]
+  // Older drafts may explicitly write null as well as omit custom settings.
+  public ReactivePreset Settings { get; set => field = value ?? new(); } = new();
 
-    [JsonPropertyName("settings")]
-    // Older drafts may explicitly write null as well as omit custom settings.
-    public ReactivePreset Settings { get => _settings; set => _settings = value ?? new(); }
-
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 public static class ReactiveWorkflow
 {
-    public const int CurrentRecoveryVersion = 1;
+  public const int CurrentRecoveryVersion = 1;
 
-    public static bool SupportsRecovery(JsonElement workflow)
+  public static bool SupportsRecovery(JsonElement workflow)
+  {
+    return workflow.ValueKind == JsonValueKind.Object && ((!workflow.TryGetProperty("recovery_version", out JsonElement version) &&
+            !workflow.TryGetProperty("version", out version)) || (version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out int value) &&
+               value is >= 1 and <= CurrentRecoveryVersion));
+  }
+
+  public static IReadOnlyList<string> ValidateMapping(ReactiveMapping mapping)
+  {
+    ArgumentNullException.ThrowIfNull(mapping);
+    List<string> errors = [];
+    if (string.IsNullOrWhiteSpace(mapping.Name))
     {
-        if (workflow.ValueKind != JsonValueKind.Object) return false;
-        if (!workflow.TryGetProperty("recovery_version", out JsonElement version) &&
-            !workflow.TryGetProperty("version", out version)) return true;
-        return version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out int value) &&
-               value is >= 1 and <= CurrentRecoveryVersion;
+      errors.Add("Mapping name is required.");
     }
 
-    public static IReadOnlyList<string> ValidateMapping(ReactiveMapping mapping)
+    if (string.IsNullOrWhiteSpace(mapping.SourceSignal))
     {
-        ArgumentNullException.ThrowIfNull(mapping);
-        var errors = new List<string>();
-        if (string.IsNullOrWhiteSpace(mapping.Name))
-        {
-            errors.Add("Mapping name is required.");
-        }
-
-        if (string.IsNullOrWhiteSpace(mapping.SourceSignal))
-        {
-            errors.Add("Source signal is required.");
-        }
-
-        if (string.IsNullOrWhiteSpace(mapping.TargetParameter))
-        {
-            errors.Add("Target parameter is required.");
-        }
-
-        if (!double.IsFinite(mapping.Gain) || mapping.Gain < 0)
-        {
-            errors.Add("Gain must be a finite value greater than or equal to zero.");
-        }
-
-        if (!double.IsFinite(mapping.Smoothing) || mapping.Smoothing is < 0 or > 1)
-        {
-            errors.Add("Smoothing must be between 0 and 1.");
-        }
-
-        if (!double.IsFinite(mapping.Threshold) || mapping.Threshold is < 0 or > 1)
-        {
-            errors.Add("Threshold must be between 0 and 1.");
-        }
-
-        if (mapping.InputMinimum >= mapping.InputMaximum)
-        {
-            errors.Add("Input minimum must be less than input maximum.");
-        }
-
-        if (mapping.OutputMinimum >= mapping.OutputMaximum)
-        {
-            errors.Add("Output minimum must be less than output maximum.");
-        }
-
-        return errors;
+      errors.Add("Source signal is required.");
     }
 
-    public static ReactiveMapping Duplicate(ReactiveMapping mapping, string newId)
+    if (string.IsNullOrWhiteSpace(mapping.TargetParameter))
     {
-        ArgumentNullException.ThrowIfNull(mapping);
-        if (string.IsNullOrWhiteSpace(newId))
-        {
-            throw new ArgumentException("A duplicate mapping ID is required.", nameof(newId));
-        }
-
-        return mapping with { Id = newId.Trim(), Name = $"{mapping.Name} copy" };
+      errors.Add("Target parameter is required.");
     }
 
-    public static IReadOnlyList<ReactiveMapping> Move(
+    if (!double.IsFinite(mapping.Gain) || mapping.Gain < 0)
+    {
+      errors.Add("Gain must be a finite value greater than or equal to zero.");
+    }
+
+    if (!double.IsFinite(mapping.Smoothing) || mapping.Smoothing is < 0 or > 1)
+    {
+      errors.Add("Smoothing must be between 0 and 1.");
+    }
+
+    if (!double.IsFinite(mapping.Threshold) || mapping.Threshold is < 0 or > 1)
+    {
+      errors.Add("Threshold must be between 0 and 1.");
+    }
+
+    if (mapping.InputMinimum >= mapping.InputMaximum)
+    {
+      errors.Add("Input minimum must be less than input maximum.");
+    }
+
+    if (mapping.OutputMinimum >= mapping.OutputMaximum)
+    {
+      errors.Add("Output minimum must be less than output maximum.");
+    }
+
+    return errors;
+  }
+
+  public static ReactiveMapping Duplicate(ReactiveMapping mapping, string newId)
+  {
+    ArgumentNullException.ThrowIfNull(mapping);
+    return string.IsNullOrWhiteSpace(newId)
+          ? throw new ArgumentException("A duplicate mapping ID is required.", nameof(newId))
+          : (mapping with { Id = newId.Trim(), Name = $"{mapping.Name} copy" });
+  }
+
+  public static IReadOnlyList<ReactiveMapping> Move(
         IReadOnlyList<ReactiveMapping> mappings,
         int fromIndex,
         int toIndex)
+  {
+    ArgumentNullException.ThrowIfNull(mappings);
+    if ((uint)fromIndex >= (uint)mappings.Count)
     {
-        ArgumentNullException.ThrowIfNull(mappings);
-        if ((uint)fromIndex >= (uint)mappings.Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(fromIndex));
-        }
-
-        if ((uint)toIndex >= (uint)mappings.Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(toIndex));
-        }
-
-        var result = mappings.ToList();
-        var item = result[fromIndex];
-        result.RemoveAt(fromIndex);
-        result.Insert(toIndex, item);
-        return result;
+      throw new ArgumentOutOfRangeException(nameof(fromIndex));
     }
 
-    public static bool HasMeaningfulPayload(ReactiveLabApplyRequest request)
+    if ((uint)toIndex >= (uint)mappings.Count)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        return request.Keyframes.Count > 0 ||
-               request.BeatMarkers.Count > 0 ||
-               request.CueEvents.Count > 0 ||
-               request.Sections.Count > 0 ||
-               request.RepairSuggestions.Count > 0 ||
-               HasObjectContent(request.Schedules) ||
-               HasObjectContent(request.HandoffManifest);
+      throw new ArgumentOutOfRangeException(nameof(toIndex));
     }
 
-    public static JsonElement MergeMappingsIntoMetadata(
-        JsonElement metadata,
-        IReadOnlyList<ReactiveMapping> mappings)
-    {
-        ArgumentNullException.ThrowIfNull(mappings);
-        var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        if (metadata.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in metadata.EnumerateObject())
-            {
-                values[property.Name] = property.Value.Clone();
-            }
-        }
+    List<ReactiveMapping> result = mappings.ToList();
+    ReactiveMapping item = result[fromIndex];
+    result.RemoveAt(fromIndex);
+    result.Insert(toIndex, item);
+    return result;
+  }
 
-        values["native_mappings"] = JsonSerializer.SerializeToElement(
-            mappings.ToList(),
-            StudioJson.GetTypeInfo<List<ReactiveMapping>>());
-        return JsonSerializer.SerializeToElement(
-            values,
-            StudioJson.GetTypeInfo<Dictionary<string, JsonElement>>());
+  public static bool HasMeaningfulPayload(ReactiveLabApplyRequest request)
+  {
+    ArgumentNullException.ThrowIfNull(request);
+    return request.Keyframes.Count > 0 ||
+           request.BeatMarkers.Count > 0 ||
+           request.CueEvents.Count > 0 ||
+           request.Sections.Count > 0 ||
+           request.RepairSuggestions.Count > 0 ||
+           HasObjectContent(request.Schedules) ||
+           HasObjectContent(request.HandoffManifest);
+  }
+
+  public static JsonElement MergeMappingsIntoMetadata(
+      JsonElement metadata,
+      IReadOnlyList<ReactiveMapping> mappings)
+  {
+    ArgumentNullException.ThrowIfNull(mappings);
+    Dictionary<string, JsonElement> values = new(StringComparer.Ordinal);
+    if (metadata.ValueKind == JsonValueKind.Object)
+    {
+      foreach (JsonProperty property in metadata.EnumerateObject())
+      {
+        values[property.Name] = property.Value.Clone();
+      }
     }
 
-    private static bool HasObjectContent(JsonElement? element) =>
-        element?.ValueKind switch
-        {
-            JsonValueKind.Object => element.Value.EnumerateObject().Any(),
-            JsonValueKind.Array => element.Value.GetArrayLength() > 0,
-            _ => false,
-        };
+    values["native_mappings"] = JsonSerializer.SerializeToElement(
+        mappings.ToList(),
+        StudioJson.GetTypeInfo<List<ReactiveMapping>>());
+    return JsonSerializer.SerializeToElement(
+        values,
+        StudioJson.GetTypeInfo<Dictionary<string, JsonElement>>());
+  }
+
+  private static bool HasObjectContent(JsonElement? element)
+  {
+    return element?.ValueKind switch
+    {
+      JsonValueKind.Object => element.Value.EnumerateObject().Any(),
+      JsonValueKind.Array => element.Value.GetArrayLength() > 0,
+      _ => false,
+    };
+  }
 }

@@ -1,390 +1,390 @@
-using System.Text.Json;
 using EdmgStudio.Core.Models;
+using System.Text.Json;
 
 namespace EdmgStudio.Core.Tests;
 
 [TestClass]
 public sealed class InternalVideoRenderRequestBuilderTests
 {
-    [TestMethod]
-    public void Build_SerializesNvidiaFrucInterpolation()
+  [TestMethod]
+  public void Build_SerializesNvidiaFrucInterpolation()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
     {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+      InterpolationEngine = "fruc",
+      OutputFps = 60,
+      RenderFps = 3,
+    });
+    Assert.AreEqual("fruc", request.GetProperty("interpolation_engine").GetString());
+    Assert.AreEqual(60, request.GetProperty("fps_output").GetInt32());
+  }
+
+  [TestMethod]
+  public void Build_IncludesProjectAudioByDefaultAndCanDisableIt()
+  {
+    JsonElement enabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());
+    JsonElement disabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      IncludeAudio = false,
+    });
+
+    Assert.IsTrue(enabled.GetProperty("include_audio").GetBoolean());
+    Assert.IsFalse(disabled.GetProperty("include_audio").GetBoolean());
+  }
+
+  [TestMethod]
+  public void Build_RuntimeChoiceIsScopedToOneRequest()
+  {
+    InternalVideoRenderSettings settings = new();
+    JsonElement off = InternalVideoRenderRequestBuilder.Build(settings with
+    {
+      Runtime = new OperationRuntimeOptions { Enabled = false, AllowFallback = true, Strict = false }
+    });
+    Assert.IsFalse(off.GetProperty("runtime").GetProperty("enabled").GetBoolean());
+    Assert.IsTrue(off.GetProperty("runtime").GetProperty("allow_fallback").GetBoolean());
+    Assert.AreEqual(JsonValueKind.Null, InternalVideoRenderRequestBuilder.Build(settings).GetProperty("runtime").ValueKind);
+    RenderScenesRequest still = new() { Runtime = new OperationRuntimeOptions { Mode = "compatibility", Precision = "fp32" } };
+    JsonElement serialized = JsonSerializer.SerializeToElement(still);
+    Assert.AreEqual("fp32", serialized.GetProperty("runtime").GetProperty("precision").GetString());
+  }
+
+  [TestMethod]
+  public void Build_SerializesRuntimeModeAndDeviceWithoutChangingInheritedDefaults()
+  {
+    JsonElement inherited = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());
+    Assert.AreEqual(JsonValueKind.Null, inherited.GetProperty("runtime").ValueKind);
+
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      Runtime = new OperationRuntimeOptions
+      {
+        Mode = "cpu",
+        Device = 2,
+        AllowFallback = false,
+        Strict = true,
+      },
+      DevicePreference = "cuda",
+    });
+
+    JsonElement runtime = request.GetProperty("runtime");
+    Assert.AreEqual("cpu", runtime.GetProperty("mode").GetString());
+    Assert.AreEqual(2, runtime.GetProperty("device").GetInt32());
+    Assert.IsFalse(runtime.GetProperty("allow_fallback").GetBoolean());
+    Assert.IsTrue(runtime.GetProperty("strict").GetBoolean());
+    Assert.AreEqual("cuda", request.GetProperty("device_preference").GetString());
+  }
+
+  [TestMethod]
+  public void MotionRequest_SerializesSharedRuntimeDeviceContract()
+  {
+    JsonElement request = JsonSerializer.SerializeToElement(new RenderMotionRequest
+    {
+      Runtime = new OperationRuntimeOptions
+      {
+        Mode = "performance",
+        Device = 2,
+        AllowFallback = false,
+      },
+    });
+
+    JsonElement runtime = request.GetProperty("runtime");
+    Assert.AreEqual("performance", runtime.GetProperty("mode").GetString());
+    Assert.AreEqual(2, runtime.GetProperty("device").GetInt32());
+    Assert.IsFalse(runtime.GetProperty("allow_fallback").GetBoolean());
+  }
+
+  [TestMethod]
+  public void Build_SerializesAdvancedSettingsAndBackendRefinerContract()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VariantIndex = 3,
+      OutputFps = 30,
+      RenderFps = 6,
+      Width = 1920,
+      Height = 1080,
+      Steps = 40,
+      Cfg = 8.5,
+      Seed = 42,
+      RefinerEnabled = true,
+      RefinerModelId = "refiner-xl",
+      RefinerSwitchAt = 0.7,
+      RefinerSteps = 12,
+      TemporalSteps = 20,
+      ParseqManifest = """{"rendered_frames":[{"frame":0}]}""",
+      DeforumPrompts = """{"0":"opening","24":"finale"}""",
+      DeforumNegativePrompts = """{"0":"blur"}""",
+    });
+
+    Assert.AreEqual(3, request.GetProperty("variant_index").GetInt32());
+    Assert.AreEqual(30, request.GetProperty("fps_output").GetInt32());
+    Assert.AreEqual(42, request.GetProperty("seed").GetInt64());
+    Assert.AreEqual("opening", request.GetProperty("deforum_prompts").GetProperty("0").GetString());
+    Assert.AreEqual(JsonValueKind.Object, request.GetProperty("parseq_manifest").ValueKind);
+
+    JsonElement refiner = request.GetProperty("refiner");
+    Assert.AreEqual("refiner-xl", refiner.GetProperty("model").GetString());
+    Assert.AreEqual(0.7, refiner.GetProperty("switch_at").GetDouble());
+    Assert.AreEqual(12, refiner.GetProperty("steps").GetInt32());
+    CollectionAssert.AreEquivalent(
+        new[] { "model", "switch_at", "steps" },
+        refiner.EnumerateObject().Select(property => property.Name).ToArray());
+  }
+
+  [TestMethod]
+  public void Build_TensorRtModeAppliesRequiredOverrides()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      RenderMode = "tensorrt",
+      ModelId = "ignored",
+      DevicePreference = "cpu",
+      TemporalMode = "video_model",
+      MotionStrategy = "storyboard_full_motion",
+      AllowHostedFallback = true,
+      ResumeExistingFrames = true,
+    });
+
+    Assert.AreEqual("local_sd15_tensorrt_bundle", request.GetProperty("model_id").GetString());
+    Assert.AreEqual("cuda", request.GetProperty("device_preference").GetString());
+    Assert.AreEqual("keyframes", request.GetProperty("temporal_mode").GetString());
+    Assert.AreEqual("manual", request.GetProperty("motion_strategy").GetString());
+    Assert.IsFalse(request.GetProperty("allow_hosted_fallback").GetBoolean());
+    Assert.IsFalse(request.GetProperty("resume_existing_frames").GetBoolean());
+    Assert.AreEqual("tensorrt_sd15", request.GetProperty("video_model_keyframe_renderer").GetString());
+    Assert.AreEqual(
+        "local_sd15_tensorrt_bundle",
+        request.GetProperty("video_model_keyframe_model_id").GetString());
+  }
+
+  [TestMethod]
+  public void Build_ParsesSchedulesAndLoras()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      Loras = "cinematic@1.5; subtle@-8, default",
+      MotionScoreSchedule = """{"0":2,"24":6}""",
+      DeforumZoom = "0:(1.0), 24:(1.1)",
+    });
+
+    JsonElement loras = request.GetProperty("loras");
+    Assert.AreEqual(3, loras.GetArrayLength());
+    Assert.AreEqual(1.5, loras[0].GetProperty("weight").GetDouble());
+    Assert.AreEqual(-4.0, loras[1].GetProperty("weight").GetDouble());
+    Assert.AreEqual(1.0, loras[2].GetProperty("weight").GetDouble());
+    Assert.AreEqual(JsonValueKind.Object, request.GetProperty("video_model_motion_score_schedule").ValueKind);
+    Assert.AreEqual("0:(1.0), 24:(1.1)", request.GetProperty("deforum_zoom").GetString());
+    Assert.AreEqual(JsonValueKind.Null, request.GetProperty("deforum_angle").ValueKind);
+  }
+
+  [TestMethod]
+  public void Build_AllowsCinematicStartAndEndAnchorMode()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VideoModelAnchorMode = "both",
+    });
+
+    Assert.AreEqual("both", request.GetProperty("video_model_anchor_mode").GetString());
+  }
+
+  [TestMethod]
+  [DataRow("svd")]
+  [DataRow("animatediff")]
+  [DataRow("hunyuan_video15")]
+  [DataRow("ltx_25")]
+  public void Build_AllowsEveryBackendVideoModelEngine(string engine)
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VideoModelEngine = engine,
+    });
+
+    Assert.AreEqual(engine, request.GetProperty("video_model_engine").GetString());
+  }
+
+  [TestMethod]
+  public void Build_SerializesExplicitHunyuanGenerationSettings()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VideoModelEngine = "hunyuan_video15",
+      VideoModelGenerationMode = "i2v",
+      SourceAsset = "assets/reference.png",
+      VideoModelLowVramMode = true,
+      VideoModelGenerationChunkSize = 24,
+      VideoModelGenerationChunkOverlap = 6,
+    });
+
+    Assert.AreEqual("i2v", request.GetProperty("hunyuan_generation_mode").GetString());
+    Assert.IsTrue(request.GetProperty("hunyuan_low_vram_mode").GetBoolean());
+    Assert.AreEqual(24, request.GetProperty("hunyuan_chunk_frames").GetInt32());
+    Assert.AreEqual(6, request.GetProperty("hunyuan_chunk_overlap").GetInt32());
+    Assert.AreEqual(8, request.GetProperty("video_model_decode_chunk_size").GetInt32());
+  }
+
+  [TestMethod]
+  public void Build_LtxUsesCanonicalFieldsWithoutHunyuanSettings()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VideoModelEngine = "ltx_25",
+      VideoModelId = "hf_ltx_25_distilled_internal",
+      VideoModelDtype = "fp8",
+      VideoModelCpuOffload = true,
+      VideoModelGenerationMode = "i2v",
+      VideoModelGenerationChunkSize = 2,
+      VideoModelGenerationChunkOverlap = 2,
+    });
+
+    Assert.AreEqual("hf_ltx_25_distilled_internal", request.GetProperty("video_model_id").GetString());
+    Assert.AreEqual("fp8", request.GetProperty("video_model_dtype").GetString());
+    Assert.IsTrue(request.GetProperty("video_model_cpu_offload").GetBoolean());
+    Assert.IsFalse(request.TryGetProperty("hunyuan_generation_mode", out _));
+    Assert.IsFalse(request.TryGetProperty("hunyuan_chunk_frames", out _));
+  }
+
+  [TestMethod]
+  public void Build_SerializesExplicitLtxMultiGpuSettings()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VideoModelEngine = "ltx_25",
+      LtxExecutionMode = "scene_parallel",
+      LtxCudaDevices = "0, 1; 2",
+      LtxSceneWorkerCap = 3,
+      LtxAllowModeFallback = false,
+    });
+
+    Assert.AreEqual("scene_parallel", request.GetProperty("ltx_execution_mode").GetString());
+    CollectionAssert.AreEqual(
+        new[] { 0, 1, 2 },
+        request.GetProperty("ltx_cuda_devices").EnumerateArray().Select(value => value.GetInt32()).ToArray());
+    Assert.AreEqual(3, request.GetProperty("ltx_scene_worker_cap").GetInt32());
+    Assert.IsFalse(request.GetProperty("ltx_allow_mode_fallback").GetBoolean());
+  }
+
+  [TestMethod]
+  public void Build_LeavesLtxCudaDevicesEmptyForAutomaticDiscovery()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    {
+      VideoModelEngine = "ltx_25",
+    });
+
+    Assert.AreEqual(0, request.GetProperty("ltx_cuda_devices").GetArrayLength());
+  }
+
+  [TestMethod]
+  public void Build_RejectsUnsafeOrDuplicateLtxMultiGpuSettings()
+  {
+    InvalidOperationException duplicate = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            InterpolationEngine = "fruc",
-            OutputFps = 60,
-            RenderFps = 3,
-        });
-        Assert.AreEqual("fruc", request.GetProperty("interpolation_engine").GetString());
-        Assert.AreEqual(60, request.GetProperty("fps_output").GetInt32());
-    }
-
-    [TestMethod]
-    public void Build_IncludesProjectAudioByDefaultAndCanDisableIt()
-    {
-        JsonElement enabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());
-        JsonElement disabled = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+          LtxCudaDevices = "0,1,0",
+        }));
+    InvalidOperationException continuity = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            IncludeAudio = false,
-        });
+          LtxExecutionMode = "scene_parallel",
+          LtxCudaDevices = "0,1",
+          KeyframeContinuityMode = "project",
+        }));
 
-        Assert.IsTrue(enabled.GetProperty("include_audio").GetBoolean());
-        Assert.IsFalse(disabled.GetProperty("include_audio").GetBoolean());
-    }
+    StringAssert.Contains(duplicate.Message, "must be unique");
+    StringAssert.Contains(continuity.Message, "requires scene continuity");
+  }
 
-    [TestMethod]
-    public void Build_RuntimeChoiceIsScopedToOneRequest()
-    {
-        var settings = new InternalVideoRenderSettings();
-        JsonElement off = InternalVideoRenderRequestBuilder.Build(settings with
+  [TestMethod]
+  public void Build_RequiresSourceForI2vAndRejectsOverlappingWholeChunk()
+  {
+    InvalidOperationException sourceException = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            Runtime = new OperationRuntimeOptions { Enabled = false, AllowFallback = true, Strict = false }
-        });
-        Assert.IsFalse(off.GetProperty("runtime").GetProperty("enabled").GetBoolean());
-        Assert.IsTrue(off.GetProperty("runtime").GetProperty("allow_fallback").GetBoolean());
-        Assert.AreEqual(JsonValueKind.Null, InternalVideoRenderRequestBuilder.Build(settings).GetProperty("runtime").ValueKind);
-        var still = new RenderScenesRequest { Runtime = new OperationRuntimeOptions { Mode = "compatibility", Precision = "fp32" } };
-        JsonElement serialized = JsonSerializer.SerializeToElement(still);
-        Assert.AreEqual("fp32", serialized.GetProperty("runtime").GetProperty("precision").GetString());
-    }
-
-    [TestMethod]
-    public void Build_SerializesRuntimeModeAndDeviceWithoutChangingInheritedDefaults()
-    {
-        JsonElement inherited = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings());
-        Assert.AreEqual(JsonValueKind.Null, inherited.GetProperty("runtime").ValueKind);
-
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+          VideoModelEngine = "hunyuan_video15",
+          VideoModelGenerationMode = "i2v",
+        }));
+    InvalidOperationException overlapException = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            Runtime = new OperationRuntimeOptions
-            {
-                Mode = "cpu",
-                Device = 2,
-                AllowFallback = false,
-                Strict = true,
-            },
-            DevicePreference = "cuda",
-        });
+          VideoModelGenerationChunkSize = 8,
+          VideoModelGenerationChunkOverlap = 8,
+          VideoModelEngine = "hunyuan_video15",
+        }));
 
-        JsonElement runtime = request.GetProperty("runtime");
-        Assert.AreEqual("cpu", runtime.GetProperty("mode").GetString());
-        Assert.AreEqual(2, runtime.GetProperty("device").GetInt32());
-        Assert.IsFalse(runtime.GetProperty("allow_fallback").GetBoolean());
-        Assert.IsTrue(runtime.GetProperty("strict").GetBoolean());
-        Assert.AreEqual("cuda", request.GetProperty("device_preference").GetString());
-    }
+    StringAssert.Contains(sourceException.Message, "I2V requires a source");
+    StringAssert.Contains(overlapException.Message, "overlap must be smaller");
+  }
 
-    [TestMethod]
-    public void MotionRequest_SerializesSharedRuntimeDeviceContract()
+  [TestMethod]
+  public void Build_SerializesProjectKeyframeContinuityMode()
+  {
+    JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
     {
-        JsonElement request = JsonSerializer.SerializeToElement(new RenderMotionRequest
+      KeyframeContinuityMode = "project",
+    });
+
+    Assert.AreEqual("project", request.GetProperty("keyframe_continuity_mode").GetString());
+    Assert.AreEqual(8, request.GetProperty("video_model_max_frames_per_scene").GetInt32());
+  }
+
+  [TestMethod]
+  public void Build_RejectsMalformedJsonWithFieldName()
+  {
+    InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            Runtime = new OperationRuntimeOptions
-            {
-                Mode = "performance",
-                Device = 2,
-                AllowFallback = false,
-            },
-        });
+          MotionScoreSchedule = "{not-json",
+        }));
 
-        JsonElement runtime = request.GetProperty("runtime");
-        Assert.AreEqual("performance", runtime.GetProperty("mode").GetString());
-        Assert.AreEqual(2, runtime.GetProperty("device").GetInt32());
-        Assert.IsFalse(runtime.GetProperty("allow_fallback").GetBoolean());
-    }
+    StringAssert.Contains(exception.Message, "Motion score schedule contains invalid JSON");
+  }
 
-    [TestMethod]
-    public void Build_SerializesAdvancedSettingsAndBackendRefinerContract()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+  [TestMethod]
+  public void Build_RejectsNonObjectPromptJson()
+  {
+    InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            VariantIndex = 3,
-            OutputFps = 30,
-            RenderFps = 6,
-            Width = 1920,
-            Height = 1080,
-            Steps = 40,
-            Cfg = 8.5,
-            Seed = 42,
-            RefinerEnabled = true,
-            RefinerModelId = "refiner-xl",
-            RefinerSwitchAt = 0.7,
-            RefinerSteps = 12,
-            TemporalSteps = 20,
-            ParseqManifest = """{"rendered_frames":[{"frame":0}]}""",
-            DeforumPrompts = """{"0":"opening","24":"finale"}""",
-            DeforumNegativePrompts = """{"0":"blur"}""",
-        });
+          DeforumPrompts = """["not","an","object"]""",
+        }));
 
-        Assert.AreEqual(3, request.GetProperty("variant_index").GetInt32());
-        Assert.AreEqual(30, request.GetProperty("fps_output").GetInt32());
-        Assert.AreEqual(42, request.GetProperty("seed").GetInt64());
-        Assert.AreEqual("opening", request.GetProperty("deforum_prompts").GetProperty("0").GetString());
-        Assert.AreEqual(JsonValueKind.Object, request.GetProperty("parseq_manifest").ValueKind);
+    StringAssert.Contains(exception.Message, "Deforum prompts must be a JSON object");
+  }
 
-        JsonElement refiner = request.GetProperty("refiner");
-        Assert.AreEqual("refiner-xl", refiner.GetProperty("model").GetString());
-        Assert.AreEqual(0.7, refiner.GetProperty("switch_at").GetDouble());
-        Assert.AreEqual(12, refiner.GetProperty("steps").GetInt32());
-        CollectionAssert.AreEquivalent(
-            new[] { "model", "switch_at", "steps" },
-            refiner.EnumerateObject().Select(property => property.Name).ToArray());
-    }
+  [TestMethod]
+  public void Build_ValidatesEnumsAndBackendRanges()
+  {
+    InvalidOperationException enumException = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings { RenderMode = "proxy" }));
+    InvalidOperationException rangeException = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings { OutputFps = 61 }));
 
-    [TestMethod]
-    public void Build_TensorRtModeAppliesRequiredOverrides()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+    StringAssert.Contains(enumException.Message, "Render mode must be one of");
+    StringAssert.Contains(rangeException.Message, "Output FPS must be between 1 and 60");
+  }
+
+  [TestMethod]
+  public void Build_RejectsUnknownKeyframeContinuityMode()
+  {
+    InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            RenderMode = "tensorrt",
-            ModelId = "ignored",
-            DevicePreference = "cpu",
-            TemporalMode = "video_model",
-            MotionStrategy = "storyboard_full_motion",
-            AllowHostedFallback = true,
-            ResumeExistingFrames = true,
-        });
+          KeyframeContinuityMode = "sequence",
+        }));
 
-        Assert.AreEqual("local_sd15_tensorrt_bundle", request.GetProperty("model_id").GetString());
-        Assert.AreEqual("cuda", request.GetProperty("device_preference").GetString());
-        Assert.AreEqual("keyframes", request.GetProperty("temporal_mode").GetString());
-        Assert.AreEqual("manual", request.GetProperty("motion_strategy").GetString());
-        Assert.IsFalse(request.GetProperty("allow_hosted_fallback").GetBoolean());
-        Assert.IsFalse(request.GetProperty("resume_existing_frames").GetBoolean());
-        Assert.AreEqual("tensorrt_sd15", request.GetProperty("video_model_keyframe_renderer").GetString());
-        Assert.AreEqual(
-            "local_sd15_tensorrt_bundle",
-            request.GetProperty("video_model_keyframe_model_id").GetString());
-    }
+    StringAssert.Contains(exception.Message, "Keyframe continuity mode must be one of: scene, project");
+  }
 
-    [TestMethod]
-    public void Build_ParsesSchedulesAndLoras()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
+  [TestMethod]
+  public void Build_RejectsFewerThanEightVideoModelFrames()
+  {
+    InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
+        InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
         {
-            Loras = "cinematic@1.5; subtle@-8, default",
-            MotionScoreSchedule = """{"0":2,"24":6}""",
-            DeforumZoom = "0:(1.0), 24:(1.1)",
-        });
+          VideoModelMaxFramesPerScene = 7,
+        }));
 
-        JsonElement loras = request.GetProperty("loras");
-        Assert.AreEqual(3, loras.GetArrayLength());
-        Assert.AreEqual(1.5, loras[0].GetProperty("weight").GetDouble());
-        Assert.AreEqual(-4.0, loras[1].GetProperty("weight").GetDouble());
-        Assert.AreEqual(1.0, loras[2].GetProperty("weight").GetDouble());
-        Assert.AreEqual(JsonValueKind.Object, request.GetProperty("video_model_motion_score_schedule").ValueKind);
-        Assert.AreEqual("0:(1.0), 24:(1.1)", request.GetProperty("deforum_zoom").GetString());
-        Assert.AreEqual(JsonValueKind.Null, request.GetProperty("deforum_angle").ValueKind);
-    }
-
-    [TestMethod]
-    public void Build_AllowsCinematicStartAndEndAnchorMode()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            VideoModelAnchorMode = "both",
-        });
-
-        Assert.AreEqual("both", request.GetProperty("video_model_anchor_mode").GetString());
-    }
-
-    [TestMethod]
-    [DataRow("svd")]
-    [DataRow("animatediff")]
-    [DataRow("hunyuan_video15")]
-    [DataRow("ltx_25")]
-    public void Build_AllowsEveryBackendVideoModelEngine(string engine)
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            VideoModelEngine = engine,
-        });
-
-        Assert.AreEqual(engine, request.GetProperty("video_model_engine").GetString());
-    }
-
-    [TestMethod]
-    public void Build_SerializesExplicitHunyuanGenerationSettings()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            VideoModelEngine = "hunyuan_video15",
-            VideoModelGenerationMode = "i2v",
-            SourceAsset = "assets/reference.png",
-            VideoModelLowVramMode = true,
-            VideoModelGenerationChunkSize = 24,
-            VideoModelGenerationChunkOverlap = 6,
-        });
-
-        Assert.AreEqual("i2v", request.GetProperty("hunyuan_generation_mode").GetString());
-        Assert.IsTrue(request.GetProperty("hunyuan_low_vram_mode").GetBoolean());
-        Assert.AreEqual(24, request.GetProperty("hunyuan_chunk_frames").GetInt32());
-        Assert.AreEqual(6, request.GetProperty("hunyuan_chunk_overlap").GetInt32());
-        Assert.AreEqual(8, request.GetProperty("video_model_decode_chunk_size").GetInt32());
-    }
-
-    [TestMethod]
-    public void Build_LtxUsesCanonicalFieldsWithoutHunyuanSettings()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            VideoModelEngine = "ltx_25",
-            VideoModelId = "hf_ltx_25_distilled_internal",
-            VideoModelDtype = "fp8",
-            VideoModelCpuOffload = true,
-            VideoModelGenerationMode = "i2v",
-            VideoModelGenerationChunkSize = 2,
-            VideoModelGenerationChunkOverlap = 2,
-        });
-
-        Assert.AreEqual("hf_ltx_25_distilled_internal", request.GetProperty("video_model_id").GetString());
-        Assert.AreEqual("fp8", request.GetProperty("video_model_dtype").GetString());
-        Assert.IsTrue(request.GetProperty("video_model_cpu_offload").GetBoolean());
-        Assert.IsFalse(request.TryGetProperty("hunyuan_generation_mode", out _));
-        Assert.IsFalse(request.TryGetProperty("hunyuan_chunk_frames", out _));
-    }
-
-    [TestMethod]
-    public void Build_SerializesExplicitLtxMultiGpuSettings()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            VideoModelEngine = "ltx_25",
-            LtxExecutionMode = "scene_parallel",
-            LtxCudaDevices = "0, 1; 2",
-            LtxSceneWorkerCap = 3,
-            LtxAllowModeFallback = false,
-        });
-
-        Assert.AreEqual("scene_parallel", request.GetProperty("ltx_execution_mode").GetString());
-        CollectionAssert.AreEqual(
-            new[] { 0, 1, 2 },
-            request.GetProperty("ltx_cuda_devices").EnumerateArray().Select(value => value.GetInt32()).ToArray());
-        Assert.AreEqual(3, request.GetProperty("ltx_scene_worker_cap").GetInt32());
-        Assert.IsFalse(request.GetProperty("ltx_allow_mode_fallback").GetBoolean());
-    }
-
-    [TestMethod]
-    public void Build_LeavesLtxCudaDevicesEmptyForAutomaticDiscovery()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            VideoModelEngine = "ltx_25",
-        });
-
-        Assert.AreEqual(0, request.GetProperty("ltx_cuda_devices").GetArrayLength());
-    }
-
-    [TestMethod]
-    public void Build_RejectsUnsafeOrDuplicateLtxMultiGpuSettings()
-    {
-        InvalidOperationException duplicate = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                LtxCudaDevices = "0,1,0",
-            }));
-        InvalidOperationException continuity = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                LtxExecutionMode = "scene_parallel",
-                LtxCudaDevices = "0,1",
-                KeyframeContinuityMode = "project",
-            }));
-
-        StringAssert.Contains(duplicate.Message, "must be unique");
-        StringAssert.Contains(continuity.Message, "requires scene continuity");
-    }
-
-    [TestMethod]
-    public void Build_RequiresSourceForI2vAndRejectsOverlappingWholeChunk()
-    {
-        InvalidOperationException sourceException = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                VideoModelEngine = "hunyuan_video15",
-                VideoModelGenerationMode = "i2v",
-            }));
-        InvalidOperationException overlapException = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                VideoModelGenerationChunkSize = 8,
-                VideoModelGenerationChunkOverlap = 8,
-                VideoModelEngine = "hunyuan_video15",
-            }));
-
-        StringAssert.Contains(sourceException.Message, "I2V requires a source");
-        StringAssert.Contains(overlapException.Message, "overlap must be smaller");
-    }
-
-    [TestMethod]
-    public void Build_SerializesProjectKeyframeContinuityMode()
-    {
-        JsonElement request = InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-        {
-            KeyframeContinuityMode = "project",
-        });
-
-        Assert.AreEqual("project", request.GetProperty("keyframe_continuity_mode").GetString());
-        Assert.AreEqual(8, request.GetProperty("video_model_max_frames_per_scene").GetInt32());
-    }
-
-    [TestMethod]
-    public void Build_RejectsMalformedJsonWithFieldName()
-    {
-        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                MotionScoreSchedule = "{not-json",
-            }));
-
-        StringAssert.Contains(exception.Message, "Motion score schedule contains invalid JSON");
-    }
-
-    [TestMethod]
-    public void Build_RejectsNonObjectPromptJson()
-    {
-        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                DeforumPrompts = """["not","an","object"]""",
-            }));
-
-        StringAssert.Contains(exception.Message, "Deforum prompts must be a JSON object");
-    }
-
-    [TestMethod]
-    public void Build_ValidatesEnumsAndBackendRanges()
-    {
-        InvalidOperationException enumException = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings { RenderMode = "proxy" }));
-        InvalidOperationException rangeException = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings { OutputFps = 61 }));
-
-        StringAssert.Contains(enumException.Message, "Render mode must be one of");
-        StringAssert.Contains(rangeException.Message, "Output FPS must be between 1 and 60");
-    }
-
-    [TestMethod]
-    public void Build_RejectsUnknownKeyframeContinuityMode()
-    {
-        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                KeyframeContinuityMode = "sequence",
-            }));
-
-        StringAssert.Contains(exception.Message, "Keyframe continuity mode must be one of: scene, project");
-    }
-
-    [TestMethod]
-    public void Build_RejectsFewerThanEightVideoModelFrames()
-    {
-        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
-            InternalVideoRenderRequestBuilder.Build(new InternalVideoRenderSettings
-            {
-                VideoModelMaxFramesPerScene = 7,
-            }));
-
-        StringAssert.Contains(exception.Message, "Video model frames per scene must be between 8 and 96");
-    }
+    StringAssert.Contains(exception.Message, "Video model frames per scene must be between 8 and 96");
+  }
 }

@@ -50,9 +50,9 @@ public sealed class WindowsAudioEngine : IAudioEngine
 
   internal Task WorkerCompletion { get; }
 
-public event EventHandler<IReadOnlyList<AudioMeterSnapshot>>? MetersAvailable;
+  public event EventHandler<IReadOnlyList<AudioMeterSnapshot>>? MetersAvailable;
 
-public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _devices).Items;
+  public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _devices).Items;
 
   public AudioEngineConfiguration? Configuration => Volatile.Read(ref _configuration);
   public string? FailureMessage => Volatile.Read(ref _failure) is null ? null :
@@ -71,27 +71,34 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
   }
 
   internal static bool IsProcessorCompatible(IVst3InsertProcessor processor, MixerInsert insert,
-      int sampleRate, int requiredFrames) =>
-      !string.IsNullOrWhiteSpace(insert.ModulePath) &&
+      int sampleRate, int requiredFrames)
+  {
+    return !string.IsNullOrWhiteSpace(insert.ModulePath) &&
       !string.IsNullOrWhiteSpace(insert.PluginId) &&
       string.Equals(Path.GetFullPath(processor.ModulePath), Path.GetFullPath(insert.ModulePath), StringComparison.OrdinalIgnoreCase) &&
       string.Equals(processor.PluginId, insert.PluginId, StringComparison.OrdinalIgnoreCase) &&
       processor.SampleRate == sampleRate &&
       processor.MaximumFrames >= requiredFrames;
+  }
 
   internal static int CalculateFrameCapacity(int graphQuantumFrames, int graphSampleRate, int nodeSampleRate)
   {
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(graphQuantumFrames);
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(graphSampleRate);
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(nodeSampleRate);
-    if (graphSampleRate == nodeSampleRate) return graphQuantumFrames;
+    if (graphSampleRate == nodeSampleRate)
+    {
+      return graphQuantumFrames;
+    }
 
-    long convertedFrames = ((long)graphQuantumFrames * nodeSampleRate + graphSampleRate - 1) / graphSampleRate;
+    long convertedFrames = (((long)graphQuantumFrames * nodeSampleRate) + graphSampleRate - 1) / graphSampleRate;
     return checked((int)convertedFrames + 1);
   }
 
-  internal static bool ShouldSeekClip(bool transportRequiresSeek, bool isPlaying) =>
-      transportRequiresSeek || !isPlaying;
+  internal static bool ShouldSeekClip(bool transportRequiresSeek, bool isPlaying)
+  {
+    return transportRequiresSeek || !isPlaying;
+  }
 
   internal static bool CanUseDirectPlayback(AudioEngineConfiguration configuration)
   {
@@ -102,18 +109,13 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     }
 
     AudioTrackRoute route = configuration.Tracks[0];
-    if (!string.Equals(route.OutputBusId, "master", StringComparison.Ordinal) || route.Pan != 0)
-    {
-      return false;
-    }
-
-    return configuration.MixerChannels.IsDefaultOrEmpty || configuration.MixerChannels.All(channel =>
+    return string.Equals(route.OutputBusId, "master", StringComparison.Ordinal) && route.Pan == 0 && (configuration.MixerChannels.IsDefaultOrEmpty || configuration.MixerChannels.All(channel =>
         channel.Inserts.IsDefaultOrEmpty &&
         channel.Sends.IsDefaultOrEmpty &&
         channel.Gain == 1 &&
         channel.Pan == 0 &&
         !channel.Muted &&
-        !channel.Solo);
+        !channel.Solo));
   }
 
   public async Task RefreshDevicesAsync(CancellationToken cancellationToken = default)
@@ -197,6 +199,15 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     ThrowIfDisposed();
     await _operations.Writer.WriteAsync(new EngineOperation(null, state, null), cancellationToken)
         .ConfigureAwait(false);
+  }
+
+  public async Task ReleaseDeviceAsync(CancellationToken cancellationToken = default)
+  {
+    ThrowIfDisposed();
+    TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    await _operations.Writer.WriteAsync(
+        new EngineOperation(null, null, completion, ReleaseActiveGraph: true), cancellationToken).ConfigureAwait(false);
+    await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
   }
 
   public async ValueTask DisposeAsync()
@@ -285,8 +296,8 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
 
     AudioGraph graph = graphResult.Graph;
     bool directPlayback = CanUseDirectPlayback(configuration);
-    List<PreparedClip> clips = new();
-    List<PreparedTrack> tracks = new();
+    List<PreparedClip> clips = [];
+    List<PreparedTrack> tracks = [];
     AudioFrameInputNode? masterInput = null;
     try
     {
@@ -313,9 +324,12 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         }
       }
 
-      int graphQuantumFrames = checked((int)graph.SamplesPerQuantum);
+      int graphQuantumFrames = checked(graph.SamplesPerQuantum);
       if (graphQuantumFrames <= 0)
+      {
         throw new InvalidOperationException("Windows reported an invalid AudioGraph quantum size.");
+      }
+
       int graphSampleRate = checked((int)graph.EncodingProperties.SampleRate);
       int frameCapacity = CalculateFrameCapacity(
           graphQuantumFrames, graphSampleRate, configuration.SampleRate);
@@ -379,13 +393,18 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         }
       }
 
-      List<MixerInsertBinding> bindings = new();
+      List<MixerInsertBinding> bindings = [];
       if (!configuration.MixerChannels.IsDefaultOrEmpty)
       {
         foreach (MixerChannel channel in configuration.MixerChannels)
+        {
           foreach (MixerInsert insert in channel.Inserts.Where(item => item.Enabled))
           {
-            if (insert.Bypassed) continue;
+            if (insert.Bypassed)
+            {
+              continue;
+            }
+
             bool foundProcessor = _vst3Host.TryGetProcessor(insert.Id, out IVst3InsertProcessor? processor) && processor is not null;
             if (foundProcessor && !IsProcessorCompatible(processor!, insert, configuration.SampleRate, frameCapacity))
             {
@@ -396,30 +415,45 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
             if (!foundProcessor)
             {
               if (string.IsNullOrWhiteSpace(insert.PluginId) || string.IsNullOrWhiteSpace(insert.ModulePath) || string.IsNullOrWhiteSpace(insert.ModuleSha256))
+              {
                 throw new InvalidOperationException($"Enabled VST3 insert '{insert.Id}' has no verified module identity.");
+              }
+
               Vst3ModuleFingerprint fingerprint = await Vst3ModuleFingerprinting.CreateAsync(insert.ModulePath, cancellationToken).ConfigureAwait(false);
               if (!string.Equals(fingerprint.Sha256, insert.ModuleSha256, StringComparison.OrdinalIgnoreCase))
+              {
                 throw new InvalidOperationException($"VST3 module for insert '{insert.Id}' changed after discovery. Rescan it before playback.");
+              }
+
               Vst3InstanceStatus status = await _vst3Host.CreateInstanceAsync(new(
                   insert.Id, insert.ModulePath, insert.PluginId, configuration.SampleRate, frameCapacity), cancellationToken).ConfigureAwait(false);
               if (!status.Active)
+              {
                 throw new InvalidOperationException(status.Diagnostic ?? $"VST3 insert '{insert.Id}' did not become active.");
+              }
+
               if (!string.IsNullOrWhiteSpace(insert.StateBase64))
               {
                 byte[] state;
                 try { state = Convert.FromBase64String(insert.StateBase64); }
                 catch (FormatException exception) { throw new InvalidDataException($"VST3 state for insert '{insert.Id}' is malformed.", exception); }
                 status = await _vst3Host.SetStateAsync(insert.Id, state, cancellationToken).ConfigureAwait(false);
-                if (!status.Active) throw new InvalidOperationException(status.Diagnostic ?? $"VST3 state for insert '{insert.Id}' could not be restored.");
+                if (!status.Active)
+                {
+                  throw new InvalidOperationException(status.Diagnostic ?? $"VST3 state for insert '{insert.Id}' could not be restored.");
+                }
               }
               if (!_vst3Host.TryGetProcessor(insert.Id, out processor) || processor is null)
+              {
                 throw new InvalidOperationException($"VST3 insert '{insert.Id}' has no active audio processor after startup.");
+              }
             }
             bindings.Add(new MixerInsertBinding(channel.Id, insert.Id, processor!));
           }
+        }
       }
 
-      var prepared = new PreparedGraph(configuration, graph, outputResult.DeviceOutputNode,
+      PreparedGraph prepared = new(configuration, graph, outputResult.DeviceOutputNode,
           masterInput, tracks, clips, CreateCoreProcessor(configuration, bindings, frameCapacity),
           frameCapacity, graphQuantumFrames, graphSampleRate, directPlayback, this);
       // FrameOutputNode.GetFrame is synchronized to AudioGraph.QuantumStarted, not to the
@@ -433,8 +467,16 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     }
     catch
     {
-      foreach (PreparedClip clip in clips) clip.Node.Dispose();
-      foreach (PreparedTrack track in tracks) track.Output.Dispose();
+      foreach (PreparedClip clip in clips)
+      {
+        clip.Node.Dispose();
+      }
+
+      foreach (PreparedTrack track in tracks)
+      {
+        track.Output.Dispose();
+      }
+
       masterInput?.Dispose();
       graph.Dispose();
       throw;
@@ -484,6 +526,15 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
               transport = operation.Transport;
               transportTimestamp = _timestamp();
               ApplyTransport(active, transport, transportTimestamp, transportChanged: true);
+            }
+            else if (operation.ReleaseActiveGraph)
+            {
+              PreparedGraph? previous = active;
+              active = null;
+              transport = null;
+              Volatile.Write(ref _configuration, null);
+              DisposeGraph(previous);
+              _ = operation.Completion?.TrySetResult();
             }
           }
           catch (Exception exception)
@@ -545,20 +596,30 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       return;
     }
 
-     AudioPlaybackPosition playback = active.Cursor.Advance(
-        state, stateTimestamp, _timestamp(), transportChanged);
+    AudioPlaybackPosition playback = active.Cursor.Advance(
+       state, stateTimestamp, _timestamp(), transportChanged);
     long position = playback.Samples;
     bool running = state.Mode is TransportMode.Playing or TransportMode.Recording;
-    if (playback.RequiresSeek || transportChanged) active.SetSamplePosition(position);
+    if (playback.RequiresSeek || transportChanged)
+    {
+      active.SetSamplePosition(position);
+    }
+
     if (running)
     {
       active.MasterInput.Start();
-      foreach (PreparedTrack track in active.Tracks) track.Output.Start();
+      foreach (PreparedTrack track in active.Tracks)
+      {
+        track.Output.Start();
+      }
     }
     else
     {
       active.MasterInput.Stop();
-      foreach (PreparedTrack track in active.Tracks) track.Output.Stop();
+      foreach (PreparedTrack track in active.Tracks)
+      {
+        track.Output.Stop();
+      }
     }
     foreach (PreparedClip clip in active.Clips)
     {
@@ -576,7 +637,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
 
       long projectOffset = position - clip.Source.TimelineStartSample;
       long sourceSample = clip.Source.SourceStartSample +
-                          projectOffset * clip.Source.SourceSampleRate / active.Configuration.SampleRate;
+                          (projectOffset * clip.Source.SourceSampleRate / active.Configuration.SampleRate);
       TimeSpan sourcePosition = TimeSpan.FromSeconds(sourceSample / (double)clip.Source.SourceSampleRate);
       // AudioGraph's decoder/device clock is authoritative during steady playback. Comparing its
       // buffered Position to a wall-clock projection and seeking to correct normal output latency
@@ -603,7 +664,8 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
   private readonly record struct EngineOperation(
       PreparedGraph? Graph,
       TransportState? Transport,
-      TaskCompletionSource? Completion);
+      TaskCompletionSource? Completion,
+      bool ReleaseActiveGraph = false);
 
   private sealed class PreparedGraph : IDisposable
   {
@@ -616,7 +678,6 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     private readonly int _graphQuantumFrames;
     private readonly int _graphSampleRate;
     private long _nodeFrameRemainder;
-    private readonly bool _directPlayback;
     private long _samplePosition;
     private int _disposed;
 
@@ -648,7 +709,7 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
       _automation = configuration.Automation ?? AudioAutomationSnapshot.Empty;
       _graphQuantumFrames = graphQuantumFrames;
       _graphSampleRate = graphSampleRate;
-      _directPlayback = directPlayback;
+      DirectPlayback = directPlayback;
     }
 
     public AudioEngineConfiguration Configuration { get; }
@@ -658,16 +719,23 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
     public AudioFrameInputNode MasterInput { get; }
     public List<PreparedTrack> Tracks { get; }
     public List<PreparedClip> Clips { get; }
-    public bool DirectPlayback => _directPlayback;
+    public bool DirectPlayback { get; }
 
     public void OnQuantumStarted(AudioGraph sender, object args)
     {
-      long scaledFrames = checked((long)_graphQuantumFrames * Configuration.SampleRate + _nodeFrameRemainder);
+      long scaledFrames = checked(((long)_graphQuantumFrames * Configuration.SampleRate) + _nodeFrameRemainder);
       int frames = checked((int)(scaledFrames / _graphSampleRate));
       _nodeFrameRemainder = scaledFrames % _graphSampleRate;
-      if (frames <= 0 || Volatile.Read(ref _disposed) != 0) return;
+      if (frames <= 0 || Volatile.Read(ref _disposed) != 0)
+      {
+        return;
+      }
+
       if (frames > _mixer.MaximumFrames)
+      {
         throw new InvalidOperationException($"AudioGraph requested {frames} frames, exceeding the negotiated capacity {_mixer.MaximumFrames}.");
+      }
+
       int sampleCount = checked(frames * 2);
       try
       {
@@ -679,14 +747,14 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         }
 
         _mixer.ProcessBlock(_inputs, _output, frames, Math.Max(0, _samplePosition), _automation);
-        var outputFrame = new AudioFrame((uint)(sampleCount * sizeof(float)));
+        AudioFrame outputFrame = new((uint)(sampleCount * sizeof(float)));
         CopyStereoToFrame(_output, outputFrame, sampleCount);
         MasterInput.AddFrame(outputFrame);
 
         int meterCount = _mixer.CopyMeterSnapshots(_meterBuffer);
         if (_owner.MetersAvailable is EventHandler<IReadOnlyList<AudioMeterSnapshot>> handler)
         {
-          var snapshots = new AudioMeterSnapshot[meterCount];
+          AudioMeterSnapshot[] snapshots = new AudioMeterSnapshot[meterCount];
           for (int index = 0; index < meterCount; index++)
           {
             MixerMeterSnapshot meter = _meterBuffer[index];
@@ -711,7 +779,11 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
 
     public void Dispose()
     {
-      if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+      if (Interlocked.Exchange(ref _disposed, 1) != 0)
+      {
+        return;
+      }
+
       List<Exception>? failures = null;
       void Release(Action action)
       {
@@ -719,14 +791,28 @@ public IReadOnlyList<AudioDeviceDescriptor> Devices => Volatile.Read(ref _device
         catch (Exception exception) { (failures ??= []).Add(exception); }
       }
       Release(Graph.Stop);
-      if (!_directPlayback) Graph.QuantumStarted -= OnQuantumStarted;
-      foreach (PreparedClip clip in Clips) Release(clip.Node.Dispose);
-      foreach (PreparedTrack track in Tracks) Release(track.Output.Dispose);
+      if (!DirectPlayback)
+      {
+        Graph.QuantumStarted -= OnQuantumStarted;
+      }
+
+      foreach (PreparedClip clip in Clips)
+      {
+        Release(clip.Node.Dispose);
+      }
+
+      foreach (PreparedTrack track in Tracks)
+      {
+        Release(track.Output.Dispose);
+      }
+
       Release(MasterInput.Dispose);
       Release(Output.Dispose);
       Release(Graph.Dispose);
       if (failures is not null)
+      {
         throw new AggregateException("Audio graph resources could not all be released cleanly.", failures);
+      }
     }
   }
 

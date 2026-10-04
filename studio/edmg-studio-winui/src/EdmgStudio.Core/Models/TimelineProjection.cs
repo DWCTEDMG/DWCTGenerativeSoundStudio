@@ -5,263 +5,266 @@ namespace EdmgStudio.Core.Models;
 
 public enum TimelineLaneOrigin
 {
-    Layer,
-    TrackClip,
-    NewClip
+  Layer,
+  TrackClip,
+  NewClip
 }
 
 public sealed class TimelineLaneDocument
 {
-    private string _sourcePath;
-    private double _sourceInSeconds;
-    private double _sourceOutSeconds;
-    private double _speed;
-    private double _volume;
-    private bool _muted;
-    private double _fadeInSeconds;
-    private double _fadeOutSeconds;
-    private string _fitMode;
-    private double _opacity;
-    private double _brightness;
-    private double _contrast;
-    private double _saturation;
-    private int _rotationDegrees;
-    private bool _flipHorizontal;
+  private string _sourcePath;
+  private double _sourceInSeconds;
+  private double _sourceOutSeconds;
+  private double _speed;
+  private double _volume;
+  private bool _muted;
+  private double _fadeInSeconds;
+  private double _fadeOutSeconds;
+  private string _fitMode;
+  private double _opacity;
+  private double _brightness;
+  private double _contrast;
+  private double _saturation;
+  private int _rotationDegrees;
+  private bool _flipHorizontal;
 
-    internal TimelineLaneDocument(
-        string stableId,
-        string name,
-        string type,
-        double startSeconds,
-        double endSeconds,
-        TimelineLaneOrigin origin,
-        int trackIndex,
-        JsonObject source,
-        string sourcePath = "",
-        double sourceInSeconds = 0,
-        double sourceOutSeconds = 0,
-        double speed = 1,
-        double volume = 1,
-        bool muted = false,
-        double fadeInSeconds = 0,
-        double fadeOutSeconds = 0,
-        string fitMode = "contain",
-        double opacity = 1,
-        double brightness = 0,
-        double contrast = 1,
-        double saturation = 1,
-        int rotationDegrees = 0,
-        bool flipHorizontal = false,
-        IReadOnlySet<string>? presentMediaProperties = null)
+  internal TimelineLaneDocument(
+      string stableId,
+      string name,
+      string type,
+      double startSeconds,
+      double endSeconds,
+      TimelineLaneOrigin origin,
+      int trackIndex,
+      JsonObject source,
+      string sourcePath = "",
+      double sourceInSeconds = 0,
+      double sourceOutSeconds = 0,
+      double speed = 1,
+      double volume = 1,
+      bool muted = false,
+      double fadeInSeconds = 0,
+      double fadeOutSeconds = 0,
+      string fitMode = "contain",
+      double opacity = 1,
+      double brightness = 0,
+      double contrast = 1,
+      double saturation = 1,
+      int rotationDegrees = 0,
+      bool flipHorizontal = false,
+      IReadOnlySet<string>? presentMediaProperties = null)
+  {
+    StableId = stableId;
+    Name = name;
+    Type = type;
+    StartSeconds = startSeconds;
+    EndSeconds = endSeconds;
+    Origin = origin;
+    TrackIndex = trackIndex;
+    Source = source;
+    _sourcePath = sourcePath;
+    _sourceInSeconds = sourceInSeconds;
+    _sourceOutSeconds = sourceOutSeconds;
+    _speed = speed;
+    _volume = volume;
+    _muted = muted;
+    _fadeInSeconds = fadeInSeconds;
+    _fadeOutSeconds = fadeOutSeconds;
+    _fitMode = NormalizeFitMode(fitMode);
+    _opacity = opacity;
+    _brightness = brightness;
+    _contrast = contrast;
+    _saturation = saturation;
+    _rotationDegrees = NormalizeRotation(rotationDegrees);
+    _flipHorizontal = flipHorizontal;
+    PresentMediaProperties = presentMediaProperties is null
+        ? new HashSet<string>(StringComparer.Ordinal)
+        : new HashSet<string>(presentMediaProperties, StringComparer.Ordinal);
+  }
+
+  public string StableId { get; }
+  public string Name { get; set; }
+  public string Type { get; set; }
+  public double StartSeconds { get; set; }
+  public double EndSeconds { get; set; }
+  public int TrackIndex { get; internal set; }
+  public bool IsLayer => Origin == TimelineLaneOrigin.Layer;
+
+  public string SourcePath
+  {
+    get => _sourcePath;
+    set
     {
-        StableId = stableId;
-        Name = name;
-        Type = type;
-        StartSeconds = startSeconds;
-        EndSeconds = endSeconds;
-        Origin = origin;
-        TrackIndex = trackIndex;
-        Source = source;
-        _sourcePath = sourcePath;
-        _sourceInSeconds = sourceInSeconds;
-        _sourceOutSeconds = sourceOutSeconds;
-        _speed = speed;
-        _volume = volume;
-        _muted = muted;
-        _fadeInSeconds = fadeInSeconds;
-        _fadeOutSeconds = fadeOutSeconds;
-        _fitMode = NormalizeFitMode(fitMode);
-        _opacity = opacity;
-        _brightness = brightness;
-        _contrast = contrast;
-        _saturation = saturation;
-        _rotationDegrees = NormalizeRotation(rotationDegrees);
-        _flipHorizontal = flipHorizontal;
-        PresentMediaProperties = presentMediaProperties is null
-            ? new HashSet<string>(StringComparer.Ordinal)
-            : new HashSet<string>(presentMediaProperties, StringComparer.Ordinal);
+      _sourcePath = value ?? string.Empty;
+      _ = PresentMediaProperties.Add("source_path");
     }
+  }
 
-    public string StableId { get; }
-    public string Name { get; set; }
-    public string Type { get; set; }
-    public double StartSeconds { get; set; }
-    public double EndSeconds { get; set; }
-    public int TrackIndex { get; internal set; }
-    public bool IsLayer => Origin == TimelineLaneOrigin.Layer;
-
-    public string SourcePath
+  public double SourceInSeconds
+  {
+    get => _sourceInSeconds;
+    set
     {
-        get => _sourcePath;
-        set
-        {
-            _sourcePath = value ?? string.Empty;
-            PresentMediaProperties.Add("source_path");
-        }
+      _sourceInSeconds = value;
+      _ = PresentMediaProperties.Add("source_in_s");
     }
+  }
 
-    public double SourceInSeconds
+  public double SourceOutSeconds
+  {
+    get => _sourceOutSeconds;
+    set
     {
-        get => _sourceInSeconds;
-        set
-        {
-            _sourceInSeconds = value;
-            PresentMediaProperties.Add("source_in_s");
-        }
+      _sourceOutSeconds = value;
+      _ = PresentMediaProperties.Add("source_out_s");
     }
+  }
 
-    public double SourceOutSeconds
+  public double Speed
+  {
+    get => _speed;
+    set
     {
-        get => _sourceOutSeconds;
-        set
-        {
-            _sourceOutSeconds = value;
-            PresentMediaProperties.Add("source_out_s");
-        }
+      _speed = value;
+      _ = PresentMediaProperties.Add("speed");
     }
+  }
 
-    public double Speed
+  public double Volume
+  {
+    get => _volume;
+    set
     {
-        get => _speed;
-        set
-        {
-            _speed = value;
-            PresentMediaProperties.Add("speed");
-        }
+      _volume = value;
+      _ = PresentMediaProperties.Add("volume");
     }
+  }
 
-    public double Volume
+  public bool Muted
+  {
+    get => _muted;
+    set
     {
-        get => _volume;
-        set
-        {
-            _volume = value;
-            PresentMediaProperties.Add("volume");
-        }
+      _muted = value;
+      _ = PresentMediaProperties.Add("muted");
     }
+  }
 
-    public bool Muted
+  public double FadeInSeconds
+  {
+    get => _fadeInSeconds;
+    set
     {
-        get => _muted;
-        set
-        {
-            _muted = value;
-            PresentMediaProperties.Add("muted");
-        }
+      _fadeInSeconds = value;
+      _ = PresentMediaProperties.Add("fade_in_s");
     }
+  }
 
-    public double FadeInSeconds
+  public double FadeOutSeconds
+  {
+    get => _fadeOutSeconds;
+    set
     {
-        get => _fadeInSeconds;
-        set
-        {
-            _fadeInSeconds = value;
-            PresentMediaProperties.Add("fade_in_s");
-        }
+      _fadeOutSeconds = value;
+      _ = PresentMediaProperties.Add("fade_out_s");
     }
+  }
 
-    public double FadeOutSeconds
+  public string FitMode
+  {
+    get => _fitMode;
+    set
     {
-        get => _fadeOutSeconds;
-        set
-        {
-            _fadeOutSeconds = value;
-            PresentMediaProperties.Add("fade_out_s");
-        }
+      _fitMode = NormalizeFitMode(value);
+      _ = PresentMediaProperties.Add("fit_mode");
     }
+  }
 
-    public string FitMode
+  public double Opacity
+  {
+    get => _opacity;
+    set
     {
-        get => _fitMode;
-        set
-        {
-            _fitMode = NormalizeFitMode(value);
-            PresentMediaProperties.Add("fit_mode");
-        }
+      _opacity = value;
+      _ = PresentMediaProperties.Add("opacity");
     }
+  }
 
-    public double Opacity
+  public double Brightness
+  {
+    get => _brightness;
+    set
     {
-        get => _opacity;
-        set
-        {
-            _opacity = value;
-            PresentMediaProperties.Add("opacity");
-        }
+      _brightness = value;
+      _ = PresentMediaProperties.Add("brightness");
     }
+  }
 
-    public double Brightness
+  public double Contrast
+  {
+    get => _contrast;
+    set
     {
-        get => _brightness;
-        set
-        {
-            _brightness = value;
-            PresentMediaProperties.Add("brightness");
-        }
+      _contrast = value;
+      _ = PresentMediaProperties.Add("contrast");
     }
+  }
 
-    public double Contrast
+  public double Saturation
+  {
+    get => _saturation;
+    set
     {
-        get => _contrast;
-        set
-        {
-            _contrast = value;
-            PresentMediaProperties.Add("contrast");
-        }
+      _saturation = value;
+      _ = PresentMediaProperties.Add("saturation");
     }
+  }
 
-    public double Saturation
+  public int RotationDegrees
+  {
+    get => _rotationDegrees;
+    set
     {
-        get => _saturation;
-        set
-        {
-            _saturation = value;
-            PresentMediaProperties.Add("saturation");
-        }
+      _rotationDegrees = NormalizeRotation(value);
+      _ = PresentMediaProperties.Add("rotation_deg");
     }
+  }
 
-    public int RotationDegrees
+  public bool FlipHorizontal
+  {
+    get => _flipHorizontal;
+    set
     {
-        get => _rotationDegrees;
-        set
-        {
-            _rotationDegrees = NormalizeRotation(value);
-            PresentMediaProperties.Add("rotation_deg");
-        }
+      _flipHorizontal = value;
+      _ = PresentMediaProperties.Add("flip_horizontal");
     }
+  }
 
-    public bool FlipHorizontal
-    {
-        get => _flipHorizontal;
-        set
-        {
-            _flipHorizontal = value;
-            PresentMediaProperties.Add("flip_horizontal");
-        }
-    }
+  internal TimelineLaneOrigin Origin { get; }
+  internal JsonObject Source { get; }
+  internal HashSet<string> PresentMediaProperties { get; }
 
-    internal TimelineLaneOrigin Origin { get; }
-    internal JsonObject Source { get; }
-    internal HashSet<string> PresentMediaProperties { get; }
+  private static string NormalizeFitMode(string? value)
+  {
+    string normalized = string.IsNullOrWhiteSpace(value)
+        ? "contain"
+        : value.Trim().ToLowerInvariant();
+    return normalized is "contain" or "cover" or "stretch" ? normalized : "contain";
+  }
 
-    private static string NormalizeFitMode(string? value)
-    {
-        string normalized = string.IsNullOrWhiteSpace(value)
-            ? "contain"
-            : value.Trim().ToLowerInvariant();
-        return normalized is "contain" or "cover" or "stretch" ? normalized : "contain";
-    }
-
-    private static int NormalizeRotation(int value) => value is 90 or 180 or 270 ? value : 0;
+  private static int NormalizeRotation(int value)
+  {
+    return value is 90 or 180 or 270 ? value : 0;
+  }
 }
 
 public static class TimelineProjection
 {
-    public const double MinimumDurationSeconds = 0.05;
+  public const double MinimumDurationSeconds = 0.05;
 
-    private static readonly string[] MediaPropertyNames =
-    [
-        "source_path",
+  private static readonly string[] MediaPropertyNames =
+  [
+      "source_path",
         "source_in_s",
         "source_out_s",
         "speed",
@@ -276,818 +279,821 @@ public static class TimelineProjection
         "saturation",
         "rotation_deg",
         "flip_horizontal"
-    ];
+  ];
 
-    public static IReadOnlyList<TimelineLaneDocument> Project(JsonObject timeline)
+  public static IReadOnlyList<TimelineLaneDocument> Project(JsonObject timeline)
+  {
+    ArgumentNullException.ThrowIfNull(timeline);
+    List<TimelineLaneDocument> lanes = [];
+    if (timeline["tracks"] is JsonArray tracks)
     {
-        ArgumentNullException.ThrowIfNull(timeline);
-        var lanes = new List<TimelineLaneDocument>();
-        if (timeline["tracks"] is JsonArray tracks)
-        {
-            lanes.AddRange(ProjectTracks(tracks));
-        }
-
-        if (timeline["layers"] is JsonArray layers)
-        {
-            lanes.AddRange(ProjectLayers(layers));
-        }
-
-        return OrderLanes(lanes);
+      lanes.AddRange(ProjectTracks(tracks));
     }
 
-    public static TimelineLaneDocument CreateLane(
-        string name,
-        string type,
-        double startSeconds,
-        double endSeconds)
+    if (timeline["layers"] is JsonArray layers)
     {
-        ValidateTimes(startSeconds, endSeconds);
-        var stableId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        return new TimelineLaneDocument(
-            stableId,
-            NormalizeName(name, stableId),
-            NormalizeType(type),
-            startSeconds,
-            endSeconds,
-            TimelineLaneOrigin.NewClip,
-            -1,
-            new JsonObject
-            {
-                ["id"] = stableId,
-                ["start_s"] = startSeconds,
-                ["end_s"] = endSeconds,
-                ["data"] = new JsonObject
-                {
-                    ["name"] = NormalizeName(name, stableId)
-                }
-            });
+      lanes.AddRange(ProjectLayers(layers));
     }
 
-    public static TimelineLaneDocument CreateLayer(
-        string name,
-        string type,
-        double startSeconds,
-        double endSeconds)
-    {
-        ValidateTimes(startSeconds, endSeconds);
-        var stableId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        var normalizedName = NormalizeName(name, stableId);
-        var normalizedType = NormalizeType(type);
-        return new TimelineLaneDocument(
-            stableId,
-            normalizedName,
-            normalizedType,
-            startSeconds,
-            endSeconds,
-            TimelineLaneOrigin.Layer,
-            -1,
-            new JsonObject
-            {
-                ["id"] = stableId,
-                ["name"] = normalizedName,
-                ["type"] = normalizedType,
-                ["start_s"] = startSeconds,
-                ["end_s"] = endSeconds
-            });
-    }
+    return OrderLanes(lanes);
+  }
 
-    public static JsonObject Rebuild(JsonObject timeline, IEnumerable<TimelineLaneDocument> lanes)
-    {
-        ArgumentNullException.ThrowIfNull(timeline);
-        ArgumentNullException.ThrowIfNull(lanes);
-        var materializedLanes = lanes.ToList();
-        foreach (var lane in materializedLanes)
+  public static TimelineLaneDocument CreateLane(
+      string name,
+      string type,
+      double startSeconds,
+      double endSeconds)
+  {
+    ValidateTimes(startSeconds, endSeconds);
+    string stableId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+    return new TimelineLaneDocument(
+        stableId,
+        NormalizeName(name, stableId),
+        NormalizeType(type),
+        startSeconds,
+        endSeconds,
+        TimelineLaneOrigin.NewClip,
+        -1,
+        new JsonObject
         {
-            ArgumentNullException.ThrowIfNull(lane);
-            ValidateTimes(lane.StartSeconds, lane.EndSeconds);
-        }
+          ["id"] = stableId,
+          ["start_s"] = startSeconds,
+          ["end_s"] = endSeconds,
+          ["data"] = new JsonObject
+          {
+            ["name"] = NormalizeName(name, stableId)
+          }
+        });
+  }
 
-        var rebuilt = timeline.DeepClone().AsObject();
-        var trackLanes = materializedLanes.Where(lane => !lane.IsLayer).ToList();
-        var layerLanes = materializedLanes.Where(lane => lane.IsLayer).ToList();
-        bool hadTracks = rebuilt["tracks"] is JsonArray;
-        bool hadLayers = rebuilt["layers"] is JsonArray;
-
-        if (hadTracks || trackLanes.Count > 0)
+  public static TimelineLaneDocument CreateLayer(
+      string name,
+      string type,
+      double startSeconds,
+      double endSeconds)
+  {
+    ValidateTimes(startSeconds, endSeconds);
+    string stableId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+    string normalizedName = NormalizeName(name, stableId);
+    string normalizedType = NormalizeType(type);
+    return new TimelineLaneDocument(
+        stableId,
+        normalizedName,
+        normalizedType,
+        startSeconds,
+        endSeconds,
+        TimelineLaneOrigin.Layer,
+        -1,
+        new JsonObject
         {
-            var tracks = rebuilt["tracks"] as JsonArray;
-            if (tracks is null)
-            {
-                tracks = [];
-                rebuilt["tracks"] = tracks;
-            }
+          ["id"] = stableId,
+          ["name"] = normalizedName,
+          ["type"] = normalizedType,
+          ["start_s"] = startSeconds,
+          ["end_s"] = endSeconds
+        });
+  }
 
-            RebuildTracks(tracks, trackLanes);
-        }
-
-        if (hadLayers || layerLanes.Count > 0)
-        {
-            var layers = rebuilt["layers"] as JsonArray;
-            if (layers is null)
-            {
-                layers = [];
-                rebuilt["layers"] = layers;
-            }
-
-            RebuildLayers(layers, layerLanes);
-        }
-
-        return rebuilt;
-    }
-
-    public static bool HasRenderableVideoClip(JsonObject timeline)
+  public static JsonObject Rebuild(JsonObject timeline, IEnumerable<TimelineLaneDocument> lanes)
+  {
+    ArgumentNullException.ThrowIfNull(timeline);
+    ArgumentNullException.ThrowIfNull(lanes);
+    List<TimelineLaneDocument> materializedLanes = lanes.ToList();
+    foreach (TimelineLaneDocument lane in materializedLanes)
     {
-        ArgumentNullException.ThrowIfNull(timeline);
-        return Project(timeline).Any(lane =>
-            lane.Type.Contains("video", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(lane.SourcePath));
+      ArgumentNullException.ThrowIfNull(lane);
+      ValidateTimes(lane.StartSeconds, lane.EndSeconds);
     }
 
-    public static bool CanRender(TimelineLaneDocument lane) =>
-        lane.EndSeconds > lane.StartSeconds &&
-        !string.IsNullOrWhiteSpace(lane.SourcePath);
+    JsonObject rebuilt = timeline.DeepClone().AsObject();
+    List<TimelineLaneDocument> trackLanes = materializedLanes.Where(lane => !lane.IsLayer).ToList();
+    List<TimelineLaneDocument> layerLanes = materializedLanes.Where(lane => lane.IsLayer).ToList();
+    bool hadTracks = rebuilt["tracks"] is JsonArray;
+    bool hadLayers = rebuilt["layers"] is JsonArray;
 
-    public static TimelineLaneDocument Move(
+    if (hadTracks || trackLanes.Count > 0)
+    {
+      JsonArray? tracks = rebuilt["tracks"] as JsonArray;
+      if (tracks is null)
+      {
+        tracks = [];
+        rebuilt["tracks"] = tracks;
+      }
+
+      RebuildTracks(tracks, trackLanes);
+    }
+
+    if (hadLayers || layerLanes.Count > 0)
+    {
+      JsonArray? layers = rebuilt["layers"] as JsonArray;
+      if (layers is null)
+      {
+        layers = [];
+        rebuilt["layers"] = layers;
+      }
+
+      RebuildLayers(layers, layerLanes);
+    }
+
+    return rebuilt;
+  }
+
+  public static bool HasRenderableVideoClip(JsonObject timeline)
+  {
+    ArgumentNullException.ThrowIfNull(timeline);
+    return Project(timeline).Any(lane =>
+        lane.Type.Contains("video", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(lane.SourcePath));
+  }
+
+  public static bool CanRender(TimelineLaneDocument lane)
+  {
+    return lane.EndSeconds > lane.StartSeconds &&
+      !string.IsNullOrWhiteSpace(lane.SourcePath);
+  }
+
+  public static TimelineLaneDocument Move(
         TimelineLaneDocument lane,
         double startSeconds,
         double timelineDurationSeconds)
+  {
+    ValidateTimelineDuration(timelineDurationSeconds);
+    TimelineLaneDocument result = CloneLane(lane);
+    double duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
+    result.StartSeconds = Math.Clamp(startSeconds, 0, Math.Max(0, timelineDurationSeconds - duration));
+    result.EndSeconds = result.StartSeconds + duration;
+    return result;
+  }
+
+  public static TimelineLaneDocument Trim(
+      TimelineLaneDocument lane,
+      double startSeconds,
+      double endSeconds,
+      double timelineDurationSeconds)
+  {
+    ValidateTimelineDuration(timelineDurationSeconds);
+    double start = Math.Clamp(startSeconds, 0, Math.Max(0, timelineDurationSeconds - MinimumDurationSeconds));
+    double end = Math.Clamp(endSeconds, start + MinimumDurationSeconds, timelineDurationSeconds);
+    TimelineLaneDocument result = CloneLane(lane);
+    if (IsTimedMedia(lane))
     {
-        ValidateTimelineDuration(timelineDurationSeconds);
-        var result = CloneLane(lane);
-        var duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
-        result.StartSeconds = Math.Clamp(startSeconds, 0, Math.Max(0, timelineDurationSeconds - duration));
-        result.EndSeconds = result.StartSeconds + duration;
-        return result;
+      double speed = Math.Clamp(lane.Speed, 0.25, 4);
+      double sourceIn = Math.Max(0, lane.SourceInSeconds + ((start - lane.StartSeconds) * speed));
+      double fallbackSourceOut = lane.SourceInSeconds + ((lane.EndSeconds - lane.StartSeconds) * speed);
+      double sourceOut = Math.Max(
+          sourceIn + MinimumDurationSeconds,
+          Math.Max(lane.SourceOutSeconds, fallbackSourceOut) + ((end - lane.EndSeconds) * speed));
+      result.SourceInSeconds = sourceIn;
+      result.SourceOutSeconds = sourceOut;
+      result.Speed = speed;
     }
 
-    public static TimelineLaneDocument Trim(
-        TimelineLaneDocument lane,
-        double startSeconds,
-        double endSeconds,
-        double timelineDurationSeconds)
+    result.StartSeconds = start;
+    result.EndSeconds = end;
+    return result;
+  }
+
+  public static bool CanSplitAt(TimelineLaneDocument lane, double splitSeconds)
+  {
+    ArgumentNullException.ThrowIfNull(lane);
+    return splitSeconds > lane.StartSeconds + MinimumDurationSeconds &&
+        splitSeconds < lane.EndSeconds - MinimumDurationSeconds;
+  }
+
+  public static (TimelineLaneDocument Left, TimelineLaneDocument Right) Split(
+      TimelineLaneDocument lane,
+      double splitSeconds)
+  {
+    if (!CanSplitAt(lane, splitSeconds))
     {
-        ValidateTimelineDuration(timelineDurationSeconds);
-        var start = Math.Clamp(startSeconds, 0, Math.Max(0, timelineDurationSeconds - MinimumDurationSeconds));
-        var end = Math.Clamp(endSeconds, start + MinimumDurationSeconds, timelineDurationSeconds);
-        var result = CloneLane(lane);
-        if (IsTimedMedia(lane))
+      throw new ArgumentOutOfRangeException(
+          nameof(splitSeconds),
+          "The split position must leave at least 0.05 seconds on each side.");
+    }
+
+    TimelineLaneDocument left = CloneLane(lane);
+    TimelineLaneDocument right = CloneLane(lane, createNewIdentity: true);
+    left.EndSeconds = splitSeconds;
+    right.StartSeconds = splitSeconds;
+    if (IsTimedMedia(lane))
+    {
+      double speed = Math.Clamp(lane.Speed, 0.25, 4);
+      double sourceSplit = Math.Max(0, lane.SourceInSeconds + ((splitSeconds - lane.StartSeconds) * speed));
+      left.SourceOutSeconds = sourceSplit;
+      right.SourceInSeconds = sourceSplit;
+      left.Speed = speed;
+      right.Speed = speed;
+    }
+
+    return (left, right);
+  }
+
+  public static TimelineLaneDocument DuplicateAt(
+      TimelineLaneDocument lane,
+      double playheadSeconds,
+      double timelineDurationSeconds)
+  {
+    ValidateTimelineDuration(timelineDurationSeconds);
+    TimelineLaneDocument duplicate = CloneLane(lane, createNewIdentity: true);
+    double duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
+    duplicate.StartSeconds = Math.Clamp(
+        playheadSeconds,
+        0,
+        Math.Max(0, timelineDurationSeconds - duration));
+    duplicate.EndSeconds = duplicate.StartSeconds + duration;
+    return duplicate;
+  }
+
+  public static TimelineLaneDocument ReassignTrack(TimelineLaneDocument lane, int trackIndex)
+  {
+    TimelineLaneDocument result = CloneLane(lane);
+    if (lane.IsLayer)
+    {
+      result.TrackIndex = -1;
+      return result;
+    }
+
+    ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+    result.TrackIndex = trackIndex;
+    return result;
+  }
+
+  public static bool IsTrackLocked(JsonObject timeline, int trackIndex)
+  {
+    ArgumentNullException.ThrowIfNull(timeline);
+    ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+    JsonArray? tracks = timeline["tracks"] as JsonArray;
+    return trackIndex < (tracks?.Count ?? 0) &&
+        tracks![trackIndex] is JsonObject track &&
+        track["locked"]?.GetValue<bool>() == true;
+  }
+
+  public static JsonObject SetTrackLocked(JsonObject timeline, int trackIndex, bool locked)
+  {
+    ArgumentNullException.ThrowIfNull(timeline);
+    ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
+    JsonObject result = timeline.DeepClone().AsObject();
+    JsonArray tracks = result["tracks"] as JsonArray ??
+        throw new ArgumentException("The timeline does not contain tracks.", nameof(timeline));
+    if (trackIndex >= tracks.Count || tracks[trackIndex] is not JsonObject track)
+    {
+      throw new ArgumentOutOfRangeException(nameof(trackIndex));
+    }
+
+    track["locked"] = locked;
+    return result;
+  }
+
+  public static JsonObject PreserveLockedTracks(JsonObject original, JsonObject proposed)
+  {
+    ArgumentNullException.ThrowIfNull(original);
+    ArgumentNullException.ThrowIfNull(proposed);
+    JsonObject result = proposed.DeepClone().AsObject();
+    if (original["tracks"] is not JsonArray originalTracks)
+    {
+      return result;
+    }
+
+    JsonArray proposedTracks = result["tracks"] as JsonArray ?? [];
+    result["tracks"] = proposedTracks;
+    for (int originalIndex = 0; originalIndex < originalTracks.Count; originalIndex++)
+    {
+      if (originalTracks[originalIndex] is not JsonObject originalTrack ||
+          originalTrack["locked"]?.GetValue<bool>() != true)
+      {
+        continue;
+      }
+
+      int targetIndex = FindTrackIndex(proposedTracks, originalTrack, originalIndex);
+      JsonNode preservedTrack = originalTrack.DeepClone();
+      if (targetIndex < proposedTracks.Count)
+      {
+        proposedTracks[targetIndex] = preservedTrack;
+      }
+      else
+      {
+        while (proposedTracks.Count < targetIndex)
         {
-            var speed = Math.Clamp(lane.Speed, 0.25, 4);
-            var sourceIn = Math.Max(0, lane.SourceInSeconds + ((start - lane.StartSeconds) * speed));
-            var fallbackSourceOut = lane.SourceInSeconds + ((lane.EndSeconds - lane.StartSeconds) * speed);
-            var sourceOut = Math.Max(
-                sourceIn + MinimumDurationSeconds,
-                Math.Max(lane.SourceOutSeconds, fallbackSourceOut) + ((end - lane.EndSeconds) * speed));
-            result.SourceInSeconds = sourceIn;
-            result.SourceOutSeconds = sourceOut;
-            result.Speed = speed;
+          proposedTracks.Add(new JsonObject { ["clips"] = new JsonArray() });
         }
 
-        result.StartSeconds = start;
-        result.EndSeconds = end;
-        return result;
+        proposedTracks.Add(preservedTrack);
+      }
     }
 
-    public static bool CanSplitAt(TimelineLaneDocument lane, double splitSeconds)
-    {
-        ArgumentNullException.ThrowIfNull(lane);
-        return splitSeconds > lane.StartSeconds + MinimumDurationSeconds &&
-            splitSeconds < lane.EndSeconds - MinimumDurationSeconds;
-    }
+    return result;
+  }
 
-    public static (TimelineLaneDocument Left, TimelineLaneDocument Right) Split(
-        TimelineLaneDocument lane,
-        double splitSeconds)
-    {
-        if (!CanSplitAt(lane, splitSeconds))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(splitSeconds),
-                "The split position must leave at least 0.05 seconds on each side.");
-        }
-
-        var left = CloneLane(lane);
-        var right = CloneLane(lane, createNewIdentity: true);
-        left.EndSeconds = splitSeconds;
-        right.StartSeconds = splitSeconds;
-        if (IsTimedMedia(lane))
-        {
-            var speed = Math.Clamp(lane.Speed, 0.25, 4);
-            var sourceSplit = Math.Max(0, lane.SourceInSeconds + ((splitSeconds - lane.StartSeconds) * speed));
-            left.SourceOutSeconds = sourceSplit;
-            right.SourceInSeconds = sourceSplit;
-            left.Speed = speed;
-            right.Speed = speed;
-        }
-
-        return (left, right);
-    }
-
-    public static TimelineLaneDocument DuplicateAt(
-        TimelineLaneDocument lane,
-        double playheadSeconds,
-        double timelineDurationSeconds)
-    {
-        ValidateTimelineDuration(timelineDurationSeconds);
-        var duplicate = CloneLane(lane, createNewIdentity: true);
-        var duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
-        duplicate.StartSeconds = Math.Clamp(
-            playheadSeconds,
-            0,
-            Math.Max(0, timelineDurationSeconds - duration));
-        duplicate.EndSeconds = duplicate.StartSeconds + duration;
-        return duplicate;
-    }
-
-    public static TimelineLaneDocument ReassignTrack(TimelineLaneDocument lane, int trackIndex)
-    {
-        var result = CloneLane(lane);
-        if (lane.IsLayer)
-        {
-            result.TrackIndex = -1;
-            return result;
-        }
-
-        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
-        result.TrackIndex = trackIndex;
-        return result;
-    }
-
-    public static bool IsTrackLocked(JsonObject timeline, int trackIndex)
-    {
-        ArgumentNullException.ThrowIfNull(timeline);
-        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
-        var tracks = timeline["tracks"] as JsonArray;
-        return trackIndex < (tracks?.Count ?? 0) &&
-            tracks![trackIndex] is JsonObject track &&
-            track["locked"]?.GetValue<bool>() == true;
-    }
-
-    public static JsonObject SetTrackLocked(JsonObject timeline, int trackIndex, bool locked)
-    {
-        ArgumentNullException.ThrowIfNull(timeline);
-        ArgumentOutOfRangeException.ThrowIfNegative(trackIndex);
-        var result = timeline.DeepClone().AsObject();
-        var tracks = result["tracks"] as JsonArray ??
-            throw new ArgumentException("The timeline does not contain tracks.", nameof(timeline));
-        if (trackIndex >= tracks.Count || tracks[trackIndex] is not JsonObject track)
-        {
-            throw new ArgumentOutOfRangeException(nameof(trackIndex));
-        }
-
-        track["locked"] = locked;
-        return result;
-    }
-
-    public static JsonObject PreserveLockedTracks(JsonObject original, JsonObject proposed)
-    {
-        ArgumentNullException.ThrowIfNull(original);
-        ArgumentNullException.ThrowIfNull(proposed);
-        var result = proposed.DeepClone().AsObject();
-        if (original["tracks"] is not JsonArray originalTracks)
-        {
-            return result;
-        }
-
-        var proposedTracks = result["tracks"] as JsonArray ?? [];
-        result["tracks"] = proposedTracks;
-        for (var originalIndex = 0; originalIndex < originalTracks.Count; originalIndex++)
-        {
-            if (originalTracks[originalIndex] is not JsonObject originalTrack ||
-                originalTrack["locked"]?.GetValue<bool>() != true)
-            {
-                continue;
-            }
-
-            int targetIndex = FindTrackIndex(proposedTracks, originalTrack, originalIndex);
-            JsonNode preservedTrack = originalTrack.DeepClone();
-            if (targetIndex < proposedTracks.Count)
-            {
-                proposedTracks[targetIndex] = preservedTrack;
-            }
-            else
-            {
-                while (proposedTracks.Count < targetIndex)
-                {
-                    proposedTracks.Add(new JsonObject { ["clips"] = new JsonArray() });
-                }
-
-                proposedTracks.Add(preservedTrack);
-            }
-        }
-
-        return result;
-    }
-
-    public static IReadOnlyList<TimelineLaneDocument> RippleAfterEdit(
-        IEnumerable<TimelineLaneDocument> lanes,
-        TimelineLaneDocument original,
-        TimelineLaneDocument edited,
-        double timelineDurationSeconds)
-    {
-        ArgumentNullException.ThrowIfNull(lanes);
-        ArgumentNullException.ThrowIfNull(original);
-        ArgumentNullException.ThrowIfNull(edited);
-        ValidateTimelineDuration(timelineDurationSeconds);
-        if (original.IsLayer || edited.IsLayer || original.TrackIndex != edited.TrackIndex)
-        {
-            return lanes.Select(lane => CloneLane(lane)).ToArray();
-        }
-
-        return Ripple(
+  public static IReadOnlyList<TimelineLaneDocument> RippleAfterEdit(
+      IEnumerable<TimelineLaneDocument> lanes,
+      TimelineLaneDocument original,
+      TimelineLaneDocument edited,
+      double timelineDurationSeconds)
+  {
+    ArgumentNullException.ThrowIfNull(lanes);
+    ArgumentNullException.ThrowIfNull(original);
+    ArgumentNullException.ThrowIfNull(edited);
+    ValidateTimelineDuration(timelineDurationSeconds);
+    return original.IsLayer || edited.IsLayer || original.TrackIndex != edited.TrackIndex
+          ? lanes.Select(lane => CloneLane(lane)).ToArray()
+          : Ripple(
             lanes,
             original,
             edited.EndSeconds - original.EndSeconds,
             timelineDurationSeconds);
-    }
+  }
 
-    public static IReadOnlyList<TimelineLaneDocument> RippleAfterDelete(
+  public static IReadOnlyList<TimelineLaneDocument> RippleAfterDelete(
         IEnumerable<TimelineLaneDocument> lanes,
         TimelineLaneDocument deleted,
         double timelineDurationSeconds)
-    {
-        ArgumentNullException.ThrowIfNull(lanes);
-        ArgumentNullException.ThrowIfNull(deleted);
-        ValidateTimelineDuration(timelineDurationSeconds);
-        if (deleted.IsLayer)
-        {
-            return lanes.Select(lane => CloneLane(lane)).ToArray();
-        }
-
-        return Ripple(
+  {
+    ArgumentNullException.ThrowIfNull(lanes);
+    ArgumentNullException.ThrowIfNull(deleted);
+    ValidateTimelineDuration(timelineDurationSeconds);
+    return deleted.IsLayer
+      ? lanes.Select(lane => CloneLane(lane)).ToArray()
+          : Ripple(
             lanes,
             deleted,
             -(deleted.EndSeconds - deleted.StartSeconds),
             timelineDurationSeconds);
-    }
+  }
 
-    private static IReadOnlyList<TimelineLaneDocument> Ripple(
+  private static IReadOnlyList<TimelineLaneDocument> Ripple(
         IEnumerable<TimelineLaneDocument> lanes,
         TimelineLaneDocument anchor,
         double deltaSeconds,
-        double timelineDurationSeconds) =>
-        lanes.Select(lane =>
+        double timelineDurationSeconds)
+  {
+    return lanes.Select(lane =>
         {
-            var result = CloneLane(lane);
-            if (lane.IsLayer ||
-                lane.TrackIndex != anchor.TrackIndex ||
-                lane.StableId == anchor.StableId ||
-                lane.StartSeconds < anchor.EndSeconds)
-            {
-                return result;
-            }
-
-            var duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
-            result.StartSeconds = Math.Clamp(
-                lane.StartSeconds + deltaSeconds,
-                0,
-                Math.Max(0, timelineDurationSeconds - duration));
-            result.EndSeconds = result.StartSeconds + duration;
+          TimelineLaneDocument result = CloneLane(lane);
+          if (lane.IsLayer ||
+              lane.TrackIndex != anchor.TrackIndex ||
+              lane.StableId == anchor.StableId ||
+              lane.StartSeconds < anchor.EndSeconds)
+          {
             return result;
+          }
+
+          double duration = Math.Max(MinimumDurationSeconds, lane.EndSeconds - lane.StartSeconds);
+          result.StartSeconds = Math.Clamp(
+              lane.StartSeconds + deltaSeconds,
+              0,
+              Math.Max(0, timelineDurationSeconds - duration));
+          result.EndSeconds = result.StartSeconds + duration;
+          return result;
         }).ToArray();
+  }
 
-    private static int FindTrackIndex(JsonArray tracks, JsonObject originalTrack, int fallbackIndex)
+  private static int FindTrackIndex(JsonArray tracks, JsonObject originalTrack, int fallbackIndex)
+  {
+    string? originalId = GetString(originalTrack["id"]);
+    if (!string.IsNullOrWhiteSpace(originalId))
     {
-        string? originalId = GetString(originalTrack["id"]);
-        if (!string.IsNullOrWhiteSpace(originalId))
+      for (int index = 0; index < tracks.Count; index++)
+      {
+        if (tracks[index] is JsonObject track &&
+            string.Equals(GetString(track["id"]), originalId, StringComparison.Ordinal))
         {
-            for (var index = 0; index < tracks.Count; index++)
-            {
-                if (tracks[index] is JsonObject track &&
-                    string.Equals(GetString(track["id"]), originalId, StringComparison.Ordinal))
-                {
-                    return index;
-                }
-            }
+          return index;
         }
-
-        return fallbackIndex;
+      }
     }
 
-    public static IReadOnlyList<TimelineLaneDocument> OrderLanes(
-        IEnumerable<TimelineLaneDocument> lanes) =>
-        lanes
-            .OrderBy(lane => lane.IsLayer ? 1 : 0)
-            .ThenBy(lane => lane.TrackIndex)
-            .ThenBy(lane => lane.StartSeconds)
-            .ThenBy(lane => lane.EndSeconds)
-            .ThenBy(lane => lane.StableId, StringComparer.Ordinal)
-            .ToArray();
+    return fallbackIndex;
+  }
 
-    private static List<TimelineLaneDocument> ProjectTracks(JsonArray tracks)
+  public static IReadOnlyList<TimelineLaneDocument> OrderLanes(
+      IEnumerable<TimelineLaneDocument> lanes)
+  {
+    return lanes
+          .OrderBy(lane => lane.IsLayer ? 1 : 0)
+          .ThenBy(lane => lane.TrackIndex)
+          .ThenBy(lane => lane.StartSeconds)
+          .ThenBy(lane => lane.EndSeconds)
+          .ThenBy(lane => lane.StableId, StringComparer.Ordinal)
+          .ToArray();
+  }
+
+  private static List<TimelineLaneDocument> ProjectTracks(JsonArray tracks)
+  {
+    List<TimelineLaneDocument> lanes = [];
+    for (int trackIndex = 0; trackIndex < tracks.Count; trackIndex++)
     {
-        var lanes = new List<TimelineLaneDocument>();
-        for (var trackIndex = 0; trackIndex < tracks.Count; trackIndex++)
+      if (tracks[trackIndex] is not JsonObject track || track["clips"] is not JsonArray clips)
+      {
+        continue;
+      }
+
+      string trackType = GetString(track["type"]) ?? "video";
+      string? trackName = GetString(track["name"]);
+      for (int clipIndex = 0; clipIndex < clips.Count; clipIndex++)
+      {
+        if (clips[clipIndex] is not JsonObject clip)
         {
-            if (tracks[trackIndex] is not JsonObject track || track["clips"] is not JsonArray clips)
-            {
-                continue;
-            }
-
-            var trackType = GetString(track["type"]) ?? "video";
-            var trackName = GetString(track["name"]);
-            for (var clipIndex = 0; clipIndex < clips.Count; clipIndex++)
-            {
-                if (clips[clipIndex] is not JsonObject clip)
-                {
-                    continue;
-                }
-
-                var data = clip["data"] as JsonObject;
-                var id = GetString(clip["id"]) ?? $"track-{trackIndex}-clip-{clipIndex}";
-                var start = GetDouble(clip["start_s"], 0);
-                var end = GetDouble(clip["end_s"], 1);
-                lanes.Add(new TimelineLaneDocument(
-                    id,
-                    GetString(data?["name"]) ?? GetString(clip["name"]) ?? trackName ?? $"Clip {lanes.Count + 1}",
-                    trackType,
-                    start,
-                    end,
-                    TimelineLaneOrigin.TrackClip,
-                    trackIndex,
-                    clip.DeepClone().AsObject(),
-                    GetMediaString(clip, "source_path"),
-                    GetMediaDouble(clip, "source_in_s", 0),
-                    GetMediaDouble(clip, "source_out_s", Math.Max(0, end - start)),
-                    GetMediaDouble(clip, "speed", 1),
-                    GetMediaDouble(clip, "volume", 1),
-                    GetMediaBoolean(clip, "muted", false),
-                    GetMediaDouble(clip, "fade_in_s", 0),
-                    GetMediaDouble(clip, "fade_out_s", 0),
-                    GetMediaString(clip, "fit_mode", "contain"),
-                    GetMediaDouble(clip, "opacity", 1),
-                    GetMediaDouble(clip, "brightness", 0),
-                    GetMediaDouble(clip, "contrast", 1),
-                    GetMediaDouble(clip, "saturation", 1),
-                    (int)Math.Round(GetMediaDouble(clip, "rotation_deg", 0)),
-                    GetMediaBoolean(clip, "flip_horizontal", false),
-                    GetPresentMediaProperties(clip)));
-            }
+          continue;
         }
 
-        return lanes;
+        JsonObject? data = clip["data"] as JsonObject;
+        string id = GetString(clip["id"]) ?? $"track-{trackIndex}-clip-{clipIndex}";
+        double start = GetDouble(clip["start_s"], 0);
+        double end = GetDouble(clip["end_s"], 1);
+        lanes.Add(new TimelineLaneDocument(
+            id,
+            GetString(data?["name"]) ?? GetString(clip["name"]) ?? trackName ?? $"Clip {lanes.Count + 1}",
+            trackType,
+            start,
+            end,
+            TimelineLaneOrigin.TrackClip,
+            trackIndex,
+            clip.DeepClone().AsObject(),
+            GetMediaString(clip, "source_path"),
+            GetMediaDouble(clip, "source_in_s", 0),
+            GetMediaDouble(clip, "source_out_s", Math.Max(0, end - start)),
+            GetMediaDouble(clip, "speed", 1),
+            GetMediaDouble(clip, "volume", 1),
+            GetMediaBoolean(clip, "muted", false),
+            GetMediaDouble(clip, "fade_in_s", 0),
+            GetMediaDouble(clip, "fade_out_s", 0),
+            GetMediaString(clip, "fit_mode", "contain"),
+            GetMediaDouble(clip, "opacity", 1),
+            GetMediaDouble(clip, "brightness", 0),
+            GetMediaDouble(clip, "contrast", 1),
+            GetMediaDouble(clip, "saturation", 1),
+            (int)Math.Round(GetMediaDouble(clip, "rotation_deg", 0)),
+            GetMediaBoolean(clip, "flip_horizontal", false),
+            GetPresentMediaProperties(clip)));
+      }
     }
 
-    private static List<TimelineLaneDocument> ProjectLayers(JsonArray layers)
+    return lanes;
+  }
+
+  private static List<TimelineLaneDocument> ProjectLayers(JsonArray layers)
+  {
+    List<TimelineLaneDocument> lanes = [];
+    for (int index = 0; index < layers.Count; index++)
     {
-        var lanes = new List<TimelineLaneDocument>();
-        for (var index = 0; index < layers.Count; index++)
-        {
-            if (layers[index] is not JsonObject layer)
-            {
-                continue;
-            }
+      if (layers[index] is not JsonObject layer)
+      {
+        continue;
+      }
 
-            var id = GetString(layer["id"]) ?? $"layer-{index}";
-            var start = GetDouble(layer["start_s"], 0);
-            var end = GetDouble(layer["end_s"], 1);
-            lanes.Add(new TimelineLaneDocument(
-                id,
-                GetString(layer["name"]) ?? $"Layer {index + 1}",
-                GetString(layer["type"]) ?? "video",
-                start,
-                end,
-                TimelineLaneOrigin.Layer,
-                -1,
-                layer.DeepClone().AsObject(),
-                GetMediaString(layer, "source_path"),
-                GetMediaDouble(layer, "source_in_s", 0),
-                GetMediaDouble(layer, "source_out_s", Math.Max(0, end - start)),
-                GetMediaDouble(layer, "speed", 1),
-                GetMediaDouble(layer, "volume", 1),
-                GetMediaBoolean(layer, "muted", false),
-                GetMediaDouble(layer, "fade_in_s", 0),
-                GetMediaDouble(layer, "fade_out_s", 0),
-                GetMediaString(layer, "fit_mode", "contain"),
-                GetMediaDouble(layer, "opacity", 1),
-                GetMediaDouble(layer, "brightness", 0),
-                GetMediaDouble(layer, "contrast", 1),
-                GetMediaDouble(layer, "saturation", 1),
-                (int)Math.Round(GetMediaDouble(layer, "rotation_deg", 0)),
-                GetMediaBoolean(layer, "flip_horizontal", false),
-                GetPresentMediaProperties(layer)));
-        }
-
-        return lanes;
+      string id = GetString(layer["id"]) ?? $"layer-{index}";
+      double start = GetDouble(layer["start_s"], 0);
+      double end = GetDouble(layer["end_s"], 1);
+      lanes.Add(new TimelineLaneDocument(
+          id,
+          GetString(layer["name"]) ?? $"Layer {index + 1}",
+          GetString(layer["type"]) ?? "video",
+          start,
+          end,
+          TimelineLaneOrigin.Layer,
+          -1,
+          layer.DeepClone().AsObject(),
+          GetMediaString(layer, "source_path"),
+          GetMediaDouble(layer, "source_in_s", 0),
+          GetMediaDouble(layer, "source_out_s", Math.Max(0, end - start)),
+          GetMediaDouble(layer, "speed", 1),
+          GetMediaDouble(layer, "volume", 1),
+          GetMediaBoolean(layer, "muted", false),
+          GetMediaDouble(layer, "fade_in_s", 0),
+          GetMediaDouble(layer, "fade_out_s", 0),
+          GetMediaString(layer, "fit_mode", "contain"),
+          GetMediaDouble(layer, "opacity", 1),
+          GetMediaDouble(layer, "brightness", 0),
+          GetMediaDouble(layer, "contrast", 1),
+          GetMediaDouble(layer, "saturation", 1),
+          (int)Math.Round(GetMediaDouble(layer, "rotation_deg", 0)),
+          GetMediaBoolean(layer, "flip_horizontal", false),
+          GetPresentMediaProperties(layer)));
     }
 
-    private static void RebuildTracks(JsonArray tracks, IReadOnlyList<TimelineLaneDocument> lanes)
+    return lanes;
+  }
+
+  private static void RebuildTracks(JsonArray tracks, IReadOnlyList<TimelineLaneDocument> lanes)
+  {
+    foreach (JsonNode? node in tracks)
     {
-        foreach (var node in tracks)
-        {
-            if (node is JsonObject track)
-            {
-                track["clips"] = new JsonArray();
-            }
-        }
-
-        var orderedLanes = OrderLanes(lanes);
-        var assignments = new Dictionary<TimelineLaneDocument, int>();
-        var claimedTrackTypes = new Dictionary<int, string>();
-
-        foreach (var requestedTrack in orderedLanes
-                     .Where(lane => lane.TrackIndex >= 0)
-                     .GroupBy(lane => lane.TrackIndex)
-                     .OrderBy(group => group.Key))
-        {
-            var requestedTrackIndex = requestedTrack.Key;
-            var firstLane = requestedTrack.First();
-            EnsureTrackIndex(tracks, requestedTrackIndex, firstLane.Type);
-            var track = tracks[requestedTrackIndex]!.AsObject();
-            var existingType = NormalizeType(GetString(track["type"]));
-            var desiredType = requestedTrack
-                .Select(lane => NormalizeType(lane.Type))
-                .FirstOrDefault(type => string.Equals(type, existingType, StringComparison.OrdinalIgnoreCase))
-                ?? NormalizeType(firstLane.Type);
-
-            claimedTrackTypes[requestedTrackIndex] = desiredType;
-            track["type"] = desiredType;
-            foreach (var lane in requestedTrack.Where(
-                         lane => string.Equals(
-                             NormalizeType(lane.Type),
-                             desiredType,
-                             StringComparison.OrdinalIgnoreCase)))
-            {
-                assignments[lane] = requestedTrackIndex;
-            }
-        }
-
-        foreach (var lane in orderedLanes.Where(lane => !assignments.ContainsKey(lane)))
-        {
-            var normalizedType = NormalizeType(lane.Type);
-            var trackIndex = FindOrCreateCompatibleTrack(tracks, claimedTrackTypes, normalizedType);
-            assignments[lane] = trackIndex;
-            claimedTrackTypes[trackIndex] = normalizedType;
-            tracks[trackIndex]!.AsObject()["type"] = normalizedType;
-        }
-
-        foreach (var group in orderedLanes
-                     .GroupBy(lane => assignments[lane])
-                     .OrderBy(group => group.Key))
-        {
-            var track = tracks[group.Key]!.AsObject();
-            var clips = track["clips"]!.AsArray();
-            foreach (var lane in group
-                         .OrderBy(lane => lane.StartSeconds)
-                         .ThenBy(lane => lane.EndSeconds)
-                         .ThenBy(lane => lane.StableId, StringComparer.Ordinal))
-            {
-                var clip = BuildLaneNode(lane);
-                var data = clip["data"] as JsonObject ?? [];
-                data["name"] = NormalizeName(lane.Name, lane.StableId);
-                clip["data"] = data;
-                clips.Add((JsonNode)clip);
-            }
-        }
+      if (node is JsonObject track)
+      {
+        track["clips"] = new JsonArray();
+      }
     }
 
-    private static void RebuildLayers(JsonArray layers, IReadOnlyList<TimelineLaneDocument> lanes)
+    IReadOnlyList<TimelineLaneDocument> orderedLanes = OrderLanes(lanes);
+    Dictionary<TimelineLaneDocument, int> assignments = [];
+    Dictionary<int, string> claimedTrackTypes = [];
+
+    foreach (IGrouping<int, TimelineLaneDocument>? requestedTrack in orderedLanes
+                 .Where(lane => lane.TrackIndex >= 0)
+                 .GroupBy(lane => lane.TrackIndex)
+                 .OrderBy(group => group.Key))
     {
-        layers.Clear();
-        foreach (var lane in lanes)
+      int requestedTrackIndex = requestedTrack.Key;
+      TimelineLaneDocument firstLane = requestedTrack.First();
+      EnsureTrackIndex(tracks, requestedTrackIndex, firstLane.Type);
+      JsonObject track = tracks[requestedTrackIndex]!.AsObject();
+      string existingType = NormalizeType(GetString(track["type"]));
+      string desiredType = requestedTrack
+          .Select(lane => NormalizeType(lane.Type))
+          .FirstOrDefault(type => string.Equals(type, existingType, StringComparison.OrdinalIgnoreCase))
+          ?? NormalizeType(firstLane.Type);
+
+      claimedTrackTypes[requestedTrackIndex] = desiredType;
+      track["type"] = desiredType;
+      foreach (TimelineLaneDocument? lane in requestedTrack.Where(
+                   lane => string.Equals(
+                       NormalizeType(lane.Type),
+                       desiredType,
+                       StringComparison.OrdinalIgnoreCase)))
+      {
+        assignments[lane] = requestedTrackIndex;
+      }
+    }
+
+    foreach (TimelineLaneDocument? lane in orderedLanes.Where(lane => !assignments.ContainsKey(lane)))
+    {
+      string normalizedType = NormalizeType(lane.Type);
+      int trackIndex = FindOrCreateCompatibleTrack(tracks, claimedTrackTypes, normalizedType);
+      assignments[lane] = trackIndex;
+      claimedTrackTypes[trackIndex] = normalizedType;
+      tracks[trackIndex]!.AsObject()["type"] = normalizedType;
+    }
+
+    foreach (IGrouping<int, TimelineLaneDocument>? group in orderedLanes
+                 .GroupBy(lane => assignments[lane])
+                 .OrderBy(group => group.Key))
+    {
+      JsonObject track = tracks[group.Key]!.AsObject();
+      JsonArray clips = track["clips"]!.AsArray();
+      foreach (TimelineLaneDocument? lane in group
+                   .OrderBy(lane => lane.StartSeconds)
+                   .ThenBy(lane => lane.EndSeconds)
+                   .ThenBy(lane => lane.StableId, StringComparer.Ordinal))
+      {
+        JsonObject clip = BuildLaneNode(lane);
+        JsonObject data = clip["data"] as JsonObject ?? [];
+        data["name"] = NormalizeName(lane.Name, lane.StableId);
+        clip["data"] = data;
+        clips.Add((JsonNode)clip);
+      }
+    }
+  }
+
+  private static void RebuildLayers(JsonArray layers, IReadOnlyList<TimelineLaneDocument> lanes)
+  {
+    layers.Clear();
+    foreach (TimelineLaneDocument lane in lanes)
+    {
+      JsonObject layer = BuildLaneNode(lane);
+      layer["name"] = NormalizeName(lane.Name, lane.StableId);
+      layer["type"] = NormalizeType(lane.Type);
+      layers.Add((JsonNode)layer);
+    }
+  }
+
+  private static JsonObject BuildLaneNode(TimelineLaneDocument lane)
+  {
+    JsonObject node = lane.Source.DeepClone().AsObject();
+    node["id"] = lane.StableId;
+    node["start_s"] = lane.StartSeconds;
+    node["end_s"] = lane.EndSeconds;
+    WriteMediaProperties(node, lane);
+    return node;
+  }
+
+  private static TimelineLaneDocument CloneLane(
+      TimelineLaneDocument lane,
+      bool createNewIdentity = false)
+  {
+    string stableId = createNewIdentity ? Guid.NewGuid().ToString("N") : lane.StableId;
+    return new TimelineLaneDocument(
+        stableId,
+        lane.Name,
+        lane.Type,
+        lane.StartSeconds,
+        lane.EndSeconds,
+        lane.Origin,
+        lane.TrackIndex,
+        lane.Source.DeepClone().AsObject(),
+        lane.SourcePath,
+        lane.SourceInSeconds,
+        lane.SourceOutSeconds,
+        lane.Speed,
+        lane.Volume,
+        lane.Muted,
+        lane.FadeInSeconds,
+        lane.FadeOutSeconds,
+        lane.FitMode,
+        lane.Opacity,
+        lane.Brightness,
+        lane.Contrast,
+        lane.Saturation,
+        lane.RotationDegrees,
+        lane.FlipHorizontal,
+        lane.PresentMediaProperties);
+  }
+
+  private static void EnsureTrackIndex(JsonArray tracks, int trackIndex, string type)
+  {
+    while (tracks.Count <= trackIndex)
+    {
+      string normalizedType = NormalizeType(type);
+      tracks.Add((JsonNode)new JsonObject
+      {
+        ["id"] = $"track-{Guid.NewGuid():N}",
+        ["name"] = normalizedType.Equals("audio", StringComparison.OrdinalIgnoreCase) ? "Audio" : "Video",
+        ["type"] = normalizedType,
+        ["clips"] = new JsonArray()
+      });
+    }
+  }
+
+  private static int FindOrCreateCompatibleTrack(
+      JsonArray tracks,
+      IReadOnlyDictionary<int, string> claimedTrackTypes,
+      string type)
+  {
+    string normalizedType = NormalizeType(type);
+    for (int index = 0; index < tracks.Count; index++)
+    {
+      if (claimedTrackTypes.TryGetValue(index, out string? claimedType))
+      {
+        if (string.Equals(claimedType, normalizedType, StringComparison.OrdinalIgnoreCase))
         {
-            var layer = BuildLaneNode(lane);
-            layer["name"] = NormalizeName(lane.Name, lane.StableId);
-            layer["type"] = NormalizeType(lane.Type);
-            layers.Add((JsonNode)layer);
-        }
-    }
-
-    private static JsonObject BuildLaneNode(TimelineLaneDocument lane)
-    {
-        var node = lane.Source.DeepClone().AsObject();
-        node["id"] = lane.StableId;
-        node["start_s"] = lane.StartSeconds;
-        node["end_s"] = lane.EndSeconds;
-        WriteMediaProperties(node, lane);
-        return node;
-    }
-
-    private static TimelineLaneDocument CloneLane(
-        TimelineLaneDocument lane,
-        bool createNewIdentity = false)
-    {
-        var stableId = createNewIdentity ? Guid.NewGuid().ToString("N") : lane.StableId;
-        return new TimelineLaneDocument(
-            stableId,
-            lane.Name,
-            lane.Type,
-            lane.StartSeconds,
-            lane.EndSeconds,
-            lane.Origin,
-            lane.TrackIndex,
-            lane.Source.DeepClone().AsObject(),
-            lane.SourcePath,
-            lane.SourceInSeconds,
-            lane.SourceOutSeconds,
-            lane.Speed,
-            lane.Volume,
-            lane.Muted,
-            lane.FadeInSeconds,
-            lane.FadeOutSeconds,
-            lane.FitMode,
-            lane.Opacity,
-            lane.Brightness,
-            lane.Contrast,
-            lane.Saturation,
-            lane.RotationDegrees,
-            lane.FlipHorizontal,
-            lane.PresentMediaProperties);
-    }
-
-    private static void EnsureTrackIndex(JsonArray tracks, int trackIndex, string type)
-    {
-        while (tracks.Count <= trackIndex)
-        {
-            var normalizedType = NormalizeType(type);
-            tracks.Add((JsonNode)new JsonObject
-            {
-                ["id"] = $"track-{Guid.NewGuid():N}",
-                ["name"] = normalizedType.Equals("audio", StringComparison.OrdinalIgnoreCase) ? "Audio" : "Video",
-                ["type"] = normalizedType,
-                ["clips"] = new JsonArray()
-            });
-        }
-    }
-
-    private static int FindOrCreateCompatibleTrack(
-        JsonArray tracks,
-        IReadOnlyDictionary<int, string> claimedTrackTypes,
-        string type)
-    {
-        var normalizedType = NormalizeType(type);
-        for (var index = 0; index < tracks.Count; index++)
-        {
-            if (claimedTrackTypes.TryGetValue(index, out var claimedType))
-            {
-                if (string.Equals(claimedType, normalizedType, StringComparison.OrdinalIgnoreCase))
-                {
-                    return index;
-                }
-
-                continue;
-            }
-
-            if (tracks[index] is JsonObject track &&
-                string.Equals(
-                    NormalizeType(GetString(track["type"])),
-                    normalizedType,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return index;
-            }
+          return index;
         }
 
-        EnsureTrackIndex(tracks, tracks.Count, normalizedType);
-        return tracks.Count - 1;
+        continue;
+      }
+
+      if (tracks[index] is JsonObject track &&
+          string.Equals(
+              NormalizeType(GetString(track["type"])),
+              normalizedType,
+              StringComparison.OrdinalIgnoreCase))
+      {
+        return index;
+      }
     }
 
-    private static bool IsTimedMedia(TimelineLaneDocument lane) =>
-        string.Equals(lane.Type, "video", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(lane.Type, "audio", StringComparison.OrdinalIgnoreCase);
+    EnsureTrackIndex(tracks, tracks.Count, normalizedType);
+    return tracks.Count - 1;
+  }
 
-    private static HashSet<string> GetPresentMediaProperties(JsonObject source)
+  private static bool IsTimedMedia(TimelineLaneDocument lane)
+  {
+    return string.Equals(lane.Type, "video", StringComparison.OrdinalIgnoreCase) ||
+      string.Equals(lane.Type, "audio", StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static HashSet<string> GetPresentMediaProperties(JsonObject source)
+  {
+    HashSet<string> result = new(StringComparer.Ordinal);
+    foreach (string propertyName in MediaPropertyNames)
     {
-        var result = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var propertyName in MediaPropertyNames)
-        {
-            if (source.ContainsKey(propertyName) ||
-                source["data"] is JsonObject data && data.ContainsKey(propertyName))
-            {
-                result.Add(propertyName);
-            }
-        }
-
-        return result;
+      if (source.ContainsKey(propertyName) ||
+          (source["data"] is JsonObject data && data.ContainsKey(propertyName)))
+      {
+        _ = result.Add(propertyName);
+      }
     }
 
-    private static JsonNode? GetMediaNode(JsonObject source, string propertyName)
-    {
-        if (source.TryGetPropertyValue(propertyName, out var direct))
-        {
-            return direct;
-        }
+    return result;
+  }
 
-        return source["data"] is JsonObject data &&
-               data.TryGetPropertyValue(propertyName, out var nested)
+  private static JsonNode? GetMediaNode(JsonObject source, string propertyName)
+  {
+    return source.TryGetPropertyValue(propertyName, out JsonNode? direct)
+          ? direct
+          : source["data"] is JsonObject data &&
+               data.TryGetPropertyValue(propertyName, out JsonNode? nested)
             ? nested
             : null;
-    }
+  }
 
-    private static string GetMediaString(
+  private static string GetMediaString(
         JsonObject source,
         string propertyName,
-        string fallback = "") =>
-        GetString(GetMediaNode(source, propertyName)) ?? fallback;
+        string fallback = "")
+  {
+    return GetString(GetMediaNode(source, propertyName)) ?? fallback;
+  }
 
-    private static double GetMediaDouble(JsonObject source, string propertyName, double fallback) =>
-        GetDouble(GetMediaNode(source, propertyName), fallback);
+  private static double GetMediaDouble(JsonObject source, string propertyName, double fallback)
+  {
+    return GetDouble(GetMediaNode(source, propertyName), fallback);
+  }
 
-    private static bool GetMediaBoolean(JsonObject source, string propertyName, bool fallback)
+  private static bool GetMediaBoolean(JsonObject source, string propertyName, bool fallback)
+  {
+    JsonNode? node = GetMediaNode(source, propertyName);
+    return node is JsonValue value && value.TryGetValue<bool>(out bool result) ? result : fallback;
+  }
+
+  private static void WriteMediaProperties(JsonObject source, TimelineLaneDocument lane)
+  {
+    foreach (string propertyName in lane.PresentMediaProperties)
     {
-        var node = GetMediaNode(source, propertyName);
-        return node is JsonValue value && value.TryGetValue<bool>(out var result) ? result : fallback;
+      JsonNode? value = propertyName switch
+      {
+        "source_path" => JsonValue.Create(lane.SourcePath),
+        "source_in_s" => JsonValue.Create(Math.Max(0, lane.SourceInSeconds)),
+        "source_out_s" => JsonValue.Create(Math.Max(0, lane.SourceOutSeconds)),
+        "speed" => JsonValue.Create(Math.Clamp(lane.Speed, 0.25, 4)),
+        "volume" => JsonValue.Create(Math.Clamp(lane.Volume, 0, 2)),
+        "muted" => JsonValue.Create(lane.Muted),
+        "fade_in_s" => JsonValue.Create(Math.Max(0, lane.FadeInSeconds)),
+        "fade_out_s" => JsonValue.Create(Math.Max(0, lane.FadeOutSeconds)),
+        "fit_mode" => JsonValue.Create(lane.FitMode),
+        "opacity" => JsonValue.Create(Math.Clamp(lane.Opacity, 0, 1)),
+        "brightness" => JsonValue.Create(Math.Clamp(lane.Brightness, -1, 1)),
+        "contrast" => JsonValue.Create(Math.Clamp(lane.Contrast, 0, 2)),
+        "saturation" => JsonValue.Create(Math.Clamp(lane.Saturation, 0, 3)),
+        "rotation_deg" => JsonValue.Create(lane.RotationDegrees),
+        "flip_horizontal" => JsonValue.Create(lane.FlipHorizontal),
+        _ => null
+      };
+      if (value is null)
+      {
+        continue;
+      }
+
+      bool wroteValue = false;
+      if (source.ContainsKey(propertyName))
+      {
+        source[propertyName] = value.DeepClone();
+        wroteValue = true;
+      }
+
+      if (source["data"] is JsonObject existingData && existingData.ContainsKey(propertyName))
+      {
+        existingData[propertyName] = value.DeepClone();
+        wroteValue = true;
+      }
+
+      if (!wroteValue)
+      {
+        JsonObject data = source["data"] as JsonObject ?? [];
+        data[propertyName] = value;
+        source["data"] = data;
+      }
+    }
+  }
+
+  private static string NormalizeName(string? value, string fallback)
+  {
+    return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+  }
+
+  private static string NormalizeType(string? value)
+  {
+    return string.IsNullOrWhiteSpace(value) ? "video" : value.Trim().ToLowerInvariant();
+  }
+
+  private static string? GetString(JsonNode? node)
+  {
+    return node is JsonValue value && value.TryGetValue<string>(out string? result) ? result : null;
+  }
+
+  private static double GetDouble(JsonNode? node, double fallback)
+  {
+    return node is not JsonValue value
+      ? fallback
+      : value.TryGetValue<double>(out double number) && double.IsFinite(number)
+          ? number
+          : value.TryGetValue<int>(out int integer) ? integer : fallback;
+  }
+
+  private static void ValidateTimelineDuration(double timelineDurationSeconds)
+  {
+    if (!double.IsFinite(timelineDurationSeconds) ||
+        timelineDurationSeconds < MinimumDurationSeconds)
+    {
+      throw new ArgumentOutOfRangeException(
+          nameof(timelineDurationSeconds),
+          "Timeline duration must be at least 0.05 seconds.");
+    }
+  }
+
+  private static void ValidateTimes(double startSeconds, double endSeconds)
+  {
+    if (!double.IsFinite(startSeconds) || startSeconds < 0)
+    {
+      throw new ArgumentOutOfRangeException(
+          nameof(startSeconds),
+          "Timeline start must be a finite non-negative value.");
     }
 
-    private static void WriteMediaProperties(JsonObject source, TimelineLaneDocument lane)
+    if (!double.IsFinite(endSeconds) || endSeconds <= startSeconds)
     {
-        foreach (var propertyName in lane.PresentMediaProperties)
-        {
-            JsonNode? value = propertyName switch
-            {
-                "source_path" => JsonValue.Create(lane.SourcePath),
-                "source_in_s" => JsonValue.Create(Math.Max(0, lane.SourceInSeconds)),
-                "source_out_s" => JsonValue.Create(Math.Max(0, lane.SourceOutSeconds)),
-                "speed" => JsonValue.Create(Math.Clamp(lane.Speed, 0.25, 4)),
-                "volume" => JsonValue.Create(Math.Clamp(lane.Volume, 0, 2)),
-                "muted" => JsonValue.Create(lane.Muted),
-                "fade_in_s" => JsonValue.Create(Math.Max(0, lane.FadeInSeconds)),
-                "fade_out_s" => JsonValue.Create(Math.Max(0, lane.FadeOutSeconds)),
-                "fit_mode" => JsonValue.Create(lane.FitMode),
-                "opacity" => JsonValue.Create(Math.Clamp(lane.Opacity, 0, 1)),
-                "brightness" => JsonValue.Create(Math.Clamp(lane.Brightness, -1, 1)),
-                "contrast" => JsonValue.Create(Math.Clamp(lane.Contrast, 0, 2)),
-                "saturation" => JsonValue.Create(Math.Clamp(lane.Saturation, 0, 3)),
-                "rotation_deg" => JsonValue.Create(lane.RotationDegrees),
-                "flip_horizontal" => JsonValue.Create(lane.FlipHorizontal),
-                _ => null
-            };
-            if (value is null)
-            {
-                continue;
-            }
-
-            var wroteValue = false;
-            if (source.ContainsKey(propertyName))
-            {
-                source[propertyName] = value.DeepClone();
-                wroteValue = true;
-            }
-
-            if (source["data"] is JsonObject existingData && existingData.ContainsKey(propertyName))
-            {
-                existingData[propertyName] = value.DeepClone();
-                wroteValue = true;
-            }
-
-            if (!wroteValue)
-            {
-                var data = source["data"] as JsonObject ?? [];
-                data[propertyName] = value;
-                source["data"] = data;
-            }
-        }
+      throw new ArgumentOutOfRangeException(
+          nameof(endSeconds),
+          "Timeline end must be finite and greater than its start.");
     }
-
-    private static string NormalizeName(string? value, string fallback) =>
-        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
-
-    private static string NormalizeType(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? "video" : value.Trim().ToLowerInvariant();
-
-    private static string? GetString(JsonNode? node) =>
-        node is JsonValue value && value.TryGetValue<string>(out var result) ? result : null;
-
-    private static double GetDouble(JsonNode? node, double fallback)
-    {
-        if (node is not JsonValue value)
-        {
-            return fallback;
-        }
-
-        if (value.TryGetValue<double>(out var number) && double.IsFinite(number))
-        {
-            return number;
-        }
-
-        return value.TryGetValue<int>(out var integer) ? integer : fallback;
-    }
-
-    private static void ValidateTimelineDuration(double timelineDurationSeconds)
-    {
-        if (!double.IsFinite(timelineDurationSeconds) ||
-            timelineDurationSeconds < MinimumDurationSeconds)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(timelineDurationSeconds),
-                "Timeline duration must be at least 0.05 seconds.");
-        }
-    }
-
-    private static void ValidateTimes(double startSeconds, double endSeconds)
-    {
-        if (!double.IsFinite(startSeconds) || startSeconds < 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(startSeconds),
-                "Timeline start must be a finite non-negative value.");
-        }
-
-        if (!double.IsFinite(endSeconds) || endSeconds <= startSeconds)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(endSeconds),
-                "Timeline end must be finite and greater than its start.");
-        }
-    }
+  }
 }

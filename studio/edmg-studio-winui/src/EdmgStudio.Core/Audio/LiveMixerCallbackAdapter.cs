@@ -2,8 +2,8 @@ namespace EdmgStudio.Core.Audio;
 
 public enum LiveMixerCallbackState
 {
-    Ready,
-    Failed
+  Ready,
+  Failed
 }
 
 public readonly record struct LiveMixerQuantumResult(
@@ -18,155 +18,155 @@ public readonly record struct LiveMixerQuantumResult(
 /// </summary>
 public sealed class LiveMixerCallbackAdapter
 {
-    private DeterministicAudioCallbackHarness _harness;
-    private readonly MeterSlot[] _meterSlots;
-    private readonly int _meterIntervalSamples;
-    private long _nextMeterSample;
-    private long _publishedSequence;
-    private int _writeSlot;
-    private Exception? _failure;
+  private DeterministicAudioCallbackHarness _harness;
+  private readonly MeterSlot[] _meterSlots;
+  private readonly int _meterIntervalSamples;
+  private long _nextMeterSample;
+  private long _publishedSequence;
+  private int _writeSlot;
+  private Exception? _failure;
 
-    public LiveMixerCallbackAdapter(AudioCallbackSnapshot snapshot, int meterIntervalSamples)
+  public LiveMixerCallbackAdapter(AudioCallbackSnapshot snapshot, int meterIntervalSamples)
+  {
+    ArgumentNullException.ThrowIfNull(snapshot);
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(meterIntervalSamples);
+    _harness = new(snapshot);
+    _meterIntervalSamples = meterIntervalSamples;
+    int meterCount = snapshot.Mixer.ProcessingOrder.Length;
+    _meterSlots = [new(meterCount), new(meterCount), new(meterCount)];
+  }
+
+  public LiveMixerCallbackState State => Volatile.Read(ref _failure) is null
+      ? LiveMixerCallbackState.Ready
+      : LiveMixerCallbackState.Failed;
+
+  public Exception? Failure => Volatile.Read(ref _failure);
+
+  public void Publish(AudioCallbackSnapshot snapshot)
+  {
+    ArgumentNullException.ThrowIfNull(snapshot);
+    if (snapshot.Mixer.ProcessingOrder.Length > _meterSlots[0].Meters.Length)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(meterIntervalSamples);
-        _harness = new(snapshot);
-        _meterIntervalSamples = meterIntervalSamples;
-        int meterCount = snapshot.Mixer.ProcessingOrder.Length;
-        _meterSlots = [new(meterCount), new(meterCount), new(meterCount)];
+      throw new ArgumentException("A published snapshot cannot exceed the adapter's preallocated meter capacity.", nameof(snapshot));
+    }
+    Volatile.Read(ref _harness).Publish(snapshot);
+  }
+
+  public LiveMixerQuantumResult ProcessQuantum(
+      ReadOnlySpan<MixerInputBlock> inputs,
+      Span<float> interleavedStereoOutput,
+      long startSample,
+      int frames,
+      bool transportDiscontinuity = false)
+  {
+    if (Volatile.Read(ref _failure) is not null)
+    {
+      Silence(interleavedStereoOutput, frames);
+      return new(default, LiveMixerCallbackState.Failed, false);
     }
 
-    public LiveMixerCallbackState State => Volatile.Read(ref _failure) is null
-        ? LiveMixerCallbackState.Ready
-        : LiveMixerCallbackState.Failed;
-
-    public Exception? Failure => Volatile.Read(ref _failure);
-
-    public void Publish(AudioCallbackSnapshot snapshot)
+    try
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        if (snapshot.Mixer.ProcessingOrder.Length > _meterSlots[0].Meters.Length)
-        {
-            throw new ArgumentException("A published snapshot cannot exceed the adapter's preallocated meter capacity.", nameof(snapshot));
-        }
-        Volatile.Read(ref _harness).Publish(snapshot);
+      DeterministicAudioCallbackHarness harness = Volatile.Read(ref _harness);
+      AudioCallbackResult result = harness.ProcessBlock(
+          inputs, interleavedStereoOutput, startSample, frames, transportDiscontinuity);
+      bool publishMeters = checked(startSample + frames) >= _nextMeterSample;
+      if (publishMeters)
+      {
+        PublishMeters(harness, result);
+        _nextMeterSample = checked(startSample + _meterIntervalSamples);
+      }
+      return new(result, LiveMixerCallbackState.Ready, publishMeters);
     }
-
-    public LiveMixerQuantumResult ProcessQuantum(
-        ReadOnlySpan<MixerInputBlock> inputs,
-        Span<float> interleavedStereoOutput,
-        long startSample,
-        int frames,
-        bool transportDiscontinuity = false)
+    catch (Exception exception)
     {
-        if (Volatile.Read(ref _failure) is not null)
-        {
-            Silence(interleavedStereoOutput, frames);
-            return new(default, LiveMixerCallbackState.Failed, false);
-        }
-
-        try
-        {
-            DeterministicAudioCallbackHarness harness = Volatile.Read(ref _harness);
-            AudioCallbackResult result = harness.ProcessBlock(
-                inputs, interleavedStereoOutput, startSample, frames, transportDiscontinuity);
-            bool publishMeters = checked(startSample + frames) >= _nextMeterSample;
-            if (publishMeters)
-            {
-                PublishMeters(harness, result);
-                _nextMeterSample = checked(startSample + _meterIntervalSamples);
-            }
-            return new(result, LiveMixerCallbackState.Ready, publishMeters);
-        }
-        catch (Exception exception)
-        {
-            Silence(interleavedStereoOutput, frames);
-            Volatile.Write(ref _failure, exception);
-            return new(default, LiveMixerCallbackState.Failed, false);
-        }
+      Silence(interleavedStereoOutput, frames);
+      Volatile.Write(ref _failure, exception);
+      return new(default, LiveMixerCallbackState.Failed, false);
     }
+  }
 
-    public bool TryCopyMeters(
-        Span<MixerMeterSnapshot> destination,
-        out int count,
-        out long samplePosition,
-        ref long lastSequence)
+  public bool TryCopyMeters(
+      Span<MixerMeterSnapshot> destination,
+      out int count,
+      out long samplePosition,
+      ref long lastSequence)
+  {
+    for (int attempt = 0; attempt < _meterSlots.Length; attempt++)
     {
-        for (int attempt = 0; attempt < _meterSlots.Length; attempt++)
-        {
-            long sequence = Volatile.Read(ref _publishedSequence);
-            if (sequence == 0 || sequence == lastSequence)
-            {
-                count = 0;
-                samplePosition = 0;
-                return false;
-            }
-
-            MeterSlot slot = _meterSlots[(int)((sequence - 1) % _meterSlots.Length)];
-            long before = Volatile.Read(ref slot.Version);
-            if ((before & 1) != 0)
-            {
-                continue;
-            }
-            int copied = Math.Min(destination.Length, slot.Count);
-            slot.Meters.AsSpan(0, copied).CopyTo(destination);
-            long position = slot.SamplePosition;
-            long after = Volatile.Read(ref slot.Version);
-            if (before != after || (after & 1) != 0 || sequence != Volatile.Read(ref _publishedSequence))
-            {
-                continue;
-            }
-
-            count = copied;
-            samplePosition = position;
-            lastSequence = sequence;
-            return true;
-        }
-
+      long sequence = Volatile.Read(ref _publishedSequence);
+      if (sequence == 0 || sequence == lastSequence)
+      {
         count = 0;
         samplePosition = 0;
         return false;
+      }
+
+      MeterSlot slot = _meterSlots[(int)((sequence - 1) % _meterSlots.Length)];
+      long before = Volatile.Read(ref slot.Version);
+      if ((before & 1) != 0)
+      {
+        continue;
+      }
+      int copied = Math.Min(destination.Length, slot.Count);
+      slot.Meters.AsSpan(0, copied).CopyTo(destination);
+      long position = slot.SamplePosition;
+      long after = Volatile.Read(ref slot.Version);
+      if (before != after || (after & 1) != 0 || sequence != Volatile.Read(ref _publishedSequence))
+      {
+        continue;
+      }
+
+      count = copied;
+      samplePosition = position;
+      lastSequence = sequence;
+      return true;
     }
 
-    public void Recover(AudioCallbackSnapshot snapshot)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        if (snapshot.Mixer.ProcessingOrder.Length > _meterSlots[0].Meters.Length)
-        {
-            throw new ArgumentException("Recovery cannot exceed the adapter's preallocated meter capacity.", nameof(snapshot));
-        }
-        var replacement = new DeterministicAudioCallbackHarness(snapshot);
-        Volatile.Write(ref _harness, replacement);
-        _nextMeterSample = 0;
-        Volatile.Write(ref _failure, null);
-    }
+    count = 0;
+    samplePosition = 0;
+    return false;
+  }
 
-    private void PublishMeters(DeterministicAudioCallbackHarness harness, AudioCallbackResult result)
+  public void Recover(AudioCallbackSnapshot snapshot)
+  {
+    ArgumentNullException.ThrowIfNull(snapshot);
+    if (snapshot.Mixer.ProcessingOrder.Length > _meterSlots[0].Meters.Length)
     {
-        MeterSlot slot = _meterSlots[_writeSlot];
-        Interlocked.Increment(ref slot.Version);
-        slot.Count = harness.CopyMeterSnapshots(slot.Meters);
-        slot.SamplePosition = result.StartSample;
-        Interlocked.Increment(ref slot.Version);
-        long sequence = Interlocked.Increment(ref _publishedSequence);
-        _writeSlot = (int)(sequence % _meterSlots.Length);
+      throw new ArgumentException("Recovery cannot exceed the adapter's preallocated meter capacity.", nameof(snapshot));
     }
+    DeterministicAudioCallbackHarness replacement = new(snapshot);
+    Volatile.Write(ref _harness, replacement);
+    _nextMeterSample = 0;
+    Volatile.Write(ref _failure, null);
+  }
 
-    private static void Silence(Span<float> output, int frames)
-    {
-        if (frames <= 0)
-        {
-            return;
-        }
-        int samples = Math.Min(output.Length, checked(frames * 2));
-        output[..samples].Clear();
-    }
+  private void PublishMeters(DeterministicAudioCallbackHarness harness, AudioCallbackResult result)
+  {
+    MeterSlot slot = _meterSlots[_writeSlot];
+    _ = Interlocked.Increment(ref slot.Version);
+    slot.Count = harness.CopyMeterSnapshots(slot.Meters);
+    slot.SamplePosition = result.StartSample;
+    _ = Interlocked.Increment(ref slot.Version);
+    long sequence = Interlocked.Increment(ref _publishedSequence);
+    _writeSlot = (int)(sequence % _meterSlots.Length);
+  }
 
-    private sealed class MeterSlot(int capacity)
+  private static void Silence(Span<float> output, int frames)
+  {
+    if (frames <= 0)
     {
-        public readonly MixerMeterSnapshot[] Meters = new MixerMeterSnapshot[capacity];
-        public long Version;
-        public long SamplePosition;
-        public int Count;
+      return;
     }
+    int samples = Math.Min(output.Length, checked(frames * 2));
+    output[..samples].Clear();
+  }
+
+  private sealed class MeterSlot(int capacity)
+  {
+    public readonly MixerMeterSnapshot[] Meters = new MixerMeterSnapshot[capacity];
+    public long Version;
+    public long SamplePosition;
+    public int Count;
+  }
 }

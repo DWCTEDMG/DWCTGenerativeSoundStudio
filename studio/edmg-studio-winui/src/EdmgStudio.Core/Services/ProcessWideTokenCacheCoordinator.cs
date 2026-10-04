@@ -2,44 +2,56 @@ namespace EdmgStudio.Core.Services;
 
 internal sealed class ProcessWideTokenCacheCoordinator
 {
-    private long _version;
+  private long _version;
 
-    public TokenCacheEntry CreateEntry() => new(this);
+  public TokenCacheEntry CreateEntry()
+  {
+    return new(this);
+  }
 
-    public void Invalidate() => Interlocked.Increment(ref _version);
+  public void Invalidate()
+  {
+    _ = Interlocked.Increment(ref _version);
+  }
 
-    internal long CurrentVersion => Volatile.Read(ref _version);
+  internal long CurrentVersion => Volatile.Read(ref _version);
 }
 
 internal sealed class TokenCacheEntry(ProcessWideTokenCacheCoordinator coordinator)
 {
-    private readonly ProcessWideTokenCacheCoordinator _coordinator = coordinator;
-    private string? _value;
-    private long _observedVersion = -1;
-    private int _hasValue;
+  private readonly ProcessWideTokenCacheCoordinator _coordinator = coordinator;
+  private string? _value;
+  private long _observedVersion = -1;
+  private int _hasValue;
 
-    public bool TryGet(out string? value)
+  public bool TryGet(out string? value)
+  {
+    long currentVersion = _coordinator.CurrentVersion;
+    if (Volatile.Read(ref _hasValue) != 0 && Volatile.Read(ref _observedVersion) == currentVersion)
     {
-        long currentVersion = _coordinator.CurrentVersion;
-        if (Volatile.Read(ref _hasValue) != 0 && Volatile.Read(ref _observedVersion) == currentVersion)
-        {
-            value = _value;
-            return true;
-        }
-
-        value = null;
-        return false;
+      value = _value;
+      return true;
     }
 
-    public void Store(string? value)
-        => StoreIfCurrent(value, _coordinator.CurrentVersion);
+    value = null;
+    return false;
+  }
 
-    public bool StoreIfCurrent(string? value, long version)
+  public void Store(string? value)
+  {
+    _ = StoreIfCurrent(value, _coordinator.CurrentVersion);
+  }
+
+  public bool StoreIfCurrent(string? value, long version)
+  {
+    if (_coordinator.CurrentVersion != version)
     {
-        if (_coordinator.CurrentVersion != version) return false;
-        _value = value;
-        Volatile.Write(ref _observedVersion, version);
-        Volatile.Write(ref _hasValue, 1);
-        return _coordinator.CurrentVersion == version;
+      return false;
     }
+
+    _value = value;
+    Volatile.Write(ref _observedVersion, version);
+    Volatile.Write(ref _hasValue, 1);
+    return _coordinator.CurrentVersion == version;
+  }
 }

@@ -1,10 +1,10 @@
-using System.Collections.ObjectModel;
-using System.Text.Json;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Collections.ObjectModel;
+using System.Text.Json;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 
@@ -12,739 +12,802 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
 {
-    public bool HasUnsavedEdits => _keyframesDirty;
-    private static readonly StudioJsonContext _indentedJsonContext =
+  public bool HasUnsavedEdits { get; private set; }
+  private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
-    private static readonly SemaphoreSlim _localStateWriteLock = new(1, 1);
-    private readonly ObservableCollection<ReactiveKeyframeEditor> _keyframes = [];
-    private readonly ObservableCollection<ReactiveMapping> _mappings = [];
-    private readonly string[] _mappingPresets = ["cinematic", "psychedelic", "ambient", "percussive"];
-    private readonly ObservableCollection<string> _presetNames = [];
-    private readonly List<ReactivePreset> _savedPresets = [];
-    private IReadOnlyList<ProjectDto> _projects = [];
-    private ProjectDto? _project;
-    private MusicGraphResponse? _musicGraph;
-    private LiveCuesResponse? _liveCues;
-    private LiveAssetsResponse? _liveAssets;
-    private JsonElement? _timeline;
-    private ReactiveLabApplyRequest _draftRequest = new();
-    private ReactivePreset _currentPreset = new();
-    private CancellationTokenSource? _operationCancellation;
-    private string? _activeProjectId;
-    private int _selectedVariantIndex;
-    private bool _isUpdatingEditor;
-    private bool _isSynchronizingProject;
-    private bool _isLoadingPreset;
-    private bool _isSessionSubscribed;
-    private bool _pageLoaded;
-    private bool _isOperationBusy;
-    private bool _isUpdatingKeyframe;
-    private bool _keyframesDirty;
-    private string? _workflowDraftId;
-    private string _workflowStatus = "not_prepared";
-    private long _workflowRevision;
-    private PlanDto? _workflowPlan;
-    private bool _localStateWriteAllowed = true;
+  private static readonly SemaphoreSlim _localStateWriteLock = new(1, 1);
+  private readonly string[] _mappingPresets = ["cinematic", "psychedelic", "ambient", "percussive"];
+  private readonly ObservableCollection<string> _presetNames = [];
+  private readonly List<ReactivePreset> _savedPresets = [];
+  private IReadOnlyList<ProjectDto> _projects = [];
+  private ProjectDto? _project;
+  private MusicGraphResponse? _musicGraph;
+  private LiveCuesResponse? _liveCues;
+  private LiveAssetsResponse? _liveAssets;
+  private JsonElement? _timeline;
+  private ReactiveLabApplyRequest _draftRequest = new();
+  private ReactivePreset _currentPreset = new();
+  private CancellationTokenSource? _operationCancellation;
+  private string? _activeProjectId;
+  private int _selectedVariantIndex;
+  private bool _isUpdatingEditor;
+  private bool _isSynchronizingProject;
+  private bool _isLoadingPreset;
+  private bool _isSessionSubscribed;
+  private bool _pageLoaded;
+  private bool _isOperationBusy;
+  private bool _isUpdatingKeyframe;
+  private string? _workflowDraftId;
+  private string _workflowStatus = "not_prepared";
+  private long _workflowRevision;
+  private PlanDto? _workflowPlan;
+  private bool _localStateWriteAllowed = true;
 
-    public ObservableCollection<ReactiveMapping> Mappings => _mappings;
-    public ObservableCollection<ReactiveKeyframeEditor> Keyframes => _keyframes;
+  public ObservableCollection<ReactiveMapping> Mappings { get; } = [];
+  public ObservableCollection<ReactiveKeyframeEditor> Keyframes { get; } = [];
 
-    public ReactiveLabPage()
+  public ReactiveLabPage()
+  {
+    InitializeComponent();
+    InitializeOptions();
+    Loaded += ReactiveLabPage_Loaded;
+    Unloaded += ReactiveLabPage_Unloaded;
+  }
+
+  private void InitializeOptions()
+  {
+    SourceSignalComboBox.ItemsSource = new[]
     {
-        InitializeComponent();
-        InitializeOptions();
-        Loaded += ReactiveLabPage_Loaded;
-        Unloaded += ReactiveLabPage_Unloaded;
-    }
-
-    private void InitializeOptions()
-    {
-        SourceSignalComboBox.ItemsSource = new[]
-        {
             "rms", "bass", "mid", "treble", "spectral_centroid", "spectral_flux",
             "onset_strength", "beat", "section_energy", "cue"
         };
-        TargetParameterComboBox.ItemsSource = new[]
-        {
+    TargetParameterComboBox.ItemsSource = new[]
+    {
             "motion.strength", "camera.zoom", "camera.pan", "camera.tilt",
             "camera.rotation", "animation.cadence", "animation.noise",
             "render.guidance", "render.strength", "visual.intensity"
         };
-        ResponseCurveComboBox.ItemsSource = new[] { "linear", "ease-in", "ease-out", "smoothstep", "exponential", "logarithmic" };
-        GrammarComboBox.ItemsSource = new[] { "continuous", "pulse", "gate", "accent", "hold", "section", "cue" };
-        QuantizationComboBox.ItemsSource = new[] { "none", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "section", "cue" };
-        MappingPresetComboBox.ItemsSource = _mappingPresets;
-        MappingPresetComboBox.SelectedItem = "cinematic";
-        RenderModeComboBox.ItemsSource = new[] { "performance", "balanced", "quality" };
-        RenderModeComboBox.SelectedItem = "balanced";
-        SectionComboBox.ItemsSource = Array.Empty<string>();
-        CueComboBox.ItemsSource = Array.Empty<string>();
-        PresetComboBox.ItemsSource = _presetNames;
-        UpdatePresetNames();
+    ResponseCurveComboBox.ItemsSource = new[] { "linear", "ease-in", "ease-out", "smoothstep", "exponential", "logarithmic" };
+    GrammarComboBox.ItemsSource = new[] { "continuous", "pulse", "gate", "accent", "hold", "section", "cue" };
+    QuantizationComboBox.ItemsSource = new[] { "none", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "section", "cue" };
+    MappingPresetComboBox.ItemsSource = _mappingPresets;
+    MappingPresetComboBox.SelectedItem = "cinematic";
+    RenderModeComboBox.ItemsSource = new[] { "performance", "balanced", "quality" };
+    RenderModeComboBox.SelectedItem = "balanced";
+    SectionComboBox.ItemsSource = Array.Empty<string>();
+    CueComboBox.ItemsSource = Array.Empty<string>();
+    PresetComboBox.ItemsSource = _presetNames;
+    UpdatePresetNames();
+  }
+
+  private async void ReactiveLabPage_Loaded(object sender, RoutedEventArgs e)
+  {
+    _pageLoaded = true;
+    if (!_isSessionSubscribed)
+    {
+      App.Services.Session.Changed += Session_Changed;
+      _isSessionSubscribed = true;
     }
 
-    private async void ReactiveLabPage_Loaded(object sender, RoutedEventArgs e)
-    {
-        _pageLoaded = true;
-        if (!_isSessionSubscribed)
-        {
-            App.Services.Session.Changed += Session_Changed;
-            _isSessionSubscribed = true;
-        }
+    await RefreshAsync();
+  }
 
-        await RefreshAsync();
+  public Task RefreshAsync(CancellationToken cancellationToken = default)
+  {
+    if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
+    {
+      return Task.CompletedTask;
     }
 
-    public Task RefreshAsync(CancellationToken cancellationToken = default)
+    if (HasUnsavedEdits)
     {
-        if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
-            return Task.CompletedTask;
-        if (_keyframesDirty)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
-            return Task.CompletedTask;
-        }
-        return RunOperationAsync("Refreshing Reactive Lab", LoadProjectsAndContextAsync,
-            externalCancellationToken: cancellationToken);
+      ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
+      return Task.CompletedTask;
+    }
+    return RunOperationAsync("Refreshing Reactive Lab", LoadProjectsAndContextAsync,
+        externalCancellationToken: cancellationToken);
+  }
+
+  public bool TryBuildPendingWorkspaceDraftPayload(out JsonElement payload, out IReadOnlyList<string> errors)
+  {
+    payload = default;
+    if (!TryBuildRequest(out ReactiveLabApplyRequest request, out errors))
+    {
+      return false;
     }
 
-    public bool TryBuildPendingWorkspaceDraftPayload(out JsonElement payload, out IReadOnlyList<string> errors)
-    {
-        payload = default;
-        if (!TryBuildRequest(out ReactiveLabApplyRequest request, out errors))
-        {
-            return false;
-        }
+    payload = JsonSerializer.SerializeToElement(
+        request,
+        StudioJsonContext.Default.ReactiveLabApplyRequest);
+    return true;
+  }
 
-        payload = JsonSerializer.SerializeToElement(
-            request,
-            StudioJsonContext.Default.ReactiveLabApplyRequest);
-        return true;
+  public async Task AcceptWorkspaceWorkflowReviewAsync(JsonElement workflow, CancellationToken cancellationToken = default)
+  {
+    LoadWorkflow(workflow);
+    UpdateRawJson();
+    await SaveLocalStateAsync();
+    if (!string.IsNullOrWhiteSpace(_activeProjectId))
+    {
+      await RefreshProjectRevisionAsync(_activeProjectId, cancellationToken);
+    }
+  }
+
+  private void ReactiveLabPage_Unloaded(object sender, RoutedEventArgs e)
+  {
+    _pageLoaded = false;
+    _operationCancellation?.Cancel();
+    if (_isSessionSubscribed)
+    {
+      App.Services.Session.Changed -= Session_Changed;
+      _isSessionSubscribed = false;
+    }
+  }
+
+  private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
+  {
+    ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+    if (string.Equals(projectId, _activeProjectId, StringComparison.Ordinal))
+    {
+      _project = refreshed.Project;
+    }
+  }
+
+  private async Task HandleProjectRevisionConflictAsync(
+      ProjectRevisionConflictException conflict,
+      CancellationToken cancellationToken)
+  {
+    if (HasUnsavedEdits)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Workspace changed", "Your unsaved keyframe refinements are retained. Export them for reference, or discard and reload the latest Workspace draft before retrying.");
+      return;
+    }
+    if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+    {
+      ShowStatus(
+          InfoBarSeverity.Warning,
+          "Project reload required",
+          "The failed change was not applied. Review your local Reactive Lab draft, reload, then retry.");
+      return;
     }
 
-    public async Task AcceptWorkspaceWorkflowReviewAsync(JsonElement workflow, CancellationToken cancellationToken = default)
+    try
     {
-        LoadWorkflow(workflow);
-        UpdateRawJson();
-        await SaveLocalStateAsync();
-        if (!string.IsNullOrWhiteSpace(_activeProjectId))
-        {
-            await RefreshProjectRevisionAsync(_activeProjectId, cancellationToken);
-        }
+      await RefreshContextAsync(cancellationToken);
+      ShowStatus(
+          InfoBarSeverity.Informational,
+          "Project reloaded",
+          "The latest revision is loaded. Review the Reactive Lab payload, then retry your change.");
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (StudioApiException reloadError)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.UserFacingMessage);
+    }
+    catch (HttpRequestException reloadError)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+    }
+    catch (JsonException reloadError)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+    }
+  }
+
+  private async void Session_Changed(object? sender, EventArgs e)
+  {
+    if (_isSynchronizingProject || _isOperationBusy)
+    {
+      return;
     }
 
-    private void ReactiveLabPage_Unloaded(object sender, RoutedEventArgs e)
+    string sessionProjectId = App.Services.Session.ActiveProjectId;
+    if (!string.Equals(sessionProjectId, _activeProjectId, StringComparison.Ordinal))
     {
-        _pageLoaded = false;
-        _operationCancellation?.Cancel();
-        if (_isSessionSubscribed)
-        {
-            App.Services.Session.Changed -= Session_Changed;
-            _isSessionSubscribed = false;
-        }
+      if (HasUnsavedEdits)
+      {
+        ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements before switching projects.");
+        return;
+      }
+      _activeProjectId = sessionProjectId;
+      SelectProject(_activeProjectId);
+      await RunOperationAsync("Synchronizing project", RefreshContextAsync);
+      return;
     }
 
-    private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
+    _selectedVariantIndex = App.Services.Session.SelectedVariantIndex;
+    UpdatePlanSummary();
+  }
+
+  private async Task LoadProjectsAndContextAsync(CancellationToken cancellationToken)
+  {
+    ProjectListResponse response = await App.Services.ApiClient.GetProjectsAsync(cancellationToken);
+    _projects = response.Projects;
+    ProjectComboBox.ItemsSource = _projects;
+    _activeProjectId = App.Services.Session.ActiveProjectId;
+    if (string.IsNullOrWhiteSpace(_activeProjectId) && _projects.Count > 0)
     {
-        ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-        if (string.Equals(projectId, _activeProjectId, StringComparison.Ordinal))
-        {
-            _project = refreshed.Project;
-        }
+      _activeProjectId = _projects[0].Id;
+      SynchronizeSessionProject(_activeProjectId);
     }
 
-    private async Task HandleProjectRevisionConflictAsync(
-        ProjectRevisionConflictException conflict,
-        CancellationToken cancellationToken)
-    {
-        if (_keyframesDirty)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Workspace changed", "Your unsaved keyframe refinements are retained. Export them for reference, or discard and reload the latest Workspace draft before retrying.");
-            return;
-        }
-        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
-        {
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                "Project reload required",
-                "The failed change was not applied. Review your local Reactive Lab draft, reload, then retry.");
-            return;
-        }
+    SelectProject(_activeProjectId);
+    await RefreshContextAsync(cancellationToken);
+  }
 
-        try
-        {
-            await RefreshContextAsync(cancellationToken);
-            ShowStatus(
-                InfoBarSeverity.Informational,
-                "Project reloaded",
-                "The latest revision is loaded. Review the Reactive Lab payload, then retry your change.");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (StudioApiException reloadError)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.UserFacingMessage);
-        }
-        catch (HttpRequestException reloadError)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
-        }
-        catch (JsonException reloadError)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
-        }
+  private async Task RefreshContextAsync(CancellationToken cancellationToken)
+  {
+    if (HasUnsavedEdits)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
+      return;
+    }
+    if (string.IsNullOrWhiteSpace(_activeProjectId))
+    {
+      ClearContext();
+      ShowStatus(InfoBarSeverity.Warning, "No active project", "Create or select a project before using Reactive Lab.");
+      return;
     }
 
-    private async void Session_Changed(object? sender, EventArgs e)
+    string projectId = _activeProjectId;
+    Task<ProjectResponse> projectTask = App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+    Task<MusicGraphResponse> graphTask = App.Services.ApiClient.GetProjectMusicGraphAsync(projectId, cancellationToken);
+    Task<LiveCuesResponse> cueTask = App.Services.ApiClient.GetProjectLiveCuesAsync(projectId, cancellationToken);
+    Task<LiveAssetsResponse> assetTask = App.Services.ApiClient.GetProjectLiveAssetsAsync(projectId, cancellationToken);
+    Task<JsonElement> timelineTask = App.Services.ApiClient.GetTimelineAsync(projectId, cancellationToken);
+    Task<JsonElement> workflowTask = App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
+    Task<ReactiveLabLocalState?> localStateTask = LoadLocalStateAsync(projectId);
+
+    await Task.WhenAll(projectTask, graphTask, cueTask, assetTask, timelineTask, workflowTask, localStateTask);
+    cancellationToken.ThrowIfCancellationRequested();
+    if (!_pageLoaded || projectId != _activeProjectId || HasUnsavedEdits)
     {
-        if (_isSynchronizingProject || _isOperationBusy)
-        {
-            return;
-        }
-
-        var sessionProjectId = App.Services.Session.ActiveProjectId;
-        if (!string.Equals(sessionProjectId, _activeProjectId, StringComparison.Ordinal))
-        {
-            if (_keyframesDirty)
-            {
-                ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements before switching projects.");
-                return;
-            }
-            _activeProjectId = sessionProjectId;
-            SelectProject(_activeProjectId);
-            await RunOperationAsync("Synchronizing project", RefreshContextAsync);
-            return;
-        }
-
-        _selectedVariantIndex = App.Services.Session.SelectedVariantIndex;
-        UpdatePlanSummary();
+      return;
     }
 
-    private async Task LoadProjectsAndContextAsync(CancellationToken cancellationToken)
+    ProjectResponse project = await projectTask;
+    MusicGraphResponse graph = await graphTask;
+    LiveCuesResponse cues = await cueTask;
+    LiveAssetsResponse assets = await assetTask;
+    JsonElement timeline = await timelineTask;
+    ReactiveLabLocalState? localState = await localStateTask;
+    JsonElement workflow = await workflowTask;
+    if (!ReactiveWorkflow.SupportsRecovery(workflow))
     {
-        var response = await App.Services.ApiClient.GetProjectsAsync(cancellationToken);
-        _projects = response.Projects;
-        ProjectComboBox.ItemsSource = _projects;
-        _activeProjectId = App.Services.Session.ActiveProjectId;
-        if (string.IsNullOrWhiteSpace(_activeProjectId) && _projects.Count > 0)
-        {
-            _activeProjectId = _projects[0].Id;
-            SynchronizeSessionProject(_activeProjectId);
-        }
-
-        SelectProject(_activeProjectId);
-        await RefreshContextAsync(cancellationToken);
+      ShowStatus(InfoBarSeverity.Warning, "Newer Workspace recovery retained", "This server draft uses a newer recovery format. Existing Reactive Lab state was left unchanged; update Studio before applying it.");
+      return;
+    }
+    string workflowStatus = workflow.TryGetProperty("status", out JsonElement status)
+        ? status.GetString() ?? "not_prepared"
+        : "not_prepared";
+    if (workflowStatus == "not_prepared" && project.Project.HasAnalysis)
+    {
+      workflow = await App.Services.ApiClient.PrepareDirectorWorkflowAsync(
+          projectId, new DirectorApplyRequest(project.Project.Revision), cancellationToken);
+      project = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
     }
 
-    private async Task RefreshContextAsync(CancellationToken cancellationToken)
+    _project = project.Project;
+    _musicGraph = graph;
+    _liveCues = cues;
+    _liveAssets = assets;
+    _timeline = timeline;
+    LoadBackendDraft(project.Project);
+    LoadWorkflow(workflow);
+    // Saved presets remain available, but cannot replace generated Workspace data.
+    _localStateWriteAllowed = true;
+    if (localState is not null && !localState.TryNormalizeForRecovery(out localState))
     {
-        if (_keyframesDirty)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(_activeProjectId))
-        {
-            ClearContext();
-            ShowStatus(InfoBarSeverity.Warning, "No active project", "Create or select a project before using Reactive Lab.");
-            return;
-        }
-
-        var projectId = _activeProjectId;
-        var projectTask = App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-        var graphTask = App.Services.ApiClient.GetProjectMusicGraphAsync(projectId, cancellationToken);
-        var cueTask = App.Services.ApiClient.GetProjectLiveCuesAsync(projectId, cancellationToken);
-        var assetTask = App.Services.ApiClient.GetProjectLiveAssetsAsync(projectId, cancellationToken);
-        var timelineTask = App.Services.ApiClient.GetTimelineAsync(projectId, cancellationToken);
-        var workflowTask = App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
-        var localStateTask = LoadLocalStateAsync(projectId);
-
-        await Task.WhenAll(projectTask, graphTask, cueTask, assetTask, timelineTask, workflowTask, localStateTask);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!_pageLoaded || projectId != _activeProjectId || _keyframesDirty) return;
-
-        var project = await projectTask;
-        var graph = await graphTask;
-        var cues = await cueTask;
-        var assets = await assetTask;
-        var timeline = await timelineTask;
-        var localState = await localStateTask;
-        var workflow = await workflowTask;
-        if (!ReactiveWorkflow.SupportsRecovery(workflow))
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Newer Workspace recovery retained", "This server draft uses a newer recovery format. Existing Reactive Lab state was left unchanged; update Studio before applying it.");
-            return;
-        }
-        string workflowStatus = workflow.TryGetProperty("status", out var status)
-            ? status.GetString() ?? "not_prepared"
-            : "not_prepared";
-        if (workflowStatus == "not_prepared" && project.Project.HasAnalysis)
-        {
-            workflow = await App.Services.ApiClient.PrepareDirectorWorkflowAsync(
-                projectId, new DirectorApplyRequest(project.Project.Revision), cancellationToken);
-            project = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-        }
-
-        _project = project.Project;
-        _musicGraph = graph;
-        _liveCues = cues;
-        _liveAssets = assets;
-        _timeline = timeline;
-        LoadBackendDraft(project.Project);
-        LoadWorkflow(workflow);
-        // Saved presets remain available, but cannot replace generated Workspace data.
-        _localStateWriteAllowed = true;
-        if (localState is not null && !localState.TryNormalizeForRecovery(out localState))
-        {
-            _localStateWriteAllowed = false;
-            localState = null;
-            ShowStatus(InfoBarSeverity.Warning, "Newer recovery data retained", "Reactive Lab did not load or overwrite local recovery data created by a newer Studio version.");
-        }
-        LoadLocalState(_workflowDraftId is null ? localState : null);
-        if (_workflowDraftId is not null && localState is not null)
-        {
-            _savedPresets.AddRange(localState.Presets);
-            UpdatePresetNames();
-            if (localState.WorkspaceDraft is { ValueKind: JsonValueKind.Object } recovered)
-            {
-                bool matches = localState.WorkspaceDraftId == _workflowDraftId;
-                _draftRequest = ParseRequest(recovered.GetRawText());
-                _workflowDraftId = localState.WorkspaceDraftId;
-                _workflowRevision = localState.WorkspaceDraftRevision ?? _workflowRevision;
-                if (!matches) _workflowStatus = "stale";
-                _keyframesDirty = true;
-                PresentKeyframes();
-                WorkspaceDraftSummaryText.Text = matches
-                    ? "Recovered your unsaved keyframe refinements. Save or apply the shared Workspace draft when ready."
-                    : "Recovered your unsaved refinements from an older Workspace draft. Export them for reference, or discard and reload the current draft.";
-            }
-        }
-        _selectedVariantIndex = App.Services.Session.SelectedVariantIndex;
-        UpdateContextSelectors();
-
-        MusicGraphSummaryTextBlock.Text =
-            $"{graph.Tempo.Bpm:0.#} BPM · {graph.Beats.Count} beats · {graph.Sections.Count} sections · {graph.Stems.Count} stems";
-        LiveCuesSummaryTextBlock.Text =
-            $"{cues.EventCount} events · {cues.Bpm:0.#} BPM · {(cues.AdvisoryOnly ? "advisory" : "authoritative")}";
-        LiveAssetsSummaryTextBlock.Text =
-            $"{assets.PackCount} packs · {assets.ChannelCount} channels · {(assets.Ready ? "ready" : "not ready")} · {assets.LatencyBudgetMilliseconds} ms budget";
-        TimelineSummaryTextBlock.Text = SummarizeTimeline(timeline);
-        UpdatePlanSummary(project.Project);
-        UpdateRawJson();
-        UpdateDiagnostics();
+      _localStateWriteAllowed = false;
+      localState = null;
+      ShowStatus(InfoBarSeverity.Warning, "Newer recovery data retained", "Reactive Lab did not load or overwrite local recovery data created by a newer Studio version.");
     }
-
-    private void LoadWorkflow(JsonElement workflow)
+    LoadLocalState(_workflowDraftId is null ? localState : null);
+    if (_workflowDraftId is not null && localState is not null)
     {
-        _workflowDraftId = null;
-        _workflowStatus = workflow.TryGetProperty("status", out var status) ? status.GetString() ?? "not_prepared" : "not_prepared";
-        _workflowRevision = workflow.TryGetProperty("revision", out var revision) ? revision.GetInt64() : _project?.Revision ?? 1;
-        _workflowPlan = workflow.TryGetProperty("plan", out var plan) && plan.ValueKind == JsonValueKind.Object
-            ? JsonSerializer.Deserialize(plan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>()) : null;
-        if (workflow.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.Object
-            && draft.TryGetProperty("draft_id", out var draftId))
+      _savedPresets.AddRange(localState.Presets);
+      UpdatePresetNames();
+      if (localState.WorkspaceDraft is { ValueKind: JsonValueKind.Object } recovered)
+      {
+        bool matches = localState.WorkspaceDraftId == _workflowDraftId;
+        _draftRequest = ParseRequest(recovered.GetRawText());
+        _workflowDraftId = localState.WorkspaceDraftId;
+        _workflowRevision = localState.WorkspaceDraftRevision ?? _workflowRevision;
+        if (!matches)
         {
-            _workflowDraftId = draftId.GetString();
-            if (draft.TryGetProperty("variant_index", out var variantIndex)) _selectedVariantIndex = variantIndex.GetInt32();
+          _workflowStatus = "stale";
         }
-        if (workflow.TryGetProperty("reactive", out var reactive) && reactive.ValueKind == JsonValueKind.Object)
-            _draftRequest = ParseRequest(reactive.GetRawText());
-        _keyframesDirty = false;
+
+        HasUnsavedEdits = true;
         PresentKeyframes();
-        WorkspaceDraftSummaryText.Text = _workflowStatus switch
-        {
-            "draft" => $"Automatically prepared by Workspace · {_keyframes.Count} keyframes · {_draftRequest.CueEvents.Count} cues · {_draftRequest.Sections.Count} sections. Review here or in Overview + Director; applying commits the shared scene and reactive draft together.",
-            "applied" => "The shared Workspace draft and its reactive keyframes are applied. Refine the scene plan to prepare the next draft; reanalyze only when the song changes or you explicitly request it.",
-            "stale" => "The source changed. Return to Overview + Director to prepare a current draft before applying.",
-            _ => _project?.HasAnalysis == true
-                ? "The saved audio analysis could not prepare a Workspace draft. Review the warning and retry without reanalyzing the song."
-                : "Analyze audio in Overview + Director. The shared plan and reactive keyframes will appear here automatically."
-        };
-        SetKeyframeEditingEnabled(_workflowStatus == "draft");
-        SaveWorkspaceDraftButton.IsEnabled = _workflowStatus == "draft";
+        WorkspaceDraftSummaryText.Text = matches
+            ? "Recovered your unsaved keyframe refinements. Save or apply the shared Workspace draft when ready."
+            : "Recovered your unsaved refinements from an older Workspace draft. Export them for reference, or discard and reload the current draft.";
+      }
+    }
+    _selectedVariantIndex = App.Services.Session.SelectedVariantIndex;
+    UpdateContextSelectors();
+
+    MusicGraphSummaryTextBlock.Text =
+        $"{graph.Tempo.Bpm:0.#} BPM · {graph.Beats.Count} beats · {graph.Sections.Count} sections · {graph.Stems.Count} stems";
+    LiveCuesSummaryTextBlock.Text =
+        $"{cues.EventCount} events · {cues.Bpm:0.#} BPM · {(cues.AdvisoryOnly ? "advisory" : "authoritative")}";
+    LiveAssetsSummaryTextBlock.Text =
+        $"{assets.PackCount} packs · {assets.ChannelCount} channels · {(assets.Ready ? "ready" : "not ready")} · {assets.LatencyBudgetMilliseconds} ms budget";
+    TimelineSummaryTextBlock.Text = SummarizeTimeline(timeline);
+    UpdatePlanSummary(project.Project);
+    UpdateRawJson();
+    UpdateDiagnostics();
+  }
+
+  private void LoadWorkflow(JsonElement workflow)
+  {
+    _workflowDraftId = null;
+    _workflowStatus = workflow.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "not_prepared" : "not_prepared";
+    _workflowRevision = workflow.TryGetProperty("revision", out JsonElement revision) ? revision.GetInt64() : _project?.Revision ?? 1;
+    _workflowPlan = workflow.TryGetProperty("plan", out JsonElement plan) && plan.ValueKind == JsonValueKind.Object
+        ? JsonSerializer.Deserialize(plan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>()) : null;
+    if (workflow.TryGetProperty("draft", out JsonElement draft) && draft.ValueKind == JsonValueKind.Object
+        && draft.TryGetProperty("draft_id", out JsonElement draftId))
+    {
+      _workflowDraftId = draftId.GetString();
+      if (draft.TryGetProperty("variant_index", out JsonElement variantIndex))
+      {
+        _selectedVariantIndex = variantIndex.GetInt32();
+      }
+    }
+    if (workflow.TryGetProperty("reactive", out JsonElement reactive) && reactive.ValueKind == JsonValueKind.Object)
+    {
+      _draftRequest = ParseRequest(reactive.GetRawText());
     }
 
-    private void PresentKeyframes()
+    HasUnsavedEdits = false;
+    PresentKeyframes();
+    WorkspaceDraftSummaryText.Text = _workflowStatus switch
     {
-        _keyframes.Clear();
-        foreach (var keyframe in _draftRequest.Keyframes)
-            _keyframes.Add(new ReactiveKeyframeEditor(keyframe));
-        KeyframesListView.SelectedIndex = _keyframes.Count > 0 ? 0 : -1;
+      "draft" => $"Automatically prepared by Workspace · {Keyframes.Count} keyframes · {_draftRequest.CueEvents.Count} cues · {_draftRequest.Sections.Count} sections. Review here or in Overview + Director; applying commits the shared scene and reactive draft together.",
+      "applied" => "The shared Workspace draft and its reactive keyframes are applied. Refine the scene plan to prepare the next draft; reanalyze only when the song changes or you explicitly request it.",
+      "stale" => "The source changed. Return to Overview + Director to prepare a current draft before applying.",
+      _ => _project?.HasAnalysis == true
+          ? "The saved audio analysis could not prepare a Workspace draft. Review the warning and retry without reanalyzing the song."
+          : "Analyze audio in Overview + Director. The shared plan and reactive keyframes will appear here automatically."
+    };
+    SetKeyframeEditingEnabled(_workflowStatus == "draft");
+    SaveWorkspaceDraftButton.IsEnabled = _workflowStatus == "draft";
+  }
+
+  private void PresentKeyframes()
+  {
+    Keyframes.Clear();
+    foreach (JsonElement keyframe in _draftRequest.Keyframes)
+    {
+      Keyframes.Add(new ReactiveKeyframeEditor(keyframe));
     }
 
-    private void KeyframesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    KeyframesListView.SelectedIndex = Keyframes.Count > 0 ? 0 : -1;
+  }
+
+  private void KeyframesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    _isUpdatingKeyframe = true;
+    try
     {
-        _isUpdatingKeyframe = true;
-        try
-        {
-            var item = KeyframesListView.SelectedItem as ReactiveKeyframeEditor;
-            SelectedKeyframeText.Text = item is null ? "Select a generated keyframe." : $"{item.Id}\n{item.Placement}";
-            KeyframeStrengthNumberBox.IsEnabled = item?.IsEditable == true && _workflowStatus == "draft";
-            KeyframeZoomNumberBox.IsEnabled = KeyframeStrengthNumberBox.IsEnabled;
-            KeyframeStrengthNumberBox.Value = item?.Strength ?? 0.5;
-            KeyframeZoomNumberBox.Value = item?.Zoom ?? 1;
-        }
-        finally { _isUpdatingKeyframe = false; }
+      ReactiveKeyframeEditor? item = KeyframesListView.SelectedItem as ReactiveKeyframeEditor;
+      SelectedKeyframeText.Text = item is null ? "Select a generated keyframe." : $"{item.Id}\n{item.Placement}";
+      KeyframeStrengthNumberBox.IsEnabled = item?.IsEditable == true && _workflowStatus == "draft";
+      KeyframeZoomNumberBox.IsEnabled = KeyframeStrengthNumberBox.IsEnabled;
+      KeyframeStrengthNumberBox.Value = item?.Strength ?? 0.5;
+      KeyframeZoomNumberBox.Value = item?.Zoom ?? 1;
+    }
+    finally { _isUpdatingKeyframe = false; }
+  }
+
+  private async void KeyframeValue_Changed(NumberBox sender, NumberBoxValueChangedEventArgs e)
+  {
+    if (_isUpdatingKeyframe || KeyframesListView.SelectedItem is not ReactiveKeyframeEditor item)
+    {
+      return;
     }
 
-    private async void KeyframeValue_Changed(NumberBox sender, NumberBoxValueChangedEventArgs e)
+    try
     {
-        if (_isUpdatingKeyframe || KeyframesListView.SelectedItem is not ReactiveKeyframeEditor item) return;
-        try
-        {
-            if (!item.Refine(KeyframeStrengthNumberBox.Value, KeyframeZoomNumberBox.Value)) return;
-            int index = KeyframesListView.SelectedIndex;
-            _keyframesDirty = true;
-            _draftRequest.Keyframes[index] = item.ToJson();
-            _keyframes[index] = new ReactiveKeyframeEditor(_draftRequest.Keyframes[index]);
-            KeyframesListView.SelectedIndex = index;
-            UpdateRawJson();
-            await SaveLocalStateAsync();
-        }
-        catch (Exception ex)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Keyframe refinement needs attention", StudioPageHelpers.GetErrorMessage(ex));
-        }
+      if (!item.Refine(KeyframeStrengthNumberBox.Value, KeyframeZoomNumberBox.Value))
+      {
+        return;
+      }
+
+      int index = KeyframesListView.SelectedIndex;
+      HasUnsavedEdits = true;
+      _draftRequest.Keyframes[index] = item.ToJson();
+      Keyframes[index] = new ReactiveKeyframeEditor(_draftRequest.Keyframes[index]);
+      KeyframesListView.SelectedIndex = index;
+      UpdateRawJson();
+      await SaveLocalStateAsync();
+    }
+    catch (Exception ex)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Keyframe refinement needs attention", StudioPageHelpers.GetErrorMessage(ex));
+    }
+  }
+
+  private async void SaveWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
+  {
+    await RunOperationAsync("Saving shared reactive draft", SaveWorkspaceDraftAsync);
+  }
+
+  private async Task SaveWorkspaceDraftAsync(CancellationToken cancellationToken)
+  {
+    if (_activeProjectId is not { Length: > 0 } projectId || _workflowDraftId is null || _workflowStatus != "draft")
+    {
+      throw new InvalidOperationException("A current Workspace draft is required. Analyze audio or prepare the draft in Overview + Director.");
     }
 
-    private async void SaveWorkspaceDraftButton_Click(object sender, RoutedEventArgs e) =>
-        await RunOperationAsync("Saving shared reactive draft", SaveWorkspaceDraftAsync);
-
-    private async Task SaveWorkspaceDraftAsync(CancellationToken cancellationToken)
+    if (!HasUnsavedEdits)
     {
-        if (_activeProjectId is not { Length: > 0 } projectId || _workflowDraftId is null || _workflowStatus != "draft")
-            throw new InvalidOperationException("A current Workspace draft is required. Analyze audio or prepare the draft in Overview + Director.");
-        if (!_keyframesDirty) return;
-        var request = new DirectorReactiveReviewRequest(_workflowRevision, _workflowDraftId,
+      return;
+    }
+
+    DirectorReactiveReviewRequest request = new(_workflowRevision, _workflowDraftId,
             JsonSerializer.SerializeToElement(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest));
-        var response = await App.Services.ApiClient.ReviewReactiveWorkflowAsync(projectId, request, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!_pageLoaded || projectId != _activeProjectId) return;
-        LoadWorkflow(response);
-        UpdateRawJson();
-        await SaveLocalStateAsync();
-        await RefreshProjectRevisionAsync(projectId, cancellationToken);
-        ShowStatus(InfoBarSeverity.Success, "Shared draft saved", "Your reactive refinements are saved for the whole Workspace. The active Timeline is unchanged.");
+    JsonElement response = await App.Services.ApiClient.ReviewReactiveWorkflowAsync(projectId, request, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
+    if (!_pageLoaded || projectId != _activeProjectId)
+    {
+      return;
     }
 
-    private async void ReloadWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
+    LoadWorkflow(response);
+    UpdateRawJson();
+    await SaveLocalStateAsync();
+    await RefreshProjectRevisionAsync(projectId, cancellationToken);
+    ShowStatus(InfoBarSeverity.Success, "Shared draft saved", "Your reactive refinements are saved for the whole Workspace. The active Timeline is unchanged.");
+  }
+
+  private async void ReloadWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
+  {
+    await RunOperationAsync("Reloading Workspace draft", async cancellationToken =>
     {
-        await RunOperationAsync("Reloading Workspace draft", async cancellationToken =>
-        {
-            _keyframesDirty = false;
-            await SaveLocalStateAsync();
-            await RefreshContextAsync(cancellationToken);
-        });
+      HasUnsavedEdits = false;
+      await SaveLocalStateAsync();
+      await RefreshContextAsync(cancellationToken);
+    });
+  }
+
+  private void LoadBackendDraft(ProjectDto project)
+  {
+    _draftRequest = new ReactiveLabApplyRequest();
+    if (project.Meta.ValueKind != JsonValueKind.Object ||
+        !project.Meta.TryGetProperty("last_reactive_lab", out JsonElement lastReactive) ||
+        lastReactive.ValueKind != JsonValueKind.Object)
+    {
+      return;
     }
 
-    private void LoadBackendDraft(ProjectDto project)
-    {
-        _draftRequest = new ReactiveLabApplyRequest();
-        if (project.Meta.ValueKind != JsonValueKind.Object ||
-            !project.Meta.TryGetProperty("last_reactive_lab", out var lastReactive) ||
-            lastReactive.ValueKind != JsonValueKind.Object)
-        {
-            return;
-        }
+    _draftRequest = JsonSerializer.Deserialize(
+            lastReactive.GetRawText(),
+            StudioJsonContext.Default.ReactiveLabApplyRequest)
+        ?? new ReactiveLabApplyRequest();
+  }
 
-        _draftRequest = JsonSerializer.Deserialize(
-                lastReactive.GetRawText(),
-                StudioJsonContext.Default.ReactiveLabApplyRequest)
-            ?? new ReactiveLabApplyRequest();
+  private void LoadLocalState(ReactiveLabLocalState? state)
+  {
+    _savedPresets.Clear();
+    if (state is not null)
+    {
+      _savedPresets.AddRange(state.Presets);
+      _currentPreset = state.Current;
+    }
+    else if (_draftRequest.Metadata is JsonElement metadataElement)
+    {
+      ReactiveLabMetadata? metadata = metadataElement.Deserialize(StudioJsonContext.Default.ReactiveLabMetadata);
+      _currentPreset = metadata is null
+          ? new ReactivePreset()
+          : new ReactivePreset
+          {
+            Name = metadata.Settings.Name,
+            Mappings = metadata.Mappings.Count > 0 ? metadata.Mappings : metadata.Settings.Mappings,
+            MappingPreset = metadata.Settings.MappingPreset,
+            Sensitivity = metadata.Settings.Sensitivity,
+            Smoothing = metadata.Settings.Smoothing,
+            FramesPerSecond = metadata.Settings.FramesPerSecond,
+            MinimumCutFrames = metadata.Settings.MinimumCutFrames,
+            RenderMode = metadata.Settings.RenderMode,
+            ScheduleStride = metadata.Settings.ScheduleStride,
+            Scaling = metadata.Settings.Scaling,
+            ExtensionData = metadata.Settings.ExtensionData
+          };
+    }
+    else
+    {
+      _currentPreset = new ReactivePreset();
     }
 
-    private void LoadLocalState(ReactiveLabLocalState? state)
-    {
-        _savedPresets.Clear();
-        if (state is not null)
-        {
-            _savedPresets.AddRange(state.Presets);
-            _currentPreset = state.Current;
-        }
-        else if (_draftRequest.Metadata is JsonElement metadataElement)
-        {
-            var metadata = metadataElement.Deserialize(StudioJsonContext.Default.ReactiveLabMetadata);
-            _currentPreset = metadata is null
-                ? new ReactivePreset()
-                : new ReactivePreset
-                {
-                    Name = metadata.Settings.Name,
-                    Mappings = metadata.Mappings.Count > 0 ? metadata.Mappings : metadata.Settings.Mappings,
-                    MappingPreset = metadata.Settings.MappingPreset,
-                    Sensitivity = metadata.Settings.Sensitivity,
-                    Smoothing = metadata.Settings.Smoothing,
-                    FramesPerSecond = metadata.Settings.FramesPerSecond,
-                    MinimumCutFrames = metadata.Settings.MinimumCutFrames,
-                    RenderMode = metadata.Settings.RenderMode,
-                    ScheduleStride = metadata.Settings.ScheduleStride,
-                    Scaling = metadata.Settings.Scaling,
-                    ExtensionData = metadata.Settings.ExtensionData
-                };
-        }
-        else
-        {
-            _currentPreset = new ReactivePreset();
-        }
+    IReadOnlyList<ReactiveMapping> mappings = _currentPreset.Mappings.Count > 0
+        ? _currentPreset.Mappings
+        : ReadMappingsFromMetadata(_draftRequest.Metadata);
+    ReplaceMappings(mappings);
+    ApplyPresetSettings(_currentPreset);
+    OverwriteMotionTrackToggle.IsOn = _draftRequest.OverwriteMotionTrack;
+    OverwriteCameraToggle.IsOn = _draftRequest.OverwriteCamera;
+    UpdatePresetNames();
+  }
 
-        var mappings = _currentPreset.Mappings.Count > 0
-            ? _currentPreset.Mappings
-            : ReadMappingsFromMetadata(_draftRequest.Metadata);
-        ReplaceMappings(mappings);
-        ApplyPresetSettings(_currentPreset);
-        OverwriteMotionTrackToggle.IsOn = _draftRequest.OverwriteMotionTrack;
-        OverwriteCameraToggle.IsOn = _draftRequest.OverwriteCamera;
-        UpdatePresetNames();
+  private void UpdateContextSelectors()
+  {
+    SectionComboBox.ItemsSource = _musicGraph?.Sections
+        .Select(section => section.Label)
+        .Where(label => !string.IsNullOrWhiteSpace(label))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray() ?? [];
+
+    List<string> cues = new();
+    foreach (JsonElement item in _liveCues?.Events ?? [])
+    {
+      if (item.ValueKind == JsonValueKind.String)
+      {
+        string? value = item.GetString();
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+          cues.Add(value);
+        }
+      }
+      else if (item.ValueKind == JsonValueKind.Object)
+      {
+        foreach (string? propertyName in new[] { "id", "cue_id", "name", "label" })
+        {
+          if (item.TryGetProperty(propertyName, out JsonElement property) &&
+              property.ValueKind == JsonValueKind.String &&
+              !string.IsNullOrWhiteSpace(property.GetString()))
+          {
+            cues.Add(property.GetString()!);
+            break;
+          }
+        }
+      }
     }
 
-    private void UpdateContextSelectors()
+    CueComboBox.ItemsSource = cues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+  }
+
+  private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_isSynchronizingProject || ProjectComboBox.SelectedItem is not ProjectDto project)
     {
-        SectionComboBox.ItemsSource = _musicGraph?.Sections
-            .Select(section => section.Label)
-            .Where(label => !string.IsNullOrWhiteSpace(label))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray() ?? [];
-
-        var cues = new List<string>();
-        foreach (var item in _liveCues?.Events ?? [])
-        {
-            if (item.ValueKind == JsonValueKind.String)
-            {
-                var value = item.GetString();
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    cues.Add(value);
-                }
-            }
-            else if (item.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var propertyName in new[] { "id", "cue_id", "name", "label" })
-                {
-                    if (item.TryGetProperty(propertyName, out var property) &&
-                        property.ValueKind == JsonValueKind.String &&
-                        !string.IsNullOrWhiteSpace(property.GetString()))
-                    {
-                        cues.Add(property.GetString()!);
-                        break;
-                    }
-                }
-            }
-        }
-
-        CueComboBox.ItemsSource = cues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+      return;
     }
 
-    private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    if (HasUnsavedEdits)
     {
-        if (_isSynchronizingProject || ProjectComboBox.SelectedItem is not ProjectDto project)
-        {
-            return;
-        }
-
-        if (_keyframesDirty)
-        {
-            SelectProject(_activeProjectId);
-            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements before switching projects.");
-            return;
-        }
-
-        _activeProjectId = project.Id;
-        SynchronizeSessionProject(project.Id);
-        await RunOperationAsync("Loading project context", RefreshContextAsync);
+      SelectProject(_activeProjectId);
+      ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements before switching projects.");
+      return;
     }
 
-    private async void RefreshButton_Click(object sender, RoutedEventArgs e) =>
-        await RefreshAsync();
+    _activeProjectId = project.Id;
+    SynchronizeSessionProject(project.Id);
+    await RunOperationAsync("Loading project context", RefreshContextAsync);
+  }
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e) =>
-        _operationCancellation?.Cancel();
+  private async void RefreshButton_Click(object sender, RoutedEventArgs e)
+  {
+    await RefreshAsync();
+  }
 
-    private void WorkspaceButton_Click(object sender, RoutedEventArgs e) => App.Navigate("workspace");
+  private void CancelButton_Click(object sender, RoutedEventArgs e)
+  {
+    _operationCancellation?.Cancel();
+  }
 
-    private void TimelineButton_Click(object sender, RoutedEventArgs e) => App.Navigate("timeline");
+  private void WorkspaceButton_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("workspace");
+  }
 
-    private void RenderButton_Click(object sender, RoutedEventArgs e) => App.Navigate("render");
+  private void TimelineButton_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("timeline");
+  }
 
-    private async void ImportButton_Click(object sender, RoutedEventArgs e)
+  private void RenderButton_Click(object sender, RoutedEventArgs e)
+  {
+    App.Navigate("render");
+  }
+
+  private async void ImportButton_Click(object sender, RoutedEventArgs e)
+  {
+    FileOpenPicker picker = new();
+    picker.FileTypeFilter.Add(".json");
+    InitializePicker(picker);
+    StorageFile? file = await picker.PickSingleFileAsync();
+    if (file is null)
     {
-        var picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add(".json");
-        InitializePicker(picker);
-        var file = await picker.PickSingleFileAsync();
-        if (file is null)
-        {
-            return;
-        }
-
-        await RunOperationAsync("Importing Reactive payload", async cancellationToken =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var text = await FileIO.ReadTextAsync(file);
-            cancellationToken.ThrowIfCancellationRequested();
-            UseRawJson(text);
-            await SaveLocalStateAsync();
-        }, $"Imported {file.Name}. Review and apply when ready.");
+      return;
     }
 
-    private async void ExportButton_Click(object sender, RoutedEventArgs e)
+    await RunOperationAsync("Importing Reactive payload", async cancellationToken =>
     {
-        if (!TryBuildRequest(out var request, out var errors))
-        {
-            ShowValidationErrors(errors);
-            return;
-        }
+      cancellationToken.ThrowIfCancellationRequested();
+      string text = await FileIO.ReadTextAsync(file);
+      cancellationToken.ThrowIfCancellationRequested();
+      UseRawJson(text);
+      await SaveLocalStateAsync();
+    }, $"Imported {file.Name}. Review and apply when ready.");
+  }
 
-        var picker = new FileSavePicker
-        {
-            SuggestedFileName = $"{SafeFileName(SelectedProjectName())}-reactive-lab"
-        };
-        picker.FileTypeChoices.Add("JSON", [".json"]);
-        InitializePicker(picker);
-        var file = await picker.PickSaveFileAsync();
-        if (file is null)
-        {
-            return;
-        }
-
-        var json = JsonSerializer.Serialize(request, StudioJsonContext.Default.ReactiveLabApplyRequest);
-        await FileIO.WriteTextAsync(file, FormatJson(json));
-        ShowStatus(InfoBarSeverity.Success, "Reactive payload exported", file.Name);
+  private async void ExportButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (!TryBuildRequest(out ReactiveLabApplyRequest? request, out IReadOnlyList<string>? errors))
+    {
+      ShowValidationErrors(errors);
+      return;
     }
 
-    private async void SaveAndOpenWorkspaceButton_Click(object sender, RoutedEventArgs e)
+    FileSavePicker picker = new()
     {
-        if (string.IsNullOrWhiteSpace(_activeProjectId))
-        {
-            ShowStatus(InfoBarSeverity.Warning, "No active project", "Select a project before saving Reactive Lab refinements.");
-            return;
-        }
-
-        if (_workflowDraftId is null)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Workspace draft required", "Analyze audio in Overview + Director before editing reactive keyframes.");
-            return;
-        }
-
-        await RunOperationAsync("Saving shared reactive draft", async cancellationToken =>
-        {
-            await SaveWorkspaceDraftAsync(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (_pageLoaded) WorkspaceButton_Click(sender, e);
-        });
-    }
-    private void AddMappingButton_Click(object sender, RoutedEventArgs e)
+      SuggestedFileName = $"{SafeFileName(SelectedProjectName())}-reactive-lab"
+    };
+    picker.FileTypeChoices.Add("JSON", [".json"]);
+    InitializePicker(picker);
+    StorageFile? file = await picker.PickSaveFileAsync();
+    if (file is null)
     {
-        var mapping = new ReactiveMapping { Name = $"Mapping {_mappings.Count + 1}" };
-        _mappings.Add(mapping);
-        MappingListView.SelectedItem = mapping;
-        PersistMappingChange();
+      return;
     }
 
-    private void DuplicateMappingButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (MappingListView.SelectedItem is not ReactiveMapping selected)
-        {
-            return;
-        }
+    string json = JsonSerializer.Serialize(request, StudioJsonContext.Default.ReactiveLabApplyRequest);
+    await FileIO.WriteTextAsync(file, FormatJson(json));
+    ShowStatus(InfoBarSeverity.Success, "Reactive payload exported", file.Name);
+  }
 
-        var duplicate = ReactiveWorkflow.Duplicate(selected, Guid.NewGuid().ToString("N"));
-        var index = MappingListView.SelectedIndex + 1;
-        _mappings.Insert(index, duplicate);
-        MappingListView.SelectedIndex = index;
-        PersistMappingChange();
+  private async void SaveAndOpenWorkspaceButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (string.IsNullOrWhiteSpace(_activeProjectId))
+    {
+      ShowStatus(InfoBarSeverity.Warning, "No active project", "Select a project before saving Reactive Lab refinements.");
+      return;
     }
 
-    private void MoveMappingUpButton_Click(object sender, RoutedEventArgs e) => MoveSelectedMapping(-1);
-
-    private void MoveMappingDownButton_Click(object sender, RoutedEventArgs e) => MoveSelectedMapping(1);
-
-    private async void DeleteMappingButton_Click(object sender, RoutedEventArgs e)
+    if (_workflowDraftId is null)
     {
-        if (MappingListView.SelectedItem is not ReactiveMapping selected)
-        {
-            return;
-        }
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Delete reactive mapping?",
-            Content = $"Delete “{selected.Name}”? This cannot be undone.",
-            PrimaryButtonText = "Delete",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        var index = MappingListView.SelectedIndex;
-        _mappings.Remove(selected);
-        MappingListView.SelectedIndex = Math.Min(index, _mappings.Count - 1);
-        PersistMappingChange();
+      ShowStatus(InfoBarSeverity.Warning, "Workspace draft required", "Analyze audio in Overview + Director before editing reactive keyframes.");
+      return;
     }
 
-    private void MappingListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    await RunOperationAsync("Saving shared reactive draft", async cancellationToken =>
     {
-        var mapping = MappingListView.SelectedItem as ReactiveMapping;
-        SetMappingEditorEnabled(mapping is not null);
-        DuplicateMappingButton.IsEnabled = mapping is not null;
-        DeleteMappingButton.IsEnabled = mapping is not null;
-        MoveMappingUpButton.IsEnabled = MappingListView.SelectedIndex > 0;
-        MoveMappingDownButton.IsEnabled =
-            MappingListView.SelectedIndex >= 0 && MappingListView.SelectedIndex < _mappings.Count - 1;
-        if (mapping is not null)
-        {
-            PopulateMappingEditor(mapping);
-        }
+      await SaveWorkspaceDraftAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
+      if (_pageLoaded)
+      {
+        WorkspaceButton_Click(sender, e);
+      }
+    });
+  }
+  private void AddMappingButton_Click(object sender, RoutedEventArgs e)
+  {
+    ReactiveMapping mapping = new() { Name = $"Mapping {Mappings.Count + 1}" };
+    Mappings.Add(mapping);
+    MappingListView.SelectedItem = mapping;
+    PersistMappingChange();
+  }
+
+  private void DuplicateMappingButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (MappingListView.SelectedItem is not ReactiveMapping selected)
+    {
+      return;
     }
 
-    private async void MappingEditor_Changed(object sender, object e) =>
-        await UpdateMappingFromEditorAsync();
+    ReactiveMapping duplicate = ReactiveWorkflow.Duplicate(selected, Guid.NewGuid().ToString("N"));
+    int index = MappingListView.SelectedIndex + 1;
+    Mappings.Insert(index, duplicate);
+    MappingListView.SelectedIndex = index;
+    PersistMappingChange();
+  }
 
-    private async void MappingEditor_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args) =>
-        await UpdateMappingFromEditorAsync();
+  private void MoveMappingUpButton_Click(object sender, RoutedEventArgs e)
+  {
+    MoveSelectedMapping(-1);
+  }
 
-    private async Task UpdateMappingFromEditorAsync()
+  private void MoveMappingDownButton_Click(object sender, RoutedEventArgs e)
+  {
+    MoveSelectedMapping(1);
+  }
+
+  private async void DeleteMappingButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (MappingListView.SelectedItem is not ReactiveMapping selected)
     {
-        if (_isUpdatingEditor || MappingListView.SelectedIndex < 0)
-        {
-            return;
-        }
-
-        var index = MappingListView.SelectedIndex;
-        var existing = _mappings[index];
-        var updated = existing with
-        {
-            Name = MappingNameTextBox.Text.Trim(),
-            IsEnabled = MappingEnabledToggle.IsOn,
-            SourceSignal = ComboText(SourceSignalComboBox),
-            TargetParameter = ComboText(TargetParameterComboBox),
-            ResponseCurve = ComboText(ResponseCurveComboBox),
-            Grammar = ComboText(GrammarComboBox),
-            Gain = FiniteValue(GainNumberBox.Value, existing.Gain),
-            Smoothing = FiniteValue(MappingSmoothingNumberBox.Value, existing.Smoothing),
-            Threshold = FiniteValue(ThresholdNumberBox.Value, existing.Threshold),
-            InputMinimum = FiniteValue(InputMinimumNumberBox.Value, existing.InputMinimum),
-            InputMaximum = FiniteValue(InputMaximumNumberBox.Value, existing.InputMaximum),
-            OutputMinimum = FiniteValue(OutputMinimumNumberBox.Value, existing.OutputMinimum),
-            OutputMaximum = FiniteValue(OutputMaximumNumberBox.Value, existing.OutputMaximum),
-            Quantization = ComboText(QuantizationComboBox),
-            Section = NullIfWhiteSpace(SectionComboBox.SelectedItem?.ToString()),
-            Cue = NullIfWhiteSpace(CueComboBox.SelectedItem?.ToString())
-        };
-        _mappings[index] = updated;
-        MappingListView.SelectedIndex = index;
-        UpdateDiagnostics();
-        UpdateRawJson();
-        await SaveLocalStateAsync();
+      return;
     }
 
-    private void SetMappingEditorEnabled(bool isEnabled)
+    ContentDialog dialog = new()
     {
-        foreach (var control in new Control[]
-                 {
+      XamlRoot = XamlRoot,
+      Title = "Delete reactive mapping?",
+      Content = $"Delete “{selected.Name}”? This cannot be undone.",
+      PrimaryButtonText = "Delete",
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
+    };
+    if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+    {
+      return;
+    }
+
+    int index = MappingListView.SelectedIndex;
+    _ = Mappings.Remove(selected);
+    MappingListView.SelectedIndex = Math.Min(index, Mappings.Count - 1);
+    PersistMappingChange();
+  }
+
+  private void MappingListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    ReactiveMapping? mapping = MappingListView.SelectedItem as ReactiveMapping;
+    SetMappingEditorEnabled(mapping is not null);
+    DuplicateMappingButton.IsEnabled = mapping is not null;
+    DeleteMappingButton.IsEnabled = mapping is not null;
+    MoveMappingUpButton.IsEnabled = MappingListView.SelectedIndex > 0;
+    MoveMappingDownButton.IsEnabled =
+        MappingListView.SelectedIndex >= 0 && MappingListView.SelectedIndex < Mappings.Count - 1;
+    if (mapping is not null)
+    {
+      PopulateMappingEditor(mapping);
+    }
+  }
+
+  private async void MappingEditor_Changed(object sender, object e)
+  {
+    await UpdateMappingFromEditorAsync();
+  }
+
+  private async void MappingEditor_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+  {
+    await UpdateMappingFromEditorAsync();
+  }
+
+  private async Task UpdateMappingFromEditorAsync()
+  {
+    if (_isUpdatingEditor || MappingListView.SelectedIndex < 0)
+    {
+      return;
+    }
+
+    int index = MappingListView.SelectedIndex;
+    ReactiveMapping existing = Mappings[index];
+    ReactiveMapping updated = existing with
+    {
+      Name = MappingNameTextBox.Text.Trim(),
+      IsEnabled = MappingEnabledToggle.IsOn,
+      SourceSignal = ComboText(SourceSignalComboBox),
+      TargetParameter = ComboText(TargetParameterComboBox),
+      ResponseCurve = ComboText(ResponseCurveComboBox),
+      Grammar = ComboText(GrammarComboBox),
+      Gain = FiniteValue(GainNumberBox.Value, existing.Gain),
+      Smoothing = FiniteValue(MappingSmoothingNumberBox.Value, existing.Smoothing),
+      Threshold = FiniteValue(ThresholdNumberBox.Value, existing.Threshold),
+      InputMinimum = FiniteValue(InputMinimumNumberBox.Value, existing.InputMinimum),
+      InputMaximum = FiniteValue(InputMaximumNumberBox.Value, existing.InputMaximum),
+      OutputMinimum = FiniteValue(OutputMinimumNumberBox.Value, existing.OutputMinimum),
+      OutputMaximum = FiniteValue(OutputMaximumNumberBox.Value, existing.OutputMaximum),
+      Quantization = ComboText(QuantizationComboBox),
+      Section = NullIfWhiteSpace(SectionComboBox.SelectedItem?.ToString()),
+      Cue = NullIfWhiteSpace(CueComboBox.SelectedItem?.ToString())
+    };
+    Mappings[index] = updated;
+    MappingListView.SelectedIndex = index;
+    UpdateDiagnostics();
+    UpdateRawJson();
+    await SaveLocalStateAsync();
+  }
+
+  private void SetMappingEditorEnabled(bool isEnabled)
+  {
+    foreach (Control control in new Control[]
+             {
                      MappingEnabledToggle,
                      MappingNameTextBox,
                      SourceSignalComboBox,
@@ -761,675 +824,713 @@ public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
                      OutputMaximumNumberBox,
                      SectionComboBox,
                      CueComboBox
-                 })
-        {
-            control.IsEnabled = isEnabled;
-        }
+             })
+    {
+      control.IsEnabled = isEnabled;
+    }
+  }
+
+  private async void PresetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_isLoadingPreset || PresetComboBox.SelectedItem is not string name)
+    {
+      return;
     }
 
-    private async void PresetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    ReactivePreset? preset = _savedPresets.FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.Ordinal));
+    if (preset is null)
     {
-        if (_isLoadingPreset || PresetComboBox.SelectedItem is not string name)
-        {
-            return;
-        }
-
-        var preset = _savedPresets.FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.Ordinal));
-        if (preset is null)
-        {
-            return;
-        }
-
-        _currentPreset = preset;
-        ReplaceMappings(preset.Mappings);
-        ApplyPresetSettings(preset);
-        UpdateRawJson();
-        UpdateDiagnostics();
-        await SaveLocalStateAsync();
-        ShowStatus(InfoBarSeverity.Success, "Preset applied", $"Applied “{preset.Name}” to the local editor.");
+      return;
     }
 
-    private async void SavePresetButton_Click(object sender, RoutedEventArgs e)
+    _currentPreset = preset;
+    ReplaceMappings(preset.Mappings);
+    ApplyPresetSettings(preset);
+    UpdateRawJson();
+    UpdateDiagnostics();
+    await SaveLocalStateAsync();
+    ShowStatus(InfoBarSeverity.Success, "Preset applied", $"Applied “{preset.Name}” to the local editor.");
+  }
+
+  private async void SavePresetButton_Click(object sender, RoutedEventArgs e)
+  {
+    string name = PresetNameTextBox.Text.Trim();
+    if (string.IsNullOrWhiteSpace(name))
     {
-        var name = PresetNameTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Preset name required", "Enter a name before saving this project preset.");
-            return;
-        }
-
-        var preset = BuildCurrentPreset(name);
-        var index = _savedPresets.FindIndex(item => string.Equals(item.Name, name, StringComparison.Ordinal));
-        if (index >= 0)
-        {
-            _savedPresets[index] = preset;
-        }
-        else
-        {
-            _savedPresets.Add(preset);
-        }
-
-        _currentPreset = preset;
-        UpdatePresetNames(name);
-        await SaveLocalStateAsync();
-        ShowStatus(InfoBarSeverity.Success, "Preset saved", $"Saved “{name}” for this project.");
+      ShowStatus(InfoBarSeverity.Warning, "Preset name required", "Enter a name before saving this project preset.");
+      return;
     }
 
-    private async void DeletePresetButton_Click(object sender, RoutedEventArgs e)
+    ReactivePreset preset = BuildCurrentPreset(name);
+    int index = _savedPresets.FindIndex(item => string.Equals(item.Name, name, StringComparison.Ordinal));
+    if (index >= 0)
     {
-        if (PresetComboBox.SelectedItem is not string name)
-        {
-            return;
-        }
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Delete project preset?",
-            Content = $"Delete “{name}” from this project’s local Reactive Lab presets?",
-            PrimaryButtonText = "Delete",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        _savedPresets.RemoveAll(item => string.Equals(item.Name, name, StringComparison.Ordinal));
-        UpdatePresetNames();
-        await SaveLocalStateAsync();
-        ShowStatus(InfoBarSeverity.Success, "Preset deleted", $"Deleted “{name}”.");
+      _savedPresets[index] = preset;
+    }
+    else
+    {
+      _savedPresets.Add(preset);
     }
 
-    private void ValidateJsonButton_Click(object sender, RoutedEventArgs e)
+    _currentPreset = preset;
+    UpdatePresetNames(name);
+    await SaveLocalStateAsync();
+    ShowStatus(InfoBarSeverity.Success, "Preset saved", $"Saved “{name}” for this project.");
+  }
+
+  private async void DeletePresetButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (PresetComboBox.SelectedItem is not string name)
     {
-        try
-        {
-            var request = ParseRequest(RawJsonTextBox.Text);
-            var errors = ValidateRequest(request);
-            if (errors.Count == 0)
-            {
-                ShowStatus(InfoBarSeverity.Success, "JSON is valid", "The payload is structurally valid and contains authoritative Timeline content.");
-            }
-            else
-            {
-                ShowValidationErrors(errors);
-            }
-        }
-        catch (JsonException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Invalid JSON", ex.Message);
-        }
+      return;
     }
 
-    private async void UseJsonButton_Click(object sender, RoutedEventArgs e)
+    ContentDialog dialog = new()
     {
-        try
-        {
-            UseRawJson(RawJsonTextBox.Text);
-            await SaveLocalStateAsync();
-            ShowStatus(InfoBarSeverity.Success, "JSON loaded", "The raw payload is now the Reactive Lab draft.");
-        }
-        catch (JsonException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, "Invalid JSON", ex.Message);
-        }
-    }
-
-    private void UseRawJson(string json)
-    {
-        _draftRequest = ParseRequest(json);
-        _keyframesDirty = _workflowDraftId is not null;
-        PresentKeyframes();
-        var metadataMappings = ReadMappingsFromMetadata(_draftRequest.Metadata);
-        if (metadataMappings.Count > 0)
-        {
-            ReplaceMappings(metadataMappings);
-        }
-
-        RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(
-            _draftRequest,
-            StudioJsonContext.Default.ReactiveLabApplyRequest));
-        UpdateDiagnostics();
-    }
-
-    private bool TryBuildRequest(out ReactiveLabApplyRequest request, out IReadOnlyList<string> errors)
-    {
-        _currentPreset = BuildCurrentPreset("Current");
-        var metadata = BuildMetadata(_draftRequest.Metadata, _currentPreset);
-        request = new ReactiveLabApplyRequest
-        {
-            Metadata = metadata,
-            Keyframes = _draftRequest.Keyframes,
-            BeatMarkers = _draftRequest.BeatMarkers,
-            CueEvents = _draftRequest.CueEvents,
-            Sections = _draftRequest.Sections,
-            RepairSuggestions = _draftRequest.RepairSuggestions,
-            Schedules = _draftRequest.Schedules,
-            HandoffManifest = _draftRequest.HandoffManifest,
-            ExtensionData = _draftRequest.ExtensionData,
-            OverwriteMotionTrack = OverwriteMotionTrackToggle.IsOn,
-            OverwriteCamera = OverwriteCameraToggle.IsOn,
-            ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project),
-        };
-        errors = ValidateRequest(request);
-        return errors.Count == 0;
-    }
-
-    private IReadOnlyList<string> ValidateRequest(ReactiveLabApplyRequest request)
-    {
-        var errors = _mappings
-            .SelectMany((mapping, index) => ReactiveWorkflow.ValidateMapping(mapping)
-                .Select(error => $"Mapping {index + 1}: {error}"))
-            .ToList();
-        if (!ReactiveWorkflow.HasMeaningfulPayload(request))
-        {
-            errors.Add("The payload must contain analyzed keyframes, beats, cues, sections, repairs, schedules, or a handoff manifest.");
-        }
-
-        return errors;
-    }
-
-    private JsonElement BuildMetadata(JsonElement? existing, ReactivePreset settings)
-    {
-        var extensionData = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        if (existing?.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in existing.Value.EnumerateObject())
-            {
-                if (property.Name is not ("source" or "selected_variant_index" or "mappings" or "native_mappings" or "settings"))
-                {
-                    extensionData[property.Name] = property.Value.Clone();
-                }
-            }
-        }
-
-        var metadata = new ReactiveLabMetadata
-        {
-            SelectedVariantIndex = _selectedVariantIndex,
-            Mappings = _mappings.ToList(),
-            Settings = settings,
-            ExtensionData = extensionData.Count == 0 ? null : extensionData
-        };
-        return JsonSerializer.SerializeToElement(metadata, StudioJsonContext.Default.ReactiveLabMetadata);
-    }
-
-    private ReactivePreset BuildCurrentPreset(string name) => new()
-    {
-        Name = name,
-        Mappings = _mappings.ToList(),
-        MappingPreset = ComboText(MappingPresetComboBox),
-        Sensitivity = FiniteValue(SensitivityNumberBox.Value, 1),
-        Smoothing = FiniteValue(GlobalSmoothingNumberBox.Value, 0.82),
-        FramesPerSecond = (int)FiniteValue(FramesPerSecondNumberBox.Value, 30),
-        MinimumCutFrames = (int)FiniteValue(MinimumCutFramesNumberBox.Value, 12),
-        RenderMode = ComboText(RenderModeComboBox),
-        ScheduleStride = (int)FiniteValue(ScheduleStrideNumberBox.Value, 4),
-        Scaling = _currentPreset.Scaling,
-        ExtensionData = _currentPreset.ExtensionData
+      XamlRoot = XamlRoot,
+      Title = "Delete project preset?",
+      Content = $"Delete “{name}” from this project’s local Reactive Lab presets?",
+      PrimaryButtonText = "Delete",
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
     };
-
-    private void ApplyPresetSettings(ReactivePreset preset)
+    if (await dialog.ShowAsync() != ContentDialogResult.Primary)
     {
-        SetComboText(MappingPresetComboBox, preset.MappingPreset);
-        SensitivityNumberBox.Value = preset.Sensitivity;
-        GlobalSmoothingNumberBox.Value = preset.Smoothing;
-        FramesPerSecondNumberBox.Value = preset.FramesPerSecond;
-        MinimumCutFramesNumberBox.Value = preset.MinimumCutFrames;
-        ScheduleStrideNumberBox.Value = preset.ScheduleStride;
-        SetComboText(RenderModeComboBox, preset.RenderMode);
+      return;
     }
 
-    private void PopulateMappingEditor(ReactiveMapping mapping)
+    _ = _savedPresets.RemoveAll(item => string.Equals(item.Name, name, StringComparison.Ordinal));
+    UpdatePresetNames();
+    await SaveLocalStateAsync();
+    ShowStatus(InfoBarSeverity.Success, "Preset deleted", $"Deleted “{name}”.");
+  }
+
+  private void ValidateJsonButton_Click(object sender, RoutedEventArgs e)
+  {
+    try
     {
-        _isUpdatingEditor = true;
-        try
-        {
-            MappingNameTextBox.Text = mapping.Name;
-            MappingEnabledToggle.IsOn = mapping.IsEnabled;
-            SetComboText(SourceSignalComboBox, mapping.SourceSignal);
-            SetComboText(TargetParameterComboBox, mapping.TargetParameter);
-            SetComboText(ResponseCurveComboBox, mapping.ResponseCurve);
-            SetComboText(GrammarComboBox, mapping.Grammar);
-            GainNumberBox.Value = mapping.Gain;
-            MappingSmoothingNumberBox.Value = mapping.Smoothing;
-            ThresholdNumberBox.Value = mapping.Threshold;
-            InputMinimumNumberBox.Value = mapping.InputMinimum;
-            InputMaximumNumberBox.Value = mapping.InputMaximum;
-            OutputMinimumNumberBox.Value = mapping.OutputMinimum;
-            OutputMaximumNumberBox.Value = mapping.OutputMaximum;
-            SetComboText(QuantizationComboBox, mapping.Quantization);
-            SectionComboBox.SelectedItem = mapping.Section;
-            CueComboBox.SelectedItem = mapping.Cue;
-        }
-        finally
-        {
-            _isUpdatingEditor = false;
-        }
+      ReactiveLabApplyRequest request = ParseRequest(RawJsonTextBox.Text);
+      IReadOnlyList<string> errors = ValidateRequest(request);
+      if (errors.Count == 0)
+      {
+        ShowStatus(InfoBarSeverity.Success, "JSON is valid", "The payload is structurally valid and contains authoritative Timeline content.");
+      }
+      else
+      {
+        ShowValidationErrors(errors);
+      }
+    }
+    catch (JsonException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Invalid JSON", ex.Message);
+    }
+  }
+
+  private async void UseJsonButton_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      UseRawJson(RawJsonTextBox.Text);
+      await SaveLocalStateAsync();
+      ShowStatus(InfoBarSeverity.Success, "JSON loaded", "The raw payload is now the Reactive Lab draft.");
+    }
+    catch (JsonException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, "Invalid JSON", ex.Message);
+    }
+  }
+
+  private void UseRawJson(string json)
+  {
+    _draftRequest = ParseRequest(json);
+    HasUnsavedEdits = _workflowDraftId is not null;
+    PresentKeyframes();
+    IReadOnlyList<ReactiveMapping> metadataMappings = ReadMappingsFromMetadata(_draftRequest.Metadata);
+    if (metadataMappings.Count > 0)
+    {
+      ReplaceMappings(metadataMappings);
     }
 
-    private void MoveSelectedMapping(int offset)
-    {
-        var from = MappingListView.SelectedIndex;
-        var to = from + offset;
-        if (from < 0 || to < 0 || to >= _mappings.Count)
-        {
-            return;
-        }
+    RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(
+        _draftRequest,
+        StudioJsonContext.Default.ReactiveLabApplyRequest));
+    UpdateDiagnostics();
+  }
 
-        var reordered = ReactiveWorkflow.Move(_mappings, from, to);
-        ReplaceMappings(reordered);
-        MappingListView.SelectedIndex = to;
-        PersistMappingChange();
+  private bool TryBuildRequest(out ReactiveLabApplyRequest request, out IReadOnlyList<string> errors)
+  {
+    _currentPreset = BuildCurrentPreset("Current");
+    JsonElement metadata = BuildMetadata(_draftRequest.Metadata, _currentPreset);
+    request = new ReactiveLabApplyRequest
+    {
+      Metadata = metadata,
+      Keyframes = _draftRequest.Keyframes,
+      BeatMarkers = _draftRequest.BeatMarkers,
+      CueEvents = _draftRequest.CueEvents,
+      Sections = _draftRequest.Sections,
+      RepairSuggestions = _draftRequest.RepairSuggestions,
+      Schedules = _draftRequest.Schedules,
+      HandoffManifest = _draftRequest.HandoffManifest,
+      ExtensionData = _draftRequest.ExtensionData,
+      OverwriteMotionTrack = OverwriteMotionTrackToggle.IsOn,
+      OverwriteCamera = OverwriteCameraToggle.IsOn,
+      ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project),
+    };
+    errors = ValidateRequest(request);
+    return errors.Count == 0;
+  }
+
+  private IReadOnlyList<string> ValidateRequest(ReactiveLabApplyRequest request)
+  {
+    List<string> errors = Mappings
+        .SelectMany((mapping, index) => ReactiveWorkflow.ValidateMapping(mapping)
+            .Select(error => $"Mapping {index + 1}: {error}"))
+        .ToList();
+    if (!ReactiveWorkflow.HasMeaningfulPayload(request))
+    {
+      errors.Add("The payload must contain analyzed keyframes, beats, cues, sections, repairs, schedules, or a handoff manifest.");
     }
 
-    private void ReplaceMappings(IEnumerable<ReactiveMapping> mappings)
-    {
-        _mappings.Clear();
-        foreach (var mapping in mappings)
-        {
-            _mappings.Add(mapping);
-        }
+    return errors;
+  }
 
-        MappingListView.SelectedIndex = _mappings.Count > 0 ? 0 : -1;
+  private JsonElement BuildMetadata(JsonElement? existing, ReactivePreset settings)
+  {
+    Dictionary<string, JsonElement> extensionData = new(StringComparer.Ordinal);
+    if (existing?.ValueKind == JsonValueKind.Object)
+    {
+      foreach (JsonProperty property in existing.Value.EnumerateObject())
+      {
+        if (property.Name is not ("source" or "selected_variant_index" or "mappings" or "native_mappings" or "settings"))
+        {
+          extensionData[property.Name] = property.Value.Clone();
+        }
+      }
     }
 
-    private async void PersistMappingChange()
+    ReactiveLabMetadata metadata = new()
     {
-        UpdateDiagnostics();
-        UpdateRawJson();
-        await SaveLocalStateAsync();
+      SelectedVariantIndex = _selectedVariantIndex,
+      Mappings = Mappings.ToList(),
+      Settings = settings,
+      ExtensionData = extensionData.Count == 0 ? null : extensionData
+    };
+    return JsonSerializer.SerializeToElement(metadata, StudioJsonContext.Default.ReactiveLabMetadata);
+  }
+
+  private ReactivePreset BuildCurrentPreset(string name)
+  {
+    return new()
+    {
+      Name = name,
+      Mappings = Mappings.ToList(),
+      MappingPreset = ComboText(MappingPresetComboBox),
+      Sensitivity = FiniteValue(SensitivityNumberBox.Value, 1),
+      Smoothing = FiniteValue(GlobalSmoothingNumberBox.Value, 0.82),
+      FramesPerSecond = (int)FiniteValue(FramesPerSecondNumberBox.Value, 30),
+      MinimumCutFrames = (int)FiniteValue(MinimumCutFramesNumberBox.Value, 12),
+      RenderMode = ComboText(RenderModeComboBox),
+      ScheduleStride = (int)FiniteValue(ScheduleStrideNumberBox.Value, 4),
+      Scaling = _currentPreset.Scaling,
+      ExtensionData = _currentPreset.ExtensionData
+    };
+  }
+
+  private void ApplyPresetSettings(ReactivePreset preset)
+  {
+    SetComboText(MappingPresetComboBox, preset.MappingPreset);
+    SensitivityNumberBox.Value = preset.Sensitivity;
+    GlobalSmoothingNumberBox.Value = preset.Smoothing;
+    FramesPerSecondNumberBox.Value = preset.FramesPerSecond;
+    MinimumCutFramesNumberBox.Value = preset.MinimumCutFrames;
+    ScheduleStrideNumberBox.Value = preset.ScheduleStride;
+    SetComboText(RenderModeComboBox, preset.RenderMode);
+  }
+
+  private void PopulateMappingEditor(ReactiveMapping mapping)
+  {
+    _isUpdatingEditor = true;
+    try
+    {
+      MappingNameTextBox.Text = mapping.Name;
+      MappingEnabledToggle.IsOn = mapping.IsEnabled;
+      SetComboText(SourceSignalComboBox, mapping.SourceSignal);
+      SetComboText(TargetParameterComboBox, mapping.TargetParameter);
+      SetComboText(ResponseCurveComboBox, mapping.ResponseCurve);
+      SetComboText(GrammarComboBox, mapping.Grammar);
+      GainNumberBox.Value = mapping.Gain;
+      MappingSmoothingNumberBox.Value = mapping.Smoothing;
+      ThresholdNumberBox.Value = mapping.Threshold;
+      InputMinimumNumberBox.Value = mapping.InputMinimum;
+      InputMaximumNumberBox.Value = mapping.InputMaximum;
+      OutputMinimumNumberBox.Value = mapping.OutputMinimum;
+      OutputMaximumNumberBox.Value = mapping.OutputMaximum;
+      SetComboText(QuantizationComboBox, mapping.Quantization);
+      SectionComboBox.SelectedItem = mapping.Section;
+      CueComboBox.SelectedItem = mapping.Cue;
+    }
+    finally
+    {
+      _isUpdatingEditor = false;
+    }
+  }
+
+  private void MoveSelectedMapping(int offset)
+  {
+    int from = MappingListView.SelectedIndex;
+    int to = from + offset;
+    if (from < 0 || to < 0 || to >= Mappings.Count)
+    {
+      return;
     }
 
-    private async Task<ReactiveLabLocalState?> LoadLocalStateAsync(string projectId)
-    {
-        string path = LocalStatePath(projectId);
-        if (!File.Exists(path))
-        {
-            return null;
-        }
+    IReadOnlyList<ReactiveMapping> reordered = ReactiveWorkflow.Move(Mappings, from, to);
+    ReplaceMappings(reordered);
+    MappingListView.SelectedIndex = to;
+    PersistMappingChange();
+  }
 
-        string json = await File.ReadAllTextAsync(path);
-        ReactiveLabLocalState? state = JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabLocalState);
-        return state is not null && state.TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
-            ? normalized
-            : state;
+  private void ReplaceMappings(IEnumerable<ReactiveMapping> mappings)
+  {
+    Mappings.Clear();
+    foreach (ReactiveMapping mapping in mappings)
+    {
+      Mappings.Add(mapping);
     }
 
-    private async Task SaveLocalStateAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_activeProjectId) || !_localStateWriteAllowed)
-        {
-            return;
-        }
+    MappingListView.SelectedIndex = Mappings.Count > 0 ? 0 : -1;
+  }
 
-        _currentPreset = BuildCurrentPreset("Current");
-        var state = new ReactiveLabLocalState
-        {
-            Current = _currentPreset,
-            Presets = _savedPresets.ToList(),
-            WorkspaceDraftId = _keyframesDirty ? _workflowDraftId : null,
-            WorkspaceDraftRevision = _keyframesDirty ? _workflowRevision : null,
-            WorkspaceDraft = _keyframesDirty
-                ? JsonSerializer.SerializeToElement(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest) : null,
-        };
-        var projectId = _activeProjectId;
-        var json = JsonSerializer.Serialize(state, StudioJsonContext.Default.ReactiveLabLocalState);
-        await _localStateWriteLock.WaitAsync();
-        try
-        {
-            string path = LocalStatePath(projectId);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, json);
-        }
-        finally { _localStateWriteLock.Release(); }
+  private async void PersistMappingChange()
+  {
+    UpdateDiagnostics();
+    UpdateRawJson();
+    await SaveLocalStateAsync();
+  }
+
+  private async Task<ReactiveLabLocalState?> LoadLocalStateAsync(string projectId)
+  {
+    string path = LocalStatePath(projectId);
+    if (!File.Exists(path))
+    {
+      return null;
     }
 
-    private static string LocalStatePath(string projectId)
+    string json = await File.ReadAllTextAsync(path);
+    ReactiveLabLocalState? state = JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabLocalState);
+    return state is not null && state.TryNormalizeForRecovery(out ReactiveLabLocalState normalized)
+        ? normalized
+        : state;
+  }
+
+  private async Task SaveLocalStateAsync()
+  {
+    if (string.IsNullOrWhiteSpace(_activeProjectId) || !_localStateWriteAllowed)
     {
-        string? packagedPath = WindowsPackageIdentity.IsPackaged
-            ? ApplicationData.Current.LocalFolder.Path
-            : null;
-        string root = StudioStoragePaths.ResolveRoot(
-            WindowsPackageIdentity.IsPackaged,
-            packagedPath,
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            ".");
-        return Path.Combine(root, LocalStateFileName(projectId));
+      return;
     }
 
-    private void UpdatePresetNames(string? selectedName = null)
+    _currentPreset = BuildCurrentPreset("Current");
+    ReactiveLabLocalState state = new()
     {
-        _isLoadingPreset = true;
-        try
-        {
-            _presetNames.Clear();
-            foreach (var name in _savedPresets.Select(item => item.Name).OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
-            {
-                _presetNames.Add(name);
-            }
+      Current = _currentPreset,
+      Presets = _savedPresets.ToList(),
+      WorkspaceDraftId = HasUnsavedEdits ? _workflowDraftId : null,
+      WorkspaceDraftRevision = HasUnsavedEdits ? _workflowRevision : null,
+      WorkspaceDraft = HasUnsavedEdits
+            ? JsonSerializer.SerializeToElement(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest) : null,
+    };
+    string projectId = _activeProjectId;
+    string json = JsonSerializer.Serialize(state, StudioJsonContext.Default.ReactiveLabLocalState);
+    await _localStateWriteLock.WaitAsync();
+    try
+    {
+      string path = LocalStatePath(projectId);
+      _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+      await File.WriteAllTextAsync(path, json);
+    }
+    finally { _ = _localStateWriteLock.Release(); }
+  }
 
-            PresetComboBox.SelectedItem = selectedName;
-            DeletePresetButton.IsEnabled = PresetComboBox.SelectedItem is not null;
-        }
-        finally
-        {
-            _isLoadingPreset = false;
-        }
+  private static string LocalStatePath(string projectId)
+  {
+    string? packagedPath = WindowsPackageIdentity.IsPackaged
+        ? ApplicationData.Current.LocalFolder.Path
+        : null;
+    string root = StudioStoragePaths.ResolveRoot(
+        WindowsPackageIdentity.IsPackaged,
+        packagedPath,
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        ".");
+    return Path.Combine(root, LocalStateFileName(projectId));
+  }
+
+  private void UpdatePresetNames(string? selectedName = null)
+  {
+    _isLoadingPreset = true;
+    try
+    {
+      _presetNames.Clear();
+      foreach (string? name in _savedPresets.Select(item => item.Name).OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+      {
+        _presetNames.Add(name);
+      }
+
+      PresetComboBox.SelectedItem = selectedName;
+      DeletePresetButton.IsEnabled = PresetComboBox.SelectedItem is not null;
+    }
+    finally
+    {
+      _isLoadingPreset = false;
+    }
+  }
+
+  private void UpdateRawJson()
+  {
+    if (_workflowDraftId is not null)
+    {
+      RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest));
+      return;
+    }
+    _currentPreset = BuildCurrentPreset("Current");
+    ReactiveLabApplyRequest request = new()
+    {
+      Metadata = BuildMetadata(_draftRequest.Metadata, _currentPreset),
+      Keyframes = _draftRequest.Keyframes,
+      BeatMarkers = _draftRequest.BeatMarkers,
+      CueEvents = _draftRequest.CueEvents,
+      Sections = _draftRequest.Sections,
+      RepairSuggestions = _draftRequest.RepairSuggestions,
+      Schedules = _draftRequest.Schedules,
+      HandoffManifest = _draftRequest.HandoffManifest,
+      ExtensionData = _draftRequest.ExtensionData,
+      OverwriteMotionTrack = OverwriteMotionTrackToggle.IsOn,
+      OverwriteCamera = OverwriteCameraToggle.IsOn,
+      ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project),
+    };
+    RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(
+        request,
+        StudioJsonContext.Default.ReactiveLabApplyRequest));
+  }
+
+  private void UpdateDiagnostics()
+  {
+    int enabledCount = Mappings.Count(mapping => mapping.IsEnabled);
+    List<string> mappingErrors = Mappings
+        .SelectMany((mapping, index) => ReactiveWorkflow.ValidateMapping(mapping)
+            .Select(error => $"{index + 1}. {error}"))
+        .ToList();
+    DiagnosticsTextBlock.Text =
+        $"{Mappings.Count} mappings · {enabledCount} enabled · " +
+        $"{_draftRequest.Keyframes.Count} keyframes · {_draftRequest.CueEvents.Count} cues · {_draftRequest.Sections.Count} sections" +
+        (mappingErrors.Count == 0 ? "\nMapping validation passed." : $"\n{string.Join("\n", mappingErrors)}");
+  }
+
+  private void UpdatePlanSummary(ProjectDto? project = null)
+  {
+    if (_workflowPlan is { Variants.Count: > 0 } workspacePlan)
+    {
+      PlanVariantDto selected = workspacePlan.Variants[Math.Clamp(_selectedVariantIndex, 0, workspacePlan.Variants.Count - 1)];
+      VariantSummaryTextBlock.Text = $"Shared Workspace draft: {selected.DisplayName} · {selected.SceneCount} scenes\n{selected.Logline}";
+      return;
+    }
+    ProjectDto? selectedProject = project ?? _projects.FirstOrDefault(item => item.Id == _activeProjectId);
+    if (selectedProject is null ||
+        selectedProject.Meta.ValueKind != JsonValueKind.Object ||
+        !selectedProject.Meta.TryGetProperty("last_plan", out JsonElement planElement))
+    {
+      VariantSummaryTextBlock.Text = "No selected plan variant.";
+      return;
     }
 
-    private void UpdateRawJson()
+    PlanDto? plan = JsonSerializer.Deserialize(planElement.GetRawText(), StudioJsonContext.Default.PlanDto);
+    if (plan is null || plan.Variants.Count == 0)
     {
-        if (_workflowDraftId is not null)
-        {
-            RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest));
-            return;
-        }
-        _currentPreset = BuildCurrentPreset("Current");
-        var request = new ReactiveLabApplyRequest
-        {
-            Metadata = BuildMetadata(_draftRequest.Metadata, _currentPreset),
-            Keyframes = _draftRequest.Keyframes,
-            BeatMarkers = _draftRequest.BeatMarkers,
-            CueEvents = _draftRequest.CueEvents,
-            Sections = _draftRequest.Sections,
-            RepairSuggestions = _draftRequest.RepairSuggestions,
-            Schedules = _draftRequest.Schedules,
-            HandoffManifest = _draftRequest.HandoffManifest,
-            ExtensionData = _draftRequest.ExtensionData,
-            OverwriteMotionTrack = OverwriteMotionTrackToggle.IsOn,
-            OverwriteCamera = OverwriteCameraToggle.IsOn,
-            ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project),
-        };
-        RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(
-            request,
-            StudioJsonContext.Default.ReactiveLabApplyRequest));
+      VariantSummaryTextBlock.Text = "No selected plan variant.";
+      return;
     }
 
-    private void UpdateDiagnostics()
+    _selectedVariantIndex = Math.Clamp(App.Services.Session.SelectedVariantIndex, 0, plan.Variants.Count - 1);
+    PlanVariantDto variant = plan.Variants[_selectedVariantIndex];
+    VariantSummaryTextBlock.Text = $"{variant.DisplayName} · {variant.SceneCount} scenes" +
+                                   (string.IsNullOrWhiteSpace(variant.Logline) ? string.Empty : $"\n{variant.Logline}");
+  }
+
+  private void SelectProject(string? projectId)
+  {
+    _isSynchronizingProject = true;
+    try
     {
-        var enabledCount = _mappings.Count(mapping => mapping.IsEnabled);
-        var mappingErrors = _mappings
-            .SelectMany((mapping, index) => ReactiveWorkflow.ValidateMapping(mapping)
-                .Select(error => $"{index + 1}. {error}"))
-            .ToList();
-        DiagnosticsTextBlock.Text =
-            $"{_mappings.Count} mappings · {enabledCount} enabled · " +
-            $"{_draftRequest.Keyframes.Count} keyframes · {_draftRequest.CueEvents.Count} cues · {_draftRequest.Sections.Count} sections" +
-            (mappingErrors.Count == 0 ? "\nMapping validation passed." : $"\n{string.Join("\n", mappingErrors)}");
+      ProjectComboBox.SelectedItem = _projects.FirstOrDefault(project => project.Id == projectId);
+    }
+    finally
+    {
+      _isSynchronizingProject = false;
+    }
+  }
+
+  private void SynchronizeSessionProject(string? projectId)
+  {
+    _isSynchronizingProject = true;
+    try
+    {
+      App.Services.Session.ActiveProjectId = projectId ?? string.Empty;
+    }
+    finally
+    {
+      _isSynchronizingProject = false;
+    }
+  }
+
+  private void ClearContext()
+  {
+    _workflowDraftId = null;
+    _workflowPlan = null;
+    _workflowStatus = "not_prepared";
+    HasUnsavedEdits = false;
+    Keyframes.Clear();
+    _draftRequest = new();
+    _project = null;
+    _musicGraph = null;
+    _liveCues = null;
+    _liveAssets = null;
+    _timeline = default;
+    VariantSummaryTextBlock.Text = "No selected plan variant.";
+    MusicGraphSummaryTextBlock.Text = "No Music Graph loaded.";
+    LiveCuesSummaryTextBlock.Text = "No live cues loaded.";
+    LiveAssetsSummaryTextBlock.Text = "No live assets loaded.";
+    TimelineSummaryTextBlock.Text = "No Timeline loaded.";
+    SectionComboBox.ItemsSource = Array.Empty<string>();
+    CueComboBox.ItemsSource = Array.Empty<string>();
+    ReplaceMappings([]);
+    RawJsonTextBox.Text = string.Empty;
+    DiagnosticsTextBlock.Text = "Select a project to inspect Reactive Lab diagnostics.";
+  }
+
+  private async Task RunOperationAsync(
+      string title,
+      Func<CancellationToken, Task> operation,
+      string? successMessage = null,
+      CancellationToken externalCancellationToken = default)
+  {
+    if (!_pageLoaded || _isOperationBusy)
+    {
+      return;
     }
 
-    private void UpdatePlanSummary(ProjectDto? project = null)
+    _operationCancellation?.Cancel();
+    using CancellationTokenSource operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
+    _operationCancellation = operationCancellation;
+    SetBusy(true);
+    ShowStatus(InfoBarSeverity.Informational, title, "Working…");
+    try
     {
-        if (_workflowPlan is { Variants.Count: > 0 } workspacePlan)
-        {
-            var selected = workspacePlan.Variants[Math.Clamp(_selectedVariantIndex, 0, workspacePlan.Variants.Count - 1)];
-            VariantSummaryTextBlock.Text = $"Shared Workspace draft: {selected.DisplayName} · {selected.SceneCount} scenes\n{selected.Logline}";
-            return;
-        }
-        ProjectDto? selectedProject = project ?? _projects.FirstOrDefault(item => item.Id == _activeProjectId);
-        if (selectedProject is null ||
-            selectedProject.Meta.ValueKind != JsonValueKind.Object ||
-            !selectedProject.Meta.TryGetProperty("last_plan", out var planElement))
-        {
-            VariantSummaryTextBlock.Text = "No selected plan variant.";
-            return;
-        }
+      await operation(operationCancellation.Token);
+      operationCancellation.Token.ThrowIfCancellationRequested();
+      if (!_pageLoaded || !ReferenceEquals(_operationCancellation, operationCancellation))
+      {
+        return;
+      }
 
-        var plan = JsonSerializer.Deserialize(planElement.GetRawText(), StudioJsonContext.Default.PlanDto);
-        if (plan is null || plan.Variants.Count == 0)
+      if (!string.IsNullOrWhiteSpace(successMessage))
+      {
+        ShowStatus(InfoBarSeverity.Success, "Reactive Lab updated", successMessage);
+      }
+      else if (StatusInfoBar.Title == title && StatusInfoBar.Message == "Working…")
+      {
+        ShowStatus(InfoBarSeverity.Success, "Reactive Lab ready", "The shared Workspace context is up to date.");
+      }
+    }
+    catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+    {
+      ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Reactive Lab changes were requested.");
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      if (_pageLoaded && !operationCancellation.IsCancellationRequested)
+      {
+        await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token);
+      }
+    }
+    catch (StudioApiException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.UserFacingMessage);
+    }
+    catch (HttpRequestException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+    }
+    catch (JsonException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+    }
+    catch (InvalidOperationException ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
+    }
+    catch (Exception ex)
+    {
+      ShowStatus(InfoBarSeverity.Error, $"{title} failed", StudioPageHelpers.GetErrorMessage(ex));
+    }
+    finally
+    {
+      if (ReferenceEquals(_operationCancellation, operationCancellation))
+      {
+        _operationCancellation = null;
+        _isOperationBusy = false;
+        if (_pageLoaded)
         {
-            VariantSummaryTextBlock.Text = "No selected plan variant.";
-            return;
+          SetBusy(false);
         }
+      }
+    }
+  }
 
-        _selectedVariantIndex = Math.Clamp(App.Services.Session.SelectedVariantIndex, 0, plan.Variants.Count - 1);
-        var variant = plan.Variants[_selectedVariantIndex];
-        VariantSummaryTextBlock.Text = $"{variant.DisplayName} · {variant.SceneCount} scenes" +
-                                       (string.IsNullOrWhiteSpace(variant.Logline) ? string.Empty : $"\n{variant.Logline}");
+  private void SetBusy(bool isBusy)
+  {
+    _isOperationBusy = isBusy;
+    OperationProgressBar.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
+    CancelButton.IsEnabled = isBusy;
+    RefreshButton.IsEnabled = !isBusy;
+    SaveAndOpenWorkspaceButton.IsEnabled = !isBusy && _workflowStatus == "draft";
+    SaveWorkspaceDraftButton.IsEnabled = !isBusy && _workflowStatus == "draft";
+    ReloadWorkspaceDraftButton.IsEnabled = !isBusy;
+    SetKeyframeEditingEnabled(!isBusy && _workflowStatus == "draft");
+    ProjectComboBox.IsEnabled = !isBusy;
+  }
+
+  private void SetKeyframeEditingEnabled(bool enabled)
+  {
+    bool editable = enabled && KeyframesListView.SelectedItem is ReactiveKeyframeEditor { IsEditable: true };
+    KeyframeStrengthNumberBox.IsEnabled = editable;
+    KeyframeZoomNumberBox.IsEnabled = editable;
+    KeyframesListView.IsEnabled = !_isUpdatingKeyframe;
+  }
+
+  private void ShowStatus(InfoBarSeverity severity, string title, string message)
+  {
+    StatusInfoBar.Severity = severity;
+    StatusInfoBar.Title = title;
+    StatusInfoBar.Message = message;
+    StatusInfoBar.IsOpen = true;
+  }
+
+  private void ShowValidationErrors(IReadOnlyList<string> errors)
+  {
+    ShowStatus(InfoBarSeverity.Warning, "Reactive payload needs attention", string.Join(" ", errors));
+  }
+
+  private static ReactiveLabApplyRequest ParseRequest(string json)
+  {
+    return JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabApplyRequest)
+      ?? throw new JsonException("The JSON did not contain a Reactive Lab payload.");
+  }
+
+  private static IReadOnlyList<ReactiveMapping> ReadMappingsFromMetadata(JsonElement? metadata)
+  {
+    if (metadata?.ValueKind != JsonValueKind.Object)
+    {
+      return [];
     }
 
-    private void SelectProject(string? projectId)
+    foreach (string? name in new[] { "mappings", "native_mappings" })
     {
-        _isSynchronizingProject = true;
-        try
-        {
-            ProjectComboBox.SelectedItem = _projects.FirstOrDefault(project => project.Id == projectId);
-        }
-        finally
-        {
-            _isSynchronizingProject = false;
-        }
+      if (metadata.Value.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Array)
+      {
+        return JsonSerializer.Deserialize(value.GetRawText(), StudioJsonContext.Default.ListReactiveMapping) ?? [];
+      }
     }
 
-    private void SynchronizeSessionProject(string? projectId)
+    return [];
+  }
+
+  private static string SummarizeTimeline(JsonElement timeline)
+  {
+    if (timeline.ValueKind != JsonValueKind.Object)
     {
-        _isSynchronizingProject = true;
-        try
-        {
-            App.Services.Session.ActiveProjectId = projectId ?? string.Empty;
-        }
-        finally
-        {
-            _isSynchronizingProject = false;
-        }
+      return "Timeline response is empty.";
     }
 
-    private void ClearContext()
+    int fields = timeline.EnumerateObject().Count();
+    int keyframes = ArrayLength(timeline, "keyframes");
+    int beats = ArrayLength(timeline, "beat_markers");
+    int cues = ArrayLength(timeline, "cue_events");
+    int sections = ArrayLength(timeline, "sections");
+    return $"{fields} fields · {keyframes} keyframes · {beats} beats · {cues} cues · {sections} sections";
+  }
+
+  private static int ArrayLength(JsonElement value, string propertyName)
+  {
+    return value.TryGetProperty(propertyName, out JsonElement property) && property.ValueKind == JsonValueKind.Array
+          ? property.GetArrayLength()
+          : 0;
+  }
+
+  private static string BuildProjectSummary(ProjectDto project)
+  {
+    return $"{project.Name} · {(project.HasAudio ? project.AudioFileName : "no audio")} · " +
+      $"{(project.Bpm is double bpm ? $"{bpm:0.#} BPM" : "tempo unavailable")} · " +
+      $"{project.SectionCount} analyzed sections";
+  }
+
+  private string SelectedProjectName()
+  {
+    return _projects.FirstOrDefault(project => project.Id == _activeProjectId)?.Name ?? "project";
+  }
+
+  private static void InitializePicker(object picker)
+  {
+    MainWindow window = App.MainWindowInstance
+                 ?? throw new InvalidOperationException("The main window is not available.");
+    nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+    WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+  }
+
+  private static string FormatJson(string json)
+  {
+    using JsonDocument document = JsonDocument.Parse(json);
+    return JsonSerializer.Serialize(document.RootElement, _indentedJsonContext.JsonElement);
+  }
+
+  private static string ComboText(ComboBox comboBox)
+  {
+    return NullIfWhiteSpace(comboBox.Text) ?? comboBox.SelectedItem?.ToString() ?? string.Empty;
+  }
+
+  private static void SetComboText(ComboBox comboBox, string value)
+  {
+    comboBox.SelectedItem = comboBox.Items.Cast<object>()
+        .FirstOrDefault(item => string.Equals(item?.ToString(), value, StringComparison.OrdinalIgnoreCase));
+    if (comboBox.SelectedItem is null)
     {
-        _workflowDraftId = null;
-        _workflowPlan = null;
-        _workflowStatus = "not_prepared";
-        _keyframesDirty = false;
-        _keyframes.Clear();
-        _draftRequest = new();
-        _project = null;
-        _musicGraph = null;
-        _liveCues = null;
-        _liveAssets = null;
-        _timeline = default;
-        VariantSummaryTextBlock.Text = "No selected plan variant.";
-        MusicGraphSummaryTextBlock.Text = "No Music Graph loaded.";
-        LiveCuesSummaryTextBlock.Text = "No live cues loaded.";
-        LiveAssetsSummaryTextBlock.Text = "No live assets loaded.";
-        TimelineSummaryTextBlock.Text = "No Timeline loaded.";
-        SectionComboBox.ItemsSource = Array.Empty<string>();
-        CueComboBox.ItemsSource = Array.Empty<string>();
-        ReplaceMappings([]);
-        RawJsonTextBox.Text = string.Empty;
-        DiagnosticsTextBlock.Text = "Select a project to inspect Reactive Lab diagnostics.";
+      comboBox.Text = value;
     }
+  }
 
-    private async Task RunOperationAsync(
-        string title,
-        Func<CancellationToken, Task> operation,
-        string? successMessage = null,
-        CancellationToken externalCancellationToken = default)
-    {
-        if (!_pageLoaded || _isOperationBusy) return;
-        _operationCancellation?.Cancel();
-        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
-        _operationCancellation = operationCancellation;
-        SetBusy(true);
-        ShowStatus(InfoBarSeverity.Informational, title, "Working…");
-        try
-        {
-            await operation(operationCancellation.Token);
-            operationCancellation.Token.ThrowIfCancellationRequested();
-            if (!_pageLoaded || !ReferenceEquals(_operationCancellation, operationCancellation)) return;
-            if (!string.IsNullOrWhiteSpace(successMessage))
-            {
-                ShowStatus(InfoBarSeverity.Success, "Reactive Lab updated", successMessage);
-            }
-            else if (StatusInfoBar.Title == title && StatusInfoBar.Message == "Working…")
-            {
-                ShowStatus(InfoBarSeverity.Success, "Reactive Lab ready", "The shared Workspace context is up to date.");
-            }
-        }
-        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-        {
-            ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Reactive Lab changes were requested.");
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            if (_pageLoaded && !operationCancellation.IsCancellationRequested)
-                await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token);
-        }
-        catch (StudioApiException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.UserFacingMessage);
-        }
-        catch (HttpRequestException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
-        }
-        catch (JsonException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
-        }
-        catch (Exception ex)
-        {
-            ShowStatus(InfoBarSeverity.Error, $"{title} failed", StudioPageHelpers.GetErrorMessage(ex));
-        }
-        finally
-        {
-            if (ReferenceEquals(_operationCancellation, operationCancellation))
-            {
-                _operationCancellation = null;
-                _isOperationBusy = false;
-                if (_pageLoaded) SetBusy(false);
-            }
-        }
-    }
+  private static List<string> ParseList(string value)
+  {
+    return value.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+          .Distinct(StringComparer.OrdinalIgnoreCase)
+          .ToList();
+  }
 
-    private void SetBusy(bool isBusy)
-    {
-        _isOperationBusy = isBusy;
-        OperationProgressBar.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
-        CancelButton.IsEnabled = isBusy;
-        RefreshButton.IsEnabled = !isBusy;
-        SaveAndOpenWorkspaceButton.IsEnabled = !isBusy && _workflowStatus == "draft";
-        SaveWorkspaceDraftButton.IsEnabled = !isBusy && _workflowStatus == "draft";
-        ReloadWorkspaceDraftButton.IsEnabled = !isBusy;
-        SetKeyframeEditingEnabled(!isBusy && _workflowStatus == "draft");
-        ProjectComboBox.IsEnabled = !isBusy;
-    }
+  private static double FiniteValue(double value, double fallback)
+  {
+    return double.IsFinite(value) ? value : fallback;
+  }
 
-    private void SetKeyframeEditingEnabled(bool enabled)
-    {
-        bool editable = enabled && KeyframesListView.SelectedItem is ReactiveKeyframeEditor { IsEditable: true };
-        KeyframeStrengthNumberBox.IsEnabled = editable;
-        KeyframeZoomNumberBox.IsEnabled = editable;
-        KeyframesListView.IsEnabled = !_isUpdatingKeyframe;
-    }
+  private static string? NullIfWhiteSpace(string? value)
+  {
+    return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  }
 
-    private void ShowStatus(InfoBarSeverity severity, string title, string message)
-    {
-        StatusInfoBar.Severity = severity;
-        StatusInfoBar.Title = title;
-        StatusInfoBar.Message = message;
-        StatusInfoBar.IsOpen = true;
-    }
+  private static string SafeFileName(string value)
+  {
+    return string.Concat(value.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
+  }
 
-    private void ShowValidationErrors(IReadOnlyList<string> errors) =>
-        ShowStatus(InfoBarSeverity.Warning, "Reactive payload needs attention", string.Join(" ", errors));
-
-    private static ReactiveLabApplyRequest ParseRequest(string json) =>
-        JsonSerializer.Deserialize(json, StudioJsonContext.Default.ReactiveLabApplyRequest)
-        ?? throw new JsonException("The JSON did not contain a Reactive Lab payload.");
-
-    private static IReadOnlyList<ReactiveMapping> ReadMappingsFromMetadata(JsonElement? metadata)
-    {
-        if (metadata?.ValueKind != JsonValueKind.Object)
-        {
-            return [];
-        }
-
-        foreach (var name in new[] { "mappings", "native_mappings" })
-        {
-            if (metadata.Value.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array)
-            {
-                return JsonSerializer.Deserialize(value.GetRawText(), StudioJsonContext.Default.ListReactiveMapping) ?? [];
-            }
-        }
-
-        return [];
-    }
-
-    private static string SummarizeTimeline(JsonElement timeline)
-    {
-        if (timeline.ValueKind != JsonValueKind.Object)
-        {
-            return "Timeline response is empty.";
-        }
-
-        var fields = timeline.EnumerateObject().Count();
-        var keyframes = ArrayLength(timeline, "keyframes");
-        var beats = ArrayLength(timeline, "beat_markers");
-        var cues = ArrayLength(timeline, "cue_events");
-        var sections = ArrayLength(timeline, "sections");
-        return $"{fields} fields · {keyframes} keyframes · {beats} beats · {cues} cues · {sections} sections";
-    }
-
-    private static int ArrayLength(JsonElement value, string propertyName) =>
-        value.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Array
-            ? property.GetArrayLength()
-            : 0;
-
-    private static string BuildProjectSummary(ProjectDto project) =>
-        $"{project.Name} · {(project.HasAudio ? project.AudioFileName : "no audio")} · " +
-        $"{(project.Bpm is double bpm ? $"{bpm:0.#} BPM" : "tempo unavailable")} · " +
-        $"{project.SectionCount} analyzed sections";
-
-    private string SelectedProjectName() =>
-        _projects.FirstOrDefault(project => project.Id == _activeProjectId)?.Name ?? "project";
-
-    private static void InitializePicker(object picker)
-    {
-        var window = App.MainWindowInstance
-                     ?? throw new InvalidOperationException("The main window is not available.");
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-    }
-
-    private static string FormatJson(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        return JsonSerializer.Serialize(document.RootElement, _indentedJsonContext.JsonElement);
-    }
-
-    private static string ComboText(ComboBox comboBox) =>
-        NullIfWhiteSpace(comboBox.Text) ?? comboBox.SelectedItem?.ToString() ?? string.Empty;
-
-    private static void SetComboText(ComboBox comboBox, string value)
-    {
-        comboBox.SelectedItem = comboBox.Items.Cast<object>()
-            .FirstOrDefault(item => string.Equals(item?.ToString(), value, StringComparison.OrdinalIgnoreCase));
-        if (comboBox.SelectedItem is null)
-        {
-            comboBox.Text = value;
-        }
-    }
-
-    private static List<string> ParseList(string value) =>
-        value.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-    private static double FiniteValue(double value, double fallback) =>
-        double.IsFinite(value) ? value : fallback;
-
-    private static string? NullIfWhiteSpace(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string SafeFileName(string value) =>
-        string.Concat(value.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '-' : character));
-
-    private static string LocalStateFileName(string projectId) =>
-        $"reactive-lab-{SafeFileName(projectId)}.json";
+  private static string LocalStateFileName(string projectId)
+  {
+    return $"reactive-lab-{SafeFileName(projectId)}.json";
+  }
 }

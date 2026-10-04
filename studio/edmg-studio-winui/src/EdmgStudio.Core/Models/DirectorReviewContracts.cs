@@ -16,116 +16,116 @@ public sealed record ReviewRequest(
 
 public sealed class DirectorReviewResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("replayed")]
-    public bool Replayed { get; init; }
+  [JsonPropertyName("replayed")]
+  public bool Replayed { get; init; }
 
-    [JsonPropertyName("report")]
-    public required ReviewReport Report { get; init; }
+  [JsonPropertyName("report")]
+  public required ReviewReport Report { get; init; }
 }
 
 public sealed class DirectorReviewListResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("reports")]
-    public List<ReviewReport> Reports { get; init; } = [];
+  [JsonPropertyName("reports")]
+  public List<ReviewReport> Reports { get; init; } = [];
 }
 
 public sealed class DirectorReviewApplyResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("replayed")]
-    public bool Replayed { get; init; }
+  [JsonPropertyName("replayed")]
+  public bool Replayed { get; init; }
 
-    [JsonPropertyName("revision")]
-    public long Revision { get; init; }
+  [JsonPropertyName("revision")]
+  public long Revision { get; init; }
 
-    [JsonPropertyName("report")]
-    public required ReviewReport Report { get; init; }
+  [JsonPropertyName("report")]
+  public required ReviewReport Report { get; init; }
 }
 
 public sealed class ReviewReport
 {
-    [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; init; }
+  [JsonPropertyName("schema_version")]
+  public int SchemaVersion { get; init; }
 
-    [JsonPropertyName("report_id")]
-    public string ReportId { get; init; } = string.Empty;
+  [JsonPropertyName("report_id")]
+  public string ReportId { get; init; } = string.Empty;
 
-    [JsonPropertyName("request_fingerprint")]
-    public string RequestFingerprint { get; init; } = string.Empty;
+  [JsonPropertyName("request_fingerprint")]
+  public string RequestFingerprint { get; init; } = string.Empty;
 
-    [JsonPropertyName("project_id")]
-    public string ProjectId { get; init; } = string.Empty;
+  [JsonPropertyName("project_id")]
+  public string ProjectId { get; init; } = string.Empty;
 
-    [JsonPropertyName("project_revision")]
-    public long ProjectRevision { get; init; }
+  [JsonPropertyName("project_revision")]
+  public long ProjectRevision { get; init; }
 
-    [JsonPropertyName("source_draft_id")]
-    public string? SourceDraftId { get; init; }
+  [JsonPropertyName("source_draft_id")]
+  public string? SourceDraftId { get; init; }
 
-    [JsonPropertyName("source_draft_fingerprint")]
-    public string? SourceDraftFingerprint { get; init; }
+  [JsonPropertyName("source_draft_fingerprint")]
+  public string? SourceDraftFingerprint { get; init; }
 
-    [JsonPropertyName("retry_chain_id")]
-    public string RetryChainId { get; init; } = string.Empty;
+  [JsonPropertyName("retry_chain_id")]
+  public string RetryChainId { get; init; } = string.Empty;
 
-    [JsonPropertyName("artifact_path")]
-    public string ArtifactPath { get; init; } = string.Empty;
+  [JsonPropertyName("artifact_path")]
+  public string ArtifactPath { get; init; } = string.Empty;
 
-    [JsonPropertyName("artifact_sha256")]
-    public string ArtifactSha256 { get; init; } = string.Empty;
+  [JsonPropertyName("artifact_sha256")]
+  public string ArtifactSha256 { get; init; } = string.Empty;
 
-    [JsonPropertyName("artifact_bytes")]
-    public long ArtifactBytes { get; init; }
+  [JsonPropertyName("artifact_bytes")]
+  public long ArtifactBytes { get; init; }
 
-    [JsonPropertyName("status")]
-    public string Status { get; init; } = string.Empty;
+  [JsonPropertyName("status")]
+  public string Status { get; init; } = string.Empty;
 
-    [JsonPropertyName("disposition")]
-    public string Disposition { get; init; } = string.Empty;
+  [JsonPropertyName("disposition")]
+  public string Disposition { get; init; } = string.Empty;
 
-    [JsonPropertyName("created_at")]
-    public string CreatedAt { get; init; } = string.Empty;
+  [JsonPropertyName("created_at")]
+  public string CreatedAt { get; init; } = string.Empty;
 
-    [JsonPropertyName("duration_seconds")]
-    public double DurationSeconds { get; init; }
+  [JsonPropertyName("duration_seconds")]
+  public double DurationSeconds { get; init; }
 
-    [JsonPropertyName("samples")]
-    public List<FrameEvidence> Samples { get; init; } = [];
+  [JsonPropertyName("samples")]
+  public List<FrameEvidence> Samples { get; init; } = [];
 
-    [JsonPropertyName("dimensions")]
-    public List<DimensionScore> Dimensions { get; init; } = [];
+  [JsonPropertyName("dimensions")]
+  public List<DimensionScore> Dimensions { get; init; } = [];
 
-    [JsonPropertyName("aggregate_score")]
-    public double? AggregateScore { get; init; }
+  [JsonPropertyName("aggregate_score")]
+  public double? AggregateScore { get; init; }
 
-    [JsonPropertyName("continuity_score")]
-    public double? ContinuityScore { get; init; }
+  [JsonPropertyName("continuity_score")]
+  public double? ContinuityScore { get; init; }
 
-    [JsonPropertyName("threshold")]
-    public double Threshold { get; init; }
+  [JsonPropertyName("threshold")]
+  public double Threshold { get; init; }
 
-    [JsonPropertyName("findings")]
-    public List<ReviewFinding> Findings { get; init; } = [];
+  [JsonPropertyName("findings")]
+  public List<ReviewFinding> Findings { get; init; } = [];
 
-    [JsonPropertyName("correction_plan")]
-    public CorrectionPlan CorrectionPlan { get; init; } = new();
+  [JsonPropertyName("correction_plan")]
+  public CorrectionPlan CorrectionPlan { get; init; } = new();
 
-    [JsonPropertyName("retry")]
-    public RetryPolicy Retry { get; init; } = new(0.75, 2, 1, string.Empty, []);
+  [JsonPropertyName("retry")]
+  public RetryPolicy Retry { get; init; } = new(0.75, 2, 1, string.Empty, []);
 
-    [JsonPropertyName("clip_understanding")]
-    public ClipUnderstandingResult ClipUnderstanding { get; init; } = new(false, "disabled", "clip_understanding", string.Empty);
+  [JsonPropertyName("clip_understanding")]
+  public ClipUnderstandingResult ClipUnderstanding { get; init; } = new(false, "disabled", "clip_understanding", string.Empty);
 
-    [JsonPropertyName("provenance")]
-    public Dictionary<string, JsonElement> Provenance { get; init; } = [];
+  [JsonPropertyName("provenance")]
+  public Dictionary<string, JsonElement> Provenance { get; init; } = [];
 }
 
 public sealed record FrameEvidence(
@@ -155,20 +155,20 @@ public sealed record ClipUnderstandingResult(
 
 public sealed class CorrectionPlan
 {
-    [JsonPropertyName("state")]
-    public string State { get; set; } = string.Empty;
+  [JsonPropertyName("state")]
+  public string State { get; set; } = string.Empty;
 
-    [JsonPropertyName("target_scene_id")]
-    public string? TargetSceneId { get; init; }
+  [JsonPropertyName("target_scene_id")]
+  public string? TargetSceneId { get; init; }
 
-    [JsonPropertyName("guidance")]
-    public List<string> Guidance { get; init; } = [];
+  [JsonPropertyName("guidance")]
+  public List<string> Guidance { get; init; } = [];
 
-    [JsonPropertyName("director_document")]
-    public JsonElement? DirectorDocument { get; init; }
+  [JsonPropertyName("director_document")]
+  public JsonElement? DirectorDocument { get; init; }
 
-    [JsonPropertyName("applied_revision")]
-    public long? AppliedRevision { get; set; }
+  [JsonPropertyName("applied_revision")]
+  public long? AppliedRevision { get; set; }
 }
 
 public sealed record RetryAttempt(
@@ -190,21 +190,29 @@ public sealed record ApplyCorrectionRequest(
 
 public static class DirectorReviewPresentation
 {
-    public static string FormatScore(double? score, string? state = "assessed") =>
-        !string.Equals(state, "assessed", StringComparison.OrdinalIgnoreCase) || score is null
-            ? "Not assessed"
-            : score.Value.ToString("P0", CultureInfo.CurrentCulture);
+  public static string FormatScore(double? score, string? state = "assessed")
+  {
+    return !string.Equals(state, "assessed", StringComparison.OrdinalIgnoreCase) || score is null
+          ? "Not assessed"
+          : score.Value.ToString("P0", CultureInfo.CurrentCulture);
+  }
 
-    public static string FormatThreshold(double threshold) =>
-        Math.Clamp(threshold, 0, 1).ToString("P0", CultureInfo.CurrentCulture);
+  public static string FormatThreshold(double threshold)
+  {
+    return Math.Clamp(threshold, 0, 1).ToString("P0", CultureInfo.CurrentCulture);
+  }
 
-    public static bool CanRunNextAttempt(ReviewReport? report) =>
-        report is not null &&
-        string.Equals(report.Retry.Result, "recommended", StringComparison.OrdinalIgnoreCase) &&
-        report.Retry.Attempt < report.Retry.MaxAttempts;
+  public static bool CanRunNextAttempt(ReviewReport? report)
+  {
+    return report is not null &&
+      string.Equals(report.Retry.Result, "recommended", StringComparison.OrdinalIgnoreCase) &&
+      report.Retry.Attempt < report.Retry.MaxAttempts;
+  }
 
-    public static bool CanApplyCorrection(ReviewReport? report) =>
-        report is not null &&
-        string.Equals(report.CorrectionPlan.State, "proposed", StringComparison.OrdinalIgnoreCase) &&
-        report.CorrectionPlan.DirectorDocument is { ValueKind: JsonValueKind.Object };
+  public static bool CanApplyCorrection(ReviewReport? report)
+  {
+    return report is not null &&
+      string.Equals(report.CorrectionPlan.State, "proposed", StringComparison.OrdinalIgnoreCase) &&
+      report.CorrectionPlan.DirectorDocument is { ValueKind: JsonValueKind.Object };
+  }
 }

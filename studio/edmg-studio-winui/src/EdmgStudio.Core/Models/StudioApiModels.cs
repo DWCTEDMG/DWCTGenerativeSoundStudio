@@ -10,175 +10,154 @@ public sealed record HealthResponse(
 
 public sealed class ProjectListResponse
 {
-    [JsonPropertyName("projects")]
-    public List<ProjectDto> Projects { get; init; } = [];
+  [JsonPropertyName("projects")]
+  public List<ProjectDto> Projects { get; init; } = [];
 }
 
 public sealed class ProjectResponse
 {
-    [JsonPropertyName("project")]
-    public required ProjectDto Project { get; init; }
+  [JsonPropertyName("project")]
+  public required ProjectDto Project { get; init; }
 
-    [JsonPropertyName("visual_dna")]
-    public JsonElement VisualDna { get; init; }
+  [JsonPropertyName("visual_dna")]
+  public JsonElement VisualDna { get; init; }
 
-    [JsonPropertyName("visual_dna_hints")]
-    public JsonElement VisualDnaHints { get; init; }
+  [JsonPropertyName("visual_dna_hints")]
+  public JsonElement VisualDnaHints { get; init; }
 }
 
 public sealed class ProjectDto
 {
-    [JsonPropertyName("id")]
-    public string Id { get; init; } = string.Empty;
+  [JsonPropertyName("id")]
+  public string Id { get; init; } = string.Empty;
 
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
+  [JsonPropertyName("name")]
+  public string Name { get; init; } = string.Empty;
 
-    [JsonPropertyName("created_at")]
-    public string CreatedAt { get; init; } = string.Empty;
+  [JsonPropertyName("created_at")]
+  public string CreatedAt { get; init; } = string.Empty;
 
-    [JsonPropertyName("updated_at")]
-    public string UpdatedAt { get; init; } = string.Empty;
+  [JsonPropertyName("updated_at")]
+  public string UpdatedAt { get; init; } = string.Empty;
 
-    [JsonPropertyName("revision")]
-    public long Revision { get; init; }
+  [JsonPropertyName("revision")]
+  public long Revision { get; init; }
 
-    [JsonPropertyName("meta")]
-    public JsonElement Meta { get; init; }
+  [JsonPropertyName("meta")]
+  public JsonElement Meta { get; init; }
 
-    [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; init; }
+  [JsonPropertyName("schema_version")]
+  public int SchemaVersion { get; init; }
 
-    [JsonIgnore]
-    public CanonicalProject CanonicalProject => ProjectTimelineContracts.FromProject(this);
+  [JsonIgnore]
+  public CanonicalProject CanonicalProject => ProjectTimelineContracts.FromProject(this);
 
-    [JsonIgnore]
-    public bool HasAudio => TryGetMetaObject("audio", out _);
+  [JsonIgnore]
+  public bool HasAudio => TryGetMetaObject("audio", out _);
 
-    [JsonIgnore]
-    public bool HasAnalysis => TryGetMetaObject("analysis", out _);
+  [JsonIgnore]
+  public bool HasAnalysis => TryGetMetaObject("analysis", out _);
 
-    [JsonIgnore]
-    public bool HasPlan => TryGetMetaObject("last_plan", out _);
+  [JsonIgnore]
+  public bool HasPlan => TryGetMetaObject("last_plan", out _);
 
-    [JsonIgnore]
-    public string AudioFileName =>
-        TryGetMetaObject("audio", out var audio) && audio.TryGetProperty("filename", out var filename)
-            ? filename.GetString() ?? string.Empty
-            : string.Empty;
+  [JsonIgnore]
+  public string AudioFileName =>
+      TryGetMetaObject("audio", out JsonElement audio) && audio.TryGetProperty("filename", out JsonElement filename)
+          ? filename.GetString() ?? string.Empty
+          : string.Empty;
 
-    [JsonIgnore]
-    public long? AudioSizeBytes =>
-        TryGetMetaObject("audio", out var audio) && audio.TryGetProperty("size_bytes", out var size) && size.TryGetInt64(out var value)
-            ? value
-            : null;
+  [JsonIgnore]
+  public long? AudioSizeBytes =>
+      TryGetMetaObject("audio", out JsonElement audio) && audio.TryGetProperty("size_bytes", out JsonElement size) && size.TryGetInt64(out long value)
+          ? value
+          : null;
 
-    [JsonIgnore]
-    public double? Bpm =>
-        GetAnalysisNumber("bpm") ??
-        GetAnalysisNumber("tempo_bpm") ??
-        GetAnalysisNumber("tempo");
+  [JsonIgnore]
+  public double? Bpm =>
+      GetAnalysisNumber("bpm") ??
+      GetAnalysisNumber("tempo_bpm") ??
+      GetAnalysisNumber("tempo");
 
-    [JsonIgnore]
-    public double? DurationSeconds =>
-        GetAnalysisNumber("duration_s") ??
-        GetAnalysisNumber("duration") ??
-        GetTopLevelAnalysisNumber("duration_s") ??
-        GetTopLevelAnalysisNumber("duration");
+  [JsonIgnore]
+  public double? DurationSeconds =>
+      GetAnalysisNumber("duration_s") ??
+      GetAnalysisNumber("duration") ??
+      GetTopLevelAnalysisNumber("duration_s") ??
+      GetTopLevelAnalysisNumber("duration");
 
-    [JsonIgnore]
-    public int SectionCount =>
-        TryGetMetaObject("analysis", out var analysis) &&
-        analysis.TryGetProperty("sections", out var sections) &&
-        sections.ValueKind == JsonValueKind.Array
-            ? sections.GetArrayLength()
-            : 0;
+  [JsonIgnore]
+  public int SectionCount =>
+      TryGetMetaObject("analysis", out JsonElement analysis) &&
+      analysis.TryGetProperty("sections", out JsonElement sections) &&
+      sections.ValueKind == JsonValueKind.Array
+          ? sections.GetArrayLength()
+          : 0;
 
-    [JsonIgnore]
-    public string TranscriptStatus
+  [JsonIgnore]
+  public string TranscriptStatus
+  {
+    get
     {
-        get
-        {
-            if (!TryGetMetaObject("analysis", out var analysis) ||
-                !analysis.TryGetProperty("transcript", out var transcript) ||
-                transcript.ValueKind is not (JsonValueKind.Object or JsonValueKind.String))
-            {
-                return "Waiting for analysis";
-            }
+      if (!TryGetMetaObject("analysis", out JsonElement analysis) ||
+          !analysis.TryGetProperty("transcript", out JsonElement transcript) ||
+          transcript.ValueKind is not (JsonValueKind.Object or JsonValueKind.String))
+      {
+        return "Waiting for analysis";
+      }
 
-            if (transcript.ValueKind == JsonValueKind.String)
-            {
-                return string.IsNullOrWhiteSpace(transcript.GetString()) ? "Audio-only analysis" : "Transcript ready";
-            }
+      if (transcript.ValueKind == JsonValueKind.String)
+      {
+        return string.IsNullOrWhiteSpace(transcript.GetString()) ? "Audio-only analysis" : "Transcript ready";
+      }
 
-            if (transcript.TryGetProperty("text", out var text) && !string.IsNullOrWhiteSpace(text.GetString()))
-            {
-                return "Transcript ready";
-            }
-
-            if (transcript.TryGetProperty("note", out var note) && !string.IsNullOrWhiteSpace(note.GetString()))
-            {
-                return note.GetString()!;
-            }
-
-            if (transcript.TryGetProperty("error", out var error) && !string.IsNullOrWhiteSpace(error.GetString()))
-            {
-                return "Transcription failed; audio analysis is still available";
-            }
-
-            return HasAnalysis ? "Audio-only analysis" : "Waiting for analysis";
-        }
+      return transcript.TryGetProperty("text", out JsonElement text) && !string.IsNullOrWhiteSpace(text.GetString())
+        ? "Transcript ready"
+        : transcript.TryGetProperty("note", out JsonElement note) && !string.IsNullOrWhiteSpace(note.GetString())
+        ? note.GetString()!
+        : transcript.TryGetProperty("error", out JsonElement error) && !string.IsNullOrWhiteSpace(error.GetString())
+              ? "Transcription failed; audio analysis is still available"
+              : HasAnalysis ? "Audio-only analysis" : "Waiting for analysis";
     }
+  }
 
-    [JsonIgnore]
-    public IReadOnlyList<PlanVariantDto> PlanVariants
-    {
-        get
-        {
-            if (!TryGetMetaObject("last_plan", out var plan) ||
-                !plan.TryGetProperty("variants", out var variants) ||
-                variants.ValueKind != JsonValueKind.Array)
-            {
-                return [];
-            }
+  [JsonIgnore]
+  public IReadOnlyList<PlanVariantDto> PlanVariants => !TryGetMetaObject("last_plan", out JsonElement plan) ||
+              !plan.TryGetProperty("variants", out JsonElement variants) ||
+              variants.ValueKind != JsonValueKind.Array
+            ? []
+            : (IReadOnlyList<PlanVariantDto>)(JsonSerializer.Deserialize(
+              variants.GetRawText(),
+              StudioJson.GetTypeInfo<List<PlanVariantDto>>()) ?? []);
 
-            return JsonSerializer.Deserialize(
-                variants.GetRawText(),
-                StudioJson.GetTypeInfo<List<PlanVariantDto>>()) ?? [];
-        }
-    }
+  private bool TryGetMetaObject(string propertyName, out JsonElement value)
+  {
+    value = default;
+    return Meta.ValueKind == JsonValueKind.Object &&
+           Meta.TryGetProperty(propertyName, out value) &&
+           value.ValueKind == JsonValueKind.Object &&
+           value.EnumerateObject().Any();
+  }
 
-    private bool TryGetMetaObject(string propertyName, out JsonElement value)
-    {
-        value = default;
-        return Meta.ValueKind == JsonValueKind.Object &&
-               Meta.TryGetProperty(propertyName, out value) &&
-               value.ValueKind == JsonValueKind.Object &&
-               value.EnumerateObject().Any();
-    }
-
-    private double? GetAnalysisNumber(string propertyName)
-    {
-        if (!TryGetMetaObject("analysis", out var analysis) ||
-            !analysis.TryGetProperty("features", out var features) ||
+  private double? GetAnalysisNumber(string propertyName)
+  {
+    return !TryGetMetaObject("analysis", out JsonElement analysis) ||
+            !analysis.TryGetProperty("features", out JsonElement features) ||
             features.ValueKind != JsonValueKind.Object ||
-            !features.TryGetProperty(propertyName, out var value) ||
-            !value.TryGetDouble(out var number))
-        {
-            return null;
-        }
+            !features.TryGetProperty(propertyName, out JsonElement value) ||
+            !value.TryGetDouble(out double number)
+          ? null
+          : number;
+  }
 
-        return number;
-    }
-
-    private double? GetTopLevelAnalysisNumber(string propertyName)
-    {
-        return TryGetMetaObject("analysis", out var analysis) &&
-               analysis.TryGetProperty(propertyName, out var value) &&
-               value.TryGetDouble(out var number)
-            ? number
-            : null;
-    }
+  private double? GetTopLevelAnalysisNumber(string propertyName)
+  {
+    return TryGetMetaObject("analysis", out JsonElement analysis) &&
+           analysis.TryGetProperty(propertyName, out JsonElement value) &&
+           value.TryGetDouble(out double number)
+        ? number
+        : null;
+  }
 }
 
 public sealed record CreateProjectRequest(
@@ -199,177 +178,168 @@ public sealed record PlanRequest(
 
 public sealed class AnalysisResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("analysis")]
-    public JsonElement Analysis { get; init; }
+  [JsonPropertyName("analysis")]
+  public JsonElement Analysis { get; init; }
 }
 
 public sealed class SignedMediaUrlBatchRequest
 {
-    [JsonPropertyName("requests")]
-    public List<SignedMediaUrlRequest> Requests { get; init; } = [];
+  [JsonPropertyName("requests")]
+  public List<SignedMediaUrlRequest> Requests { get; init; } = [];
 }
 
 public sealed class SignedMediaUrlRequest
 {
-    [JsonPropertyName("preview_kind")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? PreviewKind { get; init; }
+  [JsonPropertyName("preview_kind")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public string? PreviewKind { get; init; }
 
-    [JsonPropertyName("purpose")]
-    public string Purpose { get; init; } = string.Empty;
+  [JsonPropertyName("purpose")]
+  public string Purpose { get; init; } = string.Empty;
 
-    [JsonPropertyName("path")]
-    public string? Path { get; init; }
+  [JsonPropertyName("path")]
+  public string? Path { get; init; }
 
-    [JsonPropertyName("query")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    public JsonElement Query { get; init; }
+  [JsonPropertyName("query")]
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+  public JsonElement Query { get; init; }
 }
 
 public sealed class SignedMediaUrlBatchResponse
 {
-    [JsonPropertyName("expires_at")]
-    public long ExpiresAtUnixSeconds { get; init; }
+  [JsonPropertyName("expires_at")]
+  public long ExpiresAtUnixSeconds { get; init; }
 
-    [JsonPropertyName("urls")]
-    public List<SignedMediaUrlResponse> Urls { get; init; } = [];
+  [JsonPropertyName("urls")]
+  public List<SignedMediaUrlResponse> Urls { get; init; } = [];
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class SignedMediaUrlResponse
 {
-    [JsonPropertyName("purpose")]
-    public string Purpose { get; init; } = string.Empty;
+  [JsonPropertyName("purpose")]
+  public string Purpose { get; init; } = string.Empty;
 
-    [JsonPropertyName("url")]
-    public string Url { get; init; } = string.Empty;
+  [JsonPropertyName("url")]
+  public string Url { get; init; } = string.Empty;
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class PlanDto
 {
-    [JsonPropertyName("source")]
-    public string Source { get; init; } = string.Empty;
+  [JsonPropertyName("source")]
+  public string Source { get; init; } = string.Empty;
 
-    [JsonPropertyName("duration_s")]
-    public double? DurationSeconds { get; init; }
+  [JsonPropertyName("duration_s")]
+  public double? DurationSeconds { get; init; }
 
-    [JsonPropertyName("variants")]
-    public List<PlanVariantDto> Variants { get; init; } = [];
+  [JsonPropertyName("variants")]
+  public List<PlanVariantDto> Variants { get; init; } = [];
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class PlanVariantDto
 {
-    [JsonPropertyName("schedule_draft")]
-    public PlannerScheduleDraft? ScheduleDraft { get; set; }
+  [JsonPropertyName("schedule_draft")]
+  public PlannerScheduleDraft? ScheduleDraft { get; set; }
 
-    [JsonPropertyName("index")]
-    public int? Index { get; init; }
+  [JsonPropertyName("index")]
+  public int? Index { get; init; }
 
-    [JsonPropertyName("name")]
-    public string? Name { get; init; }
+  [JsonPropertyName("name")]
+  public string? Name { get; init; }
 
-    [JsonPropertyName("logline")]
-    public string? Logline { get; init; }
+  [JsonPropertyName("logline")]
+  public string? Logline { get; init; }
 
-    [JsonPropertyName("duration_s")]
-    public double? DurationSeconds { get; init; }
+  [JsonPropertyName("duration_s")]
+  public double? DurationSeconds { get; init; }
 
-    [JsonPropertyName("scenes")]
-    public List<PlanSceneDto> Scenes { get; init; } = [];
+  [JsonPropertyName("scenes")]
+  public List<PlanSceneDto> Scenes { get; init; } = [];
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 
-    [JsonIgnore]
-    public string DisplayName => !string.IsNullOrWhiteSpace(Name) ? Name! : $"Variant {(Index ?? 0) + 1}";
+  [JsonIgnore]
+  public string DisplayName => !string.IsNullOrWhiteSpace(Name) ? Name! : $"Variant {(Index ?? 0) + 1}";
 
-    [JsonIgnore]
-    public int SceneCount => Scenes.Count;
+  [JsonIgnore]
+  public int SceneCount => Scenes.Count;
 }
 
 public sealed class PlanSceneDto
 {
-    [JsonPropertyName("start_s")]
-    public double StartSeconds { get; init; }
+  [JsonPropertyName("start_s")]
+  public double StartSeconds { get; init; }
 
-    [JsonPropertyName("end_s")]
-    public double EndSeconds { get; init; }
+  [JsonPropertyName("end_s")]
+  public double EndSeconds { get; init; }
 
-    [JsonPropertyName("prompt")]
-    public string Prompt { get; init; } = string.Empty;
+  [JsonPropertyName("prompt")]
+  public string Prompt { get; init; } = string.Empty;
 
-    [JsonPropertyName("negative_prompt")]
-    public string? NegativePrompt { get; init; }
+  [JsonPropertyName("negative_prompt")]
+  public string? NegativePrompt { get; init; }
 
-    [JsonPropertyName("setting")]
-    public string? Setting { get; init; }
+  [JsonPropertyName("setting")]
+  public string? Setting { get; init; }
 
-    [JsonPropertyName("shot_type")]
-    public string? ShotType { get; init; }
+  [JsonPropertyName("shot_type")]
+  public string? ShotType { get; init; }
 
-    [JsonPropertyName("character_lock")]
-    public string? CharacterLock { get; init; }
+  [JsonPropertyName("character_lock")]
+  public string? CharacterLock { get; init; }
 
-    [JsonPropertyName("style_lock")]
-    public string? StyleLock { get; init; }
+  [JsonPropertyName("style_lock")]
+  public string? StyleLock { get; init; }
 
-    [JsonPropertyName("start_state")]
-    public string? StartState { get; init; }
+  [JsonPropertyName("start_state")]
+  public string? StartState { get; init; }
 
-    [JsonPropertyName("end_state")]
-    public string? EndState { get; init; }
+  [JsonPropertyName("end_state")]
+  public string? EndState { get; init; }
 
-    [JsonPropertyName("subject")]
-    public string? Subject { get; init; }
+  [JsonPropertyName("subject")]
+  public string? Subject { get; init; }
 
-    [JsonPropertyName("action")]
-    public string? Action { get; init; }
+  [JsonPropertyName("action")]
+  public string? Action { get; init; }
 
-    [JsonPropertyName("camera")]
-    public string? Camera { get; init; }
+  [JsonPropertyName("camera")]
+  public string? Camera { get; init; }
 
-    [JsonPropertyName("motion")]
-    public string? Motion { get; init; }
+  [JsonPropertyName("motion")]
+  public string? Motion { get; init; }
 
-    [JsonPropertyName("environment_motion")]
-    public string? EnvironmentMotion { get; init; }
+  [JsonPropertyName("environment_motion")]
+  public string? EnvironmentMotion { get; init; }
 
-    [JsonPropertyName("continuity_note")]
-    public string? ContinuityNote { get; init; }
+  [JsonPropertyName("continuity_note")]
+  public string? ContinuityNote { get; init; }
 
-    [JsonIgnore]
-    public string? ContinuityInstruction
-    {
-        get
-        {
-            if (!string.IsNullOrWhiteSpace(ContinuityNote))
-            {
-                return ContinuityNote;
-            }
+  [JsonIgnore]
+  public string? ContinuityInstruction => !string.IsNullOrWhiteSpace(ContinuityNote)
+            ? ContinuityNote
+            : AdditionalData?.TryGetValue("continuity", out JsonElement value) == true
+              && value.ValueKind == JsonValueKind.String
+                  ? value.GetString()
+                  : null;
 
-            return AdditionalData?.TryGetValue("continuity", out JsonElement value) == true
-                && value.ValueKind == JsonValueKind.String
-                    ? value.GetString()
-                    : null;
-        }
-    }
+  [JsonPropertyName("transition")]
+  public string? Transition { get; init; }
 
-    [JsonPropertyName("transition")]
-    public string? Transition { get; init; }
-
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed record StudioJobListResponse(
@@ -458,48 +428,42 @@ public sealed record StudioJob(
     [property: JsonPropertyName("attempt")] int Attempt = 0,
     [property: JsonPropertyName("priority")] int Priority = 0)
 {
-    public string ProviderId => GenerationMetadata("provider_id") ?? "edmg.internal";
+  public string ProviderId => GenerationMetadata("provider_id") ?? "edmg.internal";
 
-    public string RendererId => GenerationMetadata("renderer_id")
-        ?? PayloadString("video_model_engine")
-        ?? PayloadString("render_mode")
-        ?? "auto";
+  public string RendererId => GenerationMetadata("renderer_id")
+      ?? PayloadString("video_model_engine")
+      ?? PayloadString("render_mode")
+      ?? "auto";
 
-    public bool IsActive => Status is "queued" or "paused" or "running";
+  public bool IsActive => Status is "queued" or "paused" or "running";
 
-    public bool CanPause => Status == "queued";
+  public bool CanPause => Status == "queued";
 
-    public bool CanResume => Status == "paused";
+  public bool CanResume => Status == "paused";
 
-    public bool CanCancel => IsActive;
+  public bool CanCancel => IsActive;
 
-    public bool CanRetry => Status is "succeeded" or "failed" or "canceled";
+  public bool CanRetry => Status is "succeeded" or "failed" or "canceled";
 
-    private string? GenerationMetadata(string name)
-    {
-        if (Payload is not JsonElement { ValueKind: JsonValueKind.Object } payload ||
+  private string? GenerationMetadata(string name)
+  {
+    return Payload is not JsonElement { ValueKind: JsonValueKind.Object } payload ||
             !payload.TryGetProperty("_generation", out JsonElement generation) ||
             generation.ValueKind != JsonValueKind.Object ||
             !generation.TryGetProperty(name, out JsonElement value) ||
-            value.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
+            value.ValueKind != JsonValueKind.String
+          ? null
+          : value.GetString();
+  }
 
-        return value.GetString();
-    }
-
-    private string? PayloadString(string name)
-    {
-        if (Payload is not JsonElement { ValueKind: JsonValueKind.Object } payload ||
+  private string? PayloadString(string name)
+  {
+    return Payload is not JsonElement { ValueKind: JsonValueKind.Object } payload ||
             !payload.TryGetProperty(name, out JsonElement value) ||
-            value.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        return value.GetString();
-    }
+            value.ValueKind != JsonValueKind.String
+          ? null
+          : value.GetString();
+  }
 }
 
 public sealed record StudioJobProgress(
@@ -566,401 +530,401 @@ public sealed record ReviewAnnotationRequest(
 
 public sealed class VariantReviewDecisionRequest
 {
-    [JsonPropertyName("artifact_path")]
-    public required string ArtifactPath { get; init; }
+  [JsonPropertyName("artifact_path")]
+  public required string ArtifactPath { get; init; }
 
-    [JsonPropertyName("decision")]
-    public required string Decision { get; init; }
+  [JsonPropertyName("decision")]
+  public required string Decision { get; init; }
 
-    [JsonPropertyName("notes")]
-    public string? Notes { get; init; }
+  [JsonPropertyName("notes")]
+  public string? Notes { get; init; }
 
-    [JsonPropertyName("cherry_pick_traits")]
-    public IReadOnlyList<string> CherryPickTraits { get; init; } = [];
+  [JsonPropertyName("cherry_pick_traits")]
+  public IReadOnlyList<string> CherryPickTraits { get; init; } = [];
 
-    [JsonPropertyName("lock_fields")]
-    public IReadOnlyList<string> LockFields { get; init; } = [];
+  [JsonPropertyName("lock_fields")]
+  public IReadOnlyList<string> LockFields { get; init; } = [];
 
-    [JsonPropertyName("annotations")]
-    public IReadOnlyList<ReviewAnnotationRequest> Annotations { get; init; } = [];
+  [JsonPropertyName("annotations")]
+  public IReadOnlyList<ReviewAnnotationRequest> Annotations { get; init; } = [];
 }
 
 public sealed class VariantReviewDecisionResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("variant_review")]
-    public JsonElement VariantReview { get; init; }
+  [JsonPropertyName("variant_review")]
+  public JsonElement VariantReview { get; init; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class LiveCuePublishRequest
 {
-    [JsonPropertyName("osc_host")]
-    public string OscHost { get; init; } = "127.0.0.1";
+  [JsonPropertyName("osc_host")]
+  public string OscHost { get; init; } = "127.0.0.1";
 
-    [JsonPropertyName("osc_port")]
-    public int OscPort { get; init; } = 9000;
+  [JsonPropertyName("osc_port")]
+  public int OscPort { get; init; } = 9000;
 
-    [JsonPropertyName("midi_enabled")]
-    public bool MidiEnabled { get; init; } = true;
+  [JsonPropertyName("midi_enabled")]
+  public bool MidiEnabled { get; init; } = true;
 
-    [JsonPropertyName("websocket_enabled")]
-    public bool WebsocketEnabled { get; init; } = true;
+  [JsonPropertyName("websocket_enabled")]
+  public bool WebsocketEnabled { get; init; } = true;
 
-    [JsonPropertyName("playback_speed")]
-    public double PlaybackSpeed { get; init; } = 1.0;
+  [JsonPropertyName("playback_speed")]
+  public double PlaybackSpeed { get; init; } = 1.0;
 }
 
 public sealed class LiveCuePublishResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("publish")]
-    public JsonElement Publish { get; init; }
+  [JsonPropertyName("publish")]
+  public JsonElement Publish { get; init; }
 
-    [JsonPropertyName("event_count")]
-    public int? EventCount { get; init; }
+  [JsonPropertyName("event_count")]
+  public int? EventCount { get; init; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class WorldAdapterExportRequest
 {
-    [JsonPropertyName("adapter")]
-    public string Adapter { get; init; } = "touchdesigner";
+  [JsonPropertyName("adapter")]
+  public string Adapter { get; init; } = "touchdesigner";
 
-    [JsonPropertyName("variant_index")]
-    public int VariantIndex { get; init; }
+  [JsonPropertyName("variant_index")]
+  public int VariantIndex { get; init; }
 
-    [JsonPropertyName("sequence_name")]
-    public string? SequenceName { get; init; }
+  [JsonPropertyName("sequence_name")]
+  public string? SequenceName { get; init; }
 }
 
 public sealed class WorldAdapterExportResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("adapter")]
-    public string Adapter { get; init; } = string.Empty;
+  [JsonPropertyName("adapter")]
+  public string Adapter { get; init; } = string.Empty;
 
-    [JsonPropertyName("payload")]
-    public JsonElement Payload { get; init; }
+  [JsonPropertyName("payload")]
+  public JsonElement Payload { get; init; }
 
-    [JsonPropertyName("simulation")]
-    public JsonElement Simulation { get; init; }
+  [JsonPropertyName("simulation")]
+  public JsonElement Simulation { get; init; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class UnrealBundleExportRequest
 {
-    [JsonPropertyName("variant_index")]
-    public int VariantIndex { get; init; }
+  [JsonPropertyName("variant_index")]
+  public int VariantIndex { get; init; }
 
-    [JsonPropertyName("bundle_name")]
-    public string? BundleName { get; init; }
+  [JsonPropertyName("bundle_name")]
+  public string? BundleName { get; init; }
 
-    [JsonPropertyName("include_zip")]
-    public bool IncludeZip { get; init; } = true;
+  [JsonPropertyName("include_zip")]
+  public bool IncludeZip { get; init; } = true;
 }
 
 public sealed class UnrealBundleDto
 {
-    [JsonPropertyName("bundle_dir")]
-    public string BundleDirectory { get; init; } = string.Empty;
+  [JsonPropertyName("bundle_dir")]
+  public string BundleDirectory { get; init; } = string.Empty;
 
-    [JsonPropertyName("manifest_path")]
-    public string ManifestPath { get; init; } = string.Empty;
+  [JsonPropertyName("manifest_path")]
+  public string ManifestPath { get; init; } = string.Empty;
 
-    [JsonPropertyName("zip_path")]
-    public string? ZipPath { get; init; }
+  [JsonPropertyName("zip_path")]
+  public string? ZipPath { get; init; }
 
-    [JsonPropertyName("created_at")]
-    public string? CreatedAt { get; init; }
+  [JsonPropertyName("created_at")]
+  public string? CreatedAt { get; init; }
 
-    [JsonPropertyName("variant_index")]
-    public int VariantIndex { get; init; }
+  [JsonPropertyName("variant_index")]
+  public int VariantIndex { get; init; }
 
-    [JsonPropertyName("sequence_name")]
-    public string? SequenceName { get; init; }
+  [JsonPropertyName("sequence_name")]
+  public string? SequenceName { get; init; }
 
-    [JsonPropertyName("files")]
-    public List<string> Files { get; init; } = [];
+  [JsonPropertyName("files")]
+  public List<string> Files { get; init; } = [];
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class UnrealBundleExportResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("bundle")]
-    public UnrealBundleDto Bundle { get; init; } = new();
+  [JsonPropertyName("bundle")]
+  public UnrealBundleDto Bundle { get; init; } = new();
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class UnrealImportPlanRequest
 {
-    [JsonPropertyName("bundle_dir")]
-    public string BundleDirectory { get; init; } = string.Empty;
+  [JsonPropertyName("bundle_dir")]
+  public string BundleDirectory { get; init; } = string.Empty;
 
-    [JsonPropertyName("content_path")]
-    public string? ContentPath { get; init; }
+  [JsonPropertyName("content_path")]
+  public string? ContentPath { get; init; }
 
-    [JsonPropertyName("asset_name")]
-    public string? AssetName { get; init; }
+  [JsonPropertyName("asset_name")]
+  public string? AssetName { get; init; }
 }
 
 public sealed class UnrealImportPlanResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("plan_path")]
-    public string PlanPath { get; init; } = string.Empty;
+  [JsonPropertyName("plan_path")]
+  public string PlanPath { get; init; } = string.Empty;
 
-    [JsonPropertyName("plan")]
-    public JsonElement Plan { get; init; }
+  [JsonPropertyName("plan")]
+  public JsonElement Plan { get; init; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class UnrealReturnImportRequest
 {
-    [JsonPropertyName("bundle_dir")]
-    public string BundleDirectory { get; init; } = string.Empty;
+  [JsonPropertyName("bundle_dir")]
+  public string BundleDirectory { get; init; } = string.Empty;
 
-    [JsonPropertyName("source_dir")]
-    public string? SourceDirectory { get; init; }
+  [JsonPropertyName("source_dir")]
+  public string? SourceDirectory { get; init; }
 }
 
 public sealed class UnrealReturnedMediaDto
 {
-    [JsonPropertyName("kind")]
-    public string Kind { get; init; } = string.Empty;
+  [JsonPropertyName("kind")]
+  public string Kind { get; init; } = string.Empty;
 
-    [JsonPropertyName("path")]
-    public string Path { get; init; } = string.Empty;
+  [JsonPropertyName("path")]
+  public string Path { get; init; } = string.Empty;
 
-    [JsonPropertyName("source_path")]
-    public string SourcePath { get; init; } = string.Empty;
+  [JsonPropertyName("source_path")]
+  public string SourcePath { get; init; } = string.Empty;
 
-    [JsonPropertyName("metadata_path")]
-    public string MetadataPath { get; init; } = string.Empty;
+  [JsonPropertyName("metadata_path")]
+  public string MetadataPath { get; init; } = string.Empty;
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class UnrealReturnImportDto
 {
-    [JsonPropertyName("bundle_dir")]
-    public string BundleDirectory { get; init; } = string.Empty;
+  [JsonPropertyName("bundle_dir")]
+  public string BundleDirectory { get; init; } = string.Empty;
 
-    [JsonPropertyName("source_dir")]
-    public string SourceDirectory { get; init; } = string.Empty;
+  [JsonPropertyName("source_dir")]
+  public string SourceDirectory { get; init; } = string.Empty;
 
-    [JsonPropertyName("manifest_path")]
-    public string? ManifestPath { get; init; }
+  [JsonPropertyName("manifest_path")]
+  public string? ManifestPath { get; init; }
 
-    [JsonPropertyName("return_contract_path")]
-    public string? ReturnContractPath { get; init; }
+  [JsonPropertyName("return_contract_path")]
+  public string? ReturnContractPath { get; init; }
 
-    [JsonPropertyName("created_at")]
-    public string? CreatedAt { get; init; }
+  [JsonPropertyName("created_at")]
+  public string? CreatedAt { get; init; }
 
-    [JsonPropertyName("variant_index")]
-    public int VariantIndex { get; init; }
+  [JsonPropertyName("variant_index")]
+  public int VariantIndex { get; init; }
 
-    [JsonPropertyName("sequence_name")]
-    public string? SequenceName { get; init; }
+  [JsonPropertyName("sequence_name")]
+  public string? SequenceName { get; init; }
 
-    [JsonPropertyName("media")]
-    public List<UnrealReturnedMediaDto> Media { get; init; } = [];
+  [JsonPropertyName("media")]
+  public List<UnrealReturnedMediaDto> Media { get; init; } = [];
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class UnrealReturnImportResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("imported")]
-    public UnrealReturnImportDto Imported { get; init; } = new();
+  [JsonPropertyName("imported")]
+  public UnrealReturnImportDto Imported { get; init; } = new();
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed record RuntimeSettings
 {
-    [JsonPropertyName("mode")]
-    public string Mode { get; init; } = "auto";
+  [JsonPropertyName("mode")]
+  public string Mode { get; init; } = "auto";
 
-    [JsonPropertyName("enabled")]
-    public bool Enabled { get; init; } = true;
+  [JsonPropertyName("enabled")]
+  public bool Enabled { get; init; } = true;
 
-    [JsonPropertyName("auto_build")]
-    public bool AutoBuild { get; init; } = true;
+  [JsonPropertyName("auto_build")]
+  public bool AutoBuild { get; init; } = true;
 
-    [JsonPropertyName("allow_fallback")]
-    public bool AllowFallback { get; init; } = true;
+  [JsonPropertyName("allow_fallback")]
+  public bool AllowFallback { get; init; } = true;
 
-    [JsonPropertyName("strict")]
-    public bool Strict { get; init; }
+  [JsonPropertyName("strict")]
+  public bool Strict { get; init; }
 
-    [JsonPropertyName("precision")]
-    public string Precision { get; init; } = "auto";
+  [JsonPropertyName("precision")]
+  public string Precision { get; init; } = "auto";
 
-    [JsonPropertyName("cache_limit_gb")]
-    public double CacheLimitGb { get; init; } = 100;
+  [JsonPropertyName("cache_limit_gb")]
+  public double CacheLimitGb { get; init; } = 100;
 
-    [JsonPropertyName("package_path")]
-    public string PackagePath { get; init; } = string.Empty;
+  [JsonPropertyName("package_path")]
+  public string PackagePath { get; init; } = string.Empty;
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed record RuntimeComponentStatus
 {
-    [JsonPropertyName("model_family")]
-    public string ModelFamily { get; init; } = string.Empty;
+  [JsonPropertyName("model_family")]
+  public string ModelFamily { get; init; } = string.Empty;
 
-    [JsonPropertyName("component")]
-    public string Component { get; init; } = string.Empty;
+  [JsonPropertyName("component")]
+  public string Component { get; init; } = string.Empty;
 
-    [JsonPropertyName("status")]
-    public string Status { get; init; } = string.Empty;
+  [JsonPropertyName("status")]
+  public string Status { get; init; } = string.Empty;
 
-    [JsonPropertyName("adapter_status")]
-    public string AdapterStatus { get; init; } = string.Empty;
+  [JsonPropertyName("adapter_status")]
+  public string AdapterStatus { get; init; } = string.Empty;
 
-    [JsonPropertyName("fallback_runtime")]
-    public string FallbackRuntime { get; init; } = string.Empty;
+  [JsonPropertyName("fallback_runtime")]
+  public string FallbackRuntime { get; init; } = string.Empty;
 
-    [JsonPropertyName("optimization_eligible")]
-    public bool OptimizationEligible { get; init; }
+  [JsonPropertyName("optimization_eligible")]
+  public bool OptimizationEligible { get; init; }
 
-    [JsonPropertyName("optimization_reason")]
-    public string? OptimizationReason { get; init; }
+  [JsonPropertyName("optimization_reason")]
+  public string? OptimizationReason { get; init; }
 
-    [JsonPropertyName("validated_engine_count")]
-    public int ValidatedEngineCount { get; init; }
+  [JsonPropertyName("validated_engine_count")]
+  public int ValidatedEngineCount { get; init; }
 
-    [JsonPropertyName("profile_coverage")]
-    public List<Dictionary<string, JsonElement>> ProfileCoverage { get; init; } = [];
+  [JsonPropertyName("profile_coverage")]
+  public List<Dictionary<string, JsonElement>> ProfileCoverage { get; init; } = [];
 
-    [JsonPropertyName("last_benchmark")]
-    public Dictionary<string, JsonElement>? LastBenchmark { get; init; }
+  [JsonPropertyName("last_benchmark")]
+  public Dictionary<string, JsonElement>? LastBenchmark { get; init; }
 
-    [JsonPropertyName("last_engine_state")]
-    public string LastEngineState { get; init; } = "missing";
+  [JsonPropertyName("last_engine_state")]
+  public string LastEngineState { get; init; } = "missing";
 
-    [JsonPropertyName("last_engine_id")]
-    public string? LastEngineId { get; init; }
+  [JsonPropertyName("last_engine_id")]
+  public string? LastEngineId { get; init; }
 
-    [JsonPropertyName("last_failure")]
-    public string? LastFailure { get; init; }
+  [JsonPropertyName("last_failure")]
+  public string? LastFailure { get; init; }
 
-    [JsonPropertyName("source_kind")]
-    public string? SourceKind { get; init; }
+  [JsonPropertyName("source_kind")]
+  public string? SourceKind { get; init; }
 
-    [JsonPropertyName("architecture")]
-    public string? Architecture { get; init; }
+  [JsonPropertyName("architecture")]
+  public string? Architecture { get; init; }
 
-    [JsonPropertyName("requested_route")]
-    public string RequestedRoute { get; init; } = "tensorrt";
+  [JsonPropertyName("requested_route")]
+  public string RequestedRoute { get; init; } = "tensorrt";
 
-    [JsonPropertyName("selected_route")]
-    public string SelectedRoute { get; init; } = "existing_runtime";
+  [JsonPropertyName("selected_route")]
+  public string SelectedRoute { get; init; } = "existing_runtime";
 
-    [JsonPropertyName("compiler")]
-    public string? Compiler { get; init; }
+  [JsonPropertyName("compiler")]
+  public string? Compiler { get; init; }
 
-    [JsonPropertyName("compiler_available")]
-    public bool CompilerAvailable { get; init; }
+  [JsonPropertyName("compiler_available")]
+  public bool CompilerAvailable { get; init; }
 
-    [JsonPropertyName("route_supported")]
-    public bool RouteSupported { get; init; }
+  [JsonPropertyName("route_supported")]
+  public bool RouteSupported { get; init; }
 
-    [JsonPropertyName("route_reason")]
-    public string? RouteReason { get; init; }
+  [JsonPropertyName("route_reason")]
+  public string? RouteReason { get; init; }
 
-    [JsonPropertyName("validated")]
-    public bool Validated { get; init; }
+  [JsonPropertyName("validated")]
+  public bool Validated { get; init; }
 
-    [JsonPropertyName("accelerating")]
-    public bool Accelerating { get; init; }
+  [JsonPropertyName("accelerating")]
+  public bool Accelerating { get; init; }
 }
 
 public sealed record RuntimeStatusResponse
 {
-    [JsonPropertyName("settings")]
-    public RuntimeSettings Settings { get; init; } = new();
+  [JsonPropertyName("settings")]
+  public RuntimeSettings Settings { get; init; } = new();
 
-    [JsonPropertyName("state")]
-    public string State { get; init; } = "unprobed";
+  [JsonPropertyName("state")]
+  public string State { get; init; } = "unprobed";
 
-    [JsonPropertyName("installed")]
-    public bool Installed { get; init; }
+  [JsonPropertyName("installed")]
+  public bool Installed { get; init; }
 
-    [JsonPropertyName("available")]
-    public bool Available { get; init; }
+  [JsonPropertyName("available")]
+  public bool Available { get; init; }
 
-    [JsonPropertyName("healthy")]
-    public bool Healthy { get; init; }
+  [JsonPropertyName("healthy")]
+  public bool Healthy { get; init; }
 
-    [JsonPropertyName("compatible")]
-    public bool Compatible { get; init; }
+  [JsonPropertyName("compatible")]
+  public bool Compatible { get; init; }
 
-    [JsonPropertyName("accelerating")]
-    public bool Accelerating { get; init; }
+  [JsonPropertyName("accelerating")]
+  public bool Accelerating { get; init; }
 
-    [JsonPropertyName("tensorrt_version")]
-    public string? TensorRtVersion { get; init; }
+  [JsonPropertyName("tensorrt_version")]
+  public string? TensorRtVersion { get; init; }
 
-    [JsonPropertyName("cuda_status")]
-    public JsonElement? CudaStatus { get; init; }
+  [JsonPropertyName("cuda_status")]
+  public JsonElement? CudaStatus { get; init; }
 
-    [JsonPropertyName("pytorch_cuda_available")]
-    public bool PytorchCudaAvailable { get; init; }
+  [JsonPropertyName("pytorch_cuda_available")]
+  public bool PytorchCudaAvailable { get; init; }
 
-    [JsonPropertyName("gpus")]
-    public List<JsonElement> Gpus { get; init; } = [];
+  [JsonPropertyName("gpus")]
+  public List<JsonElement> Gpus { get; init; } = [];
 
-    [JsonPropertyName("supported_component_count")]
-    public int SupportedComponentCount { get; init; }
+  [JsonPropertyName("supported_component_count")]
+  public int SupportedComponentCount { get; init; }
 
-    [JsonPropertyName("cache_bytes")]
-    public long CacheBytes { get; init; }
+  [JsonPropertyName("cache_bytes")]
+  public long CacheBytes { get; init; }
 
-    [JsonPropertyName("diagnostics")]
-    public JsonElement? Diagnostics { get; init; }
+  [JsonPropertyName("diagnostics")]
+  public JsonElement? Diagnostics { get; init; }
 
-    [JsonPropertyName("diagnostics_scope")]
-    public string DiagnosticsScope { get; init; } = string.Empty;
+  [JsonPropertyName("diagnostics_scope")]
+  public string DiagnosticsScope { get; init; } = string.Empty;
 
-    [JsonPropertyName("components")]
-    public List<RuntimeComponentStatus> Components { get; init; } = [];
+  [JsonPropertyName("components")]
+  public List<RuntimeComponentStatus> Components { get; init; } = [];
 
-    [JsonPropertyName("engines")]
-    public List<JsonElement> Engines { get; init; } = [];
+  [JsonPropertyName("engines")]
+  public List<JsonElement> Engines { get; init; } = [];
 }
 
 public sealed record RuntimeJobRequest(
@@ -981,18 +945,20 @@ public sealed record RuntimeCacheClearResponse([property: JsonPropertyName("ok")
 
 public static class StudioJson
 {
-    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+  public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+  {
+    PropertyNameCaseInsensitive = true,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+  };
 
-    public static readonly StudioJsonContext Context = new(Options);
+  public static readonly StudioJsonContext Context = new(Options);
 
-    public static JsonTypeInfo<T> GetTypeInfo<T>()
-        => Context.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>
-           ?? throw new InvalidOperationException(
-               $"JSON metadata is not registered for {typeof(T).FullName}.");
+  public static JsonTypeInfo<T> GetTypeInfo<T>()
+  {
+    return Context.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>
+             ?? throw new InvalidOperationException(
+                 $"JSON metadata is not registered for {typeof(T).FullName}.");
+  }
 }
 
 [JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]

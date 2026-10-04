@@ -2,11 +2,11 @@ namespace EdmgStudio.Core.Models;
 
 public static class StudioNavigationDestination
 {
-    public const string Default = "dashboard";
+  public const string Default = "dashboard";
 
-    private static readonly string[] KnownDestinations =
-    [
-        Default,
+  private static readonly string[] KnownDestinations =
+  [
+      Default,
         "projects",
         "workspace",
         "timeline",
@@ -25,21 +25,27 @@ public static class StudioNavigationDestination
         "setup",
     ];
 
-    public static bool IsKnown(string? destination) =>
-        KnownDestinations.Any(known =>
-            string.Equals(known, destination?.Trim(), StringComparison.OrdinalIgnoreCase));
+  public static bool IsKnown(string? destination)
+  {
+    return KnownDestinations.Any(known =>
+          string.Equals(known, destination?.Trim(), StringComparison.OrdinalIgnoreCase));
+  }
 
-    public static bool IsRestorable(string? destination) =>
-        IsKnown(destination) &&
-        !string.Equals(destination?.Trim(), "setup", StringComparison.OrdinalIgnoreCase);
+  public static bool IsRestorable(string? destination)
+  {
+    return IsKnown(destination) &&
+      !string.Equals(destination?.Trim(), "setup", StringComparison.OrdinalIgnoreCase);
+  }
 
-    public static string NormalizeOrDefault(string? destination)
-    {
-        string? normalized = KnownDestinations.FirstOrDefault(known =>
-            string.Equals(known, destination?.Trim(), StringComparison.OrdinalIgnoreCase));
-        return normalized ?? Default;
-    }
+  public static string NormalizeOrDefault(string? destination)
+  {
+    string? normalized = KnownDestinations.FirstOrDefault(known =>
+        string.Equals(known, destination?.Trim(), StringComparison.OrdinalIgnoreCase));
+    return normalized ?? Default;
+  }
 
-    public static string NormalizeRestorableOrDefault(string? destination) =>
-        IsRestorable(destination) ? NormalizeOrDefault(destination) : Default;
+  public static string NormalizeRestorableOrDefault(string? destination)
+  {
+    return IsRestorable(destination) ? NormalizeOrDefault(destination) : Default;
+  }
 }

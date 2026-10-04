@@ -2,51 +2,48 @@ namespace EdmgStudio.Core.Models;
 
 public sealed record StudioLaunchRequest(string? ProjectId, string Destination)
 {
-    public const string ProjectArgumentPrefix = "--project=";
+  public const string ProjectArgumentPrefix = "--project=";
 
-    public static StudioLaunchRequest? Parse(string? arguments)
+  public static StudioLaunchRequest? Parse(string? arguments)
+  {
+    if (string.IsNullOrWhiteSpace(arguments))
     {
-        if (string.IsNullOrWhiteSpace(arguments))
-        {
-            return null;
-        }
+      return null;
+    }
 
-        foreach (string token in Tokenize(arguments))
-        {
-            if (!token.StartsWith(ProjectArgumentPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
+    foreach (string token in Tokenize(arguments))
+    {
+      if (!token.StartsWith(ProjectArgumentPrefix, StringComparison.OrdinalIgnoreCase))
+      {
+        continue;
+      }
 
-            string encodedProjectId = token[ProjectArgumentPrefix.Length..];
-            string projectId;
-            try
-            {
-                projectId = Uri.UnescapeDataString(encodedProjectId);
-            }
-            catch (UriFormatException)
-            {
-                return null;
-            }
-
-            if (string.IsNullOrWhiteSpace(projectId) || projectId.Length > 256)
-            {
-                return null;
-            }
-
-            return new StudioLaunchRequest(projectId, "workspace");
-        }
-
+      string encodedProjectId = token[ProjectArgumentPrefix.Length..];
+      string projectId;
+      try
+      {
+        projectId = Uri.UnescapeDataString(encodedProjectId);
+      }
+      catch (UriFormatException)
+      {
         return null;
+      }
+
+      return string.IsNullOrWhiteSpace(projectId) || projectId.Length > 256 ? null : new StudioLaunchRequest(projectId, "workspace");
     }
 
-    public static string ForProject(string projectId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
-        return ProjectArgumentPrefix + Uri.EscapeDataString(projectId.Trim());
-    }
+    return null;
+  }
 
-    private static IEnumerable<string> Tokenize(string arguments) =>
-        arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(token => token.Trim('"'));
+  public static string ForProject(string projectId)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+    return ProjectArgumentPrefix + Uri.EscapeDataString(projectId.Trim());
+  }
+
+  private static IEnumerable<string> Tokenize(string arguments)
+  {
+    return arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+          .Select(token => token.Trim('"'));
+  }
 }

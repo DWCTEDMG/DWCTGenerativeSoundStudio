@@ -1,262 +1,347 @@
-using System.Text.Json;
 using EdmgStudio.Core.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Text.Json;
 
 namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class WorkspacePage
 {
-    private bool _commandRunning;
-    private bool _restoringCommand;
-    private string? _commandProjectId;
+  private bool _commandRunning;
+  private bool _restoringCommand;
+  private string? _commandProjectId;
 
-    private void RestoreCommand(ProjectDto project)
+  private void RestoreCommand(ProjectDto project)
+  {
+    if (_commandProjectId == project.Id)
     {
-        if (_commandProjectId == project.Id) return;
-        _commandProjectId = project.Id;
-        _restoringCommand = true;
+      return;
+    }
+
+    _commandProjectId = project.Id;
+    _restoringCommand = true;
+    try
+    {
+      _pendingAudioPath = null;
+      PendingAudioText.Text = project.HasAudio ? $"Project audio: {project.AudioFileName}" : "No audio selected";
+      CommandRenderer.SelectedIndex = 0;
+      CommandBrief.Text = "";
+      CommandStyle.Text = "";
+      CommandModel.Text = "";
+      CommandProvider.SelectedIndex = 0;
+      CommandNativeAudio.IsChecked = false;
+      CommandVerifyLyrics.IsChecked = false;
+      CommandSeparateVocals.IsChecked = false;
+      CommandDirectorModel.SelectedIndex = 0;
+      CommandProposalItems.Clear();
+      CommandProposalSection.Visibility = Visibility.Collapsed;
+      CommandProgress.Value = 0;
+      UpdateDirectorProof(project);
+      if (project.Meta.ValueKind != JsonValueKind.Object || !project.Meta.TryGetProperty("workspace_command", out JsonElement saved))
+      {
+        return;
+      }
+
+      if (saved.TryGetProperty("brief", out JsonElement brief))
+      {
+        CommandBrief.Text = brief.GetString() ?? "";
+      }
+
+      if (saved.TryGetProperty("style", out JsonElement style))
+      {
+        CommandStyle.Text = style.GetString() ?? "";
+      }
+
+      if (saved.TryGetProperty("model", out JsonElement model))
+      {
+        CommandModel.Text = model.GetString() ?? "";
+      }
+
+      if (saved.TryGetProperty("native_audio", out JsonElement audio))
+      {
+        CommandNativeAudio.IsChecked = audio.ValueKind == JsonValueKind.True;
+      }
+
+      if (saved.TryGetProperty("verify_lyrics", out JsonElement verify))
+      {
+        CommandVerifyLyrics.IsChecked = verify.ValueKind == JsonValueKind.True;
+      }
+
+      if (saved.TryGetProperty("separate_vocals", out JsonElement separate))
+      {
+        CommandSeparateVocals.IsChecked = separate.ValueKind == JsonValueKind.True;
+      }
+
+      if (saved.TryGetProperty("provider", out JsonElement provider))
+      {
+        foreach (ComboBoxItem item in CommandProvider.Items)
+        {
+          if ((string?)item.Tag == provider.GetString())
+          {
+            CommandProvider.SelectedItem = item;
+          }
+        }
+      }
+
+      if (GetComboTag(CommandProvider, "internal_qwen") == "internal_qwen")
+      {
+        foreach (ComboBoxItem item in CommandDirectorModel.Items)
+        {
+          if ((string?)item.Tag == CommandModel.Text)
+          {
+            CommandDirectorModel.SelectedItem = item;
+          }
+        }
+
+        CommandModel.Text = "";
+      }
+    }
+    finally
+    {
+      CommandProvider_SelectionChanged(CommandProvider, null!);
+      _restoringCommand = false;
+    }
+  }
+
+  private void UpdateDirectorProof(ProjectDto project)
+  {
+    DirectorSignalProofText.Text = "Signal analysis: not available";
+    DirectorListeningProofText.Text = "Audio-native Director: not run";
+    DirectorTranscriptProofText.Text = "Transcript evidence: not available";
+    DirectorMeaningProofText.Text = "Meaning/theme: awaiting interpretation";
+    DirectorEmotionProofText.Text = "Emotional arc: awaiting interpretation";
+    DirectorMotifsProofText.Text = "Recurring motifs: awaiting interpretation";
+    DirectorDraftProofText.Text = "Draft provenance: deterministic baseline";
+    if (project.Meta.ValueKind != JsonValueKind.Object ||
+        !project.Meta.TryGetProperty("analysis", out JsonElement analysis) || analysis.ValueKind != JsonValueKind.Object)
+    {
+      return;
+    }
+
+    if (analysis.TryGetProperty("signal_analysis", out JsonElement signal))
+    {
+      DirectorSignalProofText.Text = $"Signal analysis: {ReadString(signal, "status", "complete")} · exact timing is deterministic";
+    }
+
+    if (analysis.TryGetProperty("transcript_evidence", out JsonElement transcript))
+    {
+      DirectorTranscriptProofText.Text = $"Transcript evidence: {ReadString(transcript, "primary_source", "unknown")} · verification {ReadString(transcript, "verification_state", "unknown")}";
+    }
+
+    if (!analysis.TryGetProperty("audio_native_director", out JsonElement director) || director.ValueKind != JsonValueKind.Object)
+    {
+      return;
+    }
+
+    JsonElement provenance = director.TryGetProperty("provenance", out JsonElement provenanceValue) ? provenanceValue : default;
+    DirectorListeningProofText.Text = $"Director semantic interpretation: {ReadString(provenance, "model_id", "audio-native model")} · {ReadString(provenance, "input_modality", "audio+text")}";
+    if (!director.TryGetProperty("semantic_interpretation", out JsonElement semantic))
+    {
+      return;
+    }
+
+    DirectorMeaningProofText.Text = $"Meaning/theme: {ReadString(semantic, "central_meaning", "not supplied")}";
+    if (semantic.TryGetProperty("emotional_arc", out JsonElement arc) && arc.ValueKind == JsonValueKind.Array)
+    {
+      DirectorEmotionProofText.Text = $"Emotional arc: {arc.GetArrayLength()} evidence-backed stage(s)";
+    }
+
+    if (semantic.TryGetProperty("motifs", out JsonElement motifs) && motifs.ValueKind == JsonValueKind.Array)
+    {
+      DirectorMotifsProofText.Text = "Recurring motifs: " + string.Join(", ", motifs.EnumerateArray().Select(value => value.GetString()).Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    DirectorDraftProofText.Text = "Draft provenance: audio-native Qwen Director draft · Timeline unchanged until Review and Apply";
+  }
+
+  private static string ReadString(JsonElement parent, string property, string fallback)
+  {
+    return parent.ValueKind == JsonValueKind.Object && parent.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
+          ? value.GetString() ?? fallback : fallback;
+  }
+
+  private async void CancelCommand_Click(object sender, RoutedEventArgs e)
+  {
+    CancelCurrentOperation();
+    CommandStatus.Text = "Canceled. Completed stages remain in the project.";
+    if (_directorDraftJobStatus is "queued" or "running" or "paused" &&
+        _directorProjectId is string projectId && _directorDraftJobId is string jobId)
+    {
+      await RunBusyAsync("Canceling Director", async token =>
+      {
+        StudioJobActionResponse response = await App.Services.ApiClient.CancelJobAsync(projectId, jobId, token);
+        _directorDraftJobStatus = response.Job.Status;
+      });
+    }
+  }
+
+  private async void MakeCommand_Click(object sender, RoutedEventArgs e)
+  {
+    if (_commandRunning || !TryGetActiveProjectId(out string projectId))
+    {
+      return;
+    }
+
+    string provider = GetComboTag(CommandProvider, "internal_qwen");
+    bool internalModel = provider == "internal_qwen";
+    string? directorModel = NullIfWhiteSpace(GetComboTag(CommandDirectorModel, ""));
+    string? model = NullIfWhiteSpace(CommandModel.Text);
+    string? brief = NullIfWhiteSpace(CommandBrief.Text);
+    string? style = NullIfWhiteSpace(CommandStyle.Text);
+    bool nativeAudio = CommandNativeAudio.IsChecked == true;
+    bool verifyLyrics = CommandVerifyLyrics.IsChecked == true;
+    bool separateVocals = CommandSeparateVocals.IsChecked == true;
+    SetCommandBusy(true);
+    try
+    {
+      await RunBusyAsync("Creating direction", async token =>
+      {
         try
         {
+          _ = await App.Services.ApiClient.SaveTranscriptionSettingsAsync(
+              JsonSerializer.SerializeToElement(new { verification_enabled = verifyLyrics, separate_vocals = separateVocals }), token);
+          if (_projectResponse?.Project.HasAudio != true && string.IsNullOrWhiteSpace(_pendingAudioPath))
+          {
+            throw new InvalidOperationException("Choose source audio before creating direction.");
+          }
+
+          CommandProgress.Value = 5;
+          if (!string.IsNullOrWhiteSpace(_pendingAudioPath))
+          {
+            CommandStatus.Text = "Importing audio";
+            await using FileStream stream = System.IO.File.OpenRead(_pendingAudioPath);
+            await App.Services.ApiClient.UploadAudioAsync(projectId, stream,
+                      System.IO.Path.GetFileName(_pendingAudioPath), GetAudioContentType(_pendingAudioPath), token);
+            App.Services.Session.NotifyProjectContentChanged(projectId);
             _pendingAudioPath = null;
-            PendingAudioText.Text = project.HasAudio ? $"Project audio: {project.AudioFileName}" : "No audio selected";
-            CommandRenderer.SelectedIndex = 0;
-            CommandBrief.Text = "";
-            CommandStyle.Text = "";
-            CommandModel.Text = "";
-            CommandProvider.SelectedIndex = 0;
-            CommandNativeAudio.IsChecked = false;
-            CommandVerifyLyrics.IsChecked = false;
-            CommandSeparateVocals.IsChecked = false;
-            CommandDirectorModel.SelectedIndex = 0;
-            CommandProposalItems.Clear();
-            CommandProposalSection.Visibility = Visibility.Collapsed;
-            CommandProgress.Value = 0;
-            UpdateDirectorProof(project);
-            if (project.Meta.ValueKind != JsonValueKind.Object || !project.Meta.TryGetProperty("workspace_command", out JsonElement saved)) return;
-            if (saved.TryGetProperty("brief", out var brief)) CommandBrief.Text = brief.GetString() ?? "";
-            if (saved.TryGetProperty("style", out var style)) CommandStyle.Text = style.GetString() ?? "";
-            if (saved.TryGetProperty("model", out var model)) CommandModel.Text = model.GetString() ?? "";
-            if (saved.TryGetProperty("native_audio", out var audio)) CommandNativeAudio.IsChecked = audio.ValueKind == JsonValueKind.True;
-            if (saved.TryGetProperty("verify_lyrics", out var verify)) CommandVerifyLyrics.IsChecked = verify.ValueKind == JsonValueKind.True;
-            if (saved.TryGetProperty("separate_vocals", out var separate)) CommandSeparateVocals.IsChecked = separate.ValueKind == JsonValueKind.True;
-            if (saved.TryGetProperty("provider", out var provider))
-                foreach (ComboBoxItem item in CommandProvider.Items)
-                    if ((string?)item.Tag == provider.GetString()) CommandProvider.SelectedItem = item;
-            if (GetComboTag(CommandProvider, "internal_qwen") == "internal_qwen")
+            PendingAudioText.Text = "Project audio selected";
+            await RefreshProjectSnapshotAsync(projectId, token);
+            CommandStatus.Text = "Analyzing imported audio";
+            CommandAnalysisStatus.Text = "Analysis: active - extracting audio features and running the configured Whisper provider.";
+            AnalysisResponse importedAnalysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, token);
+            if (!importedAnalysis.Ok)
             {
-                foreach (ComboBoxItem item in CommandDirectorModel.Items)
-                    if ((string?)item.Tag == CommandModel.Text) CommandDirectorModel.SelectedItem = item;
-                CommandModel.Text = "";
+              CommandAnalysisStatus.Text = "Analysis: failed - imported audio remains available for retry.";
+              throw new InvalidOperationException("Audio analysis did not complete.");
             }
+            await RefreshProjectSnapshotAsync(projectId, token);
+          }
+          if (_projectResponse?.Project.HasAnalysis != true)
+          {
+            CommandStatus.Text = "Analyzing audio";
+            CommandAnalysisStatus.Text = "Analysis: active - extracting audio features and running the configured Whisper provider.";
+            AnalysisResponse analysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, token);
+            if (!analysis.Ok)
+            {
+              CommandAnalysisStatus.Text = "Analysis: failed - project audio remains available for retry.";
+              throw new InvalidOperationException("Audio analysis did not complete.");
+            }
+            await RefreshProjectSnapshotAsync(projectId, token);
+          }
+          token.ThrowIfCancellationRequested();
+          CommandProgress.Value = 30;
+          CommandStatus.Text = "Creating story, scenes, and visual direction";
+          // Reuse reviewed camera/motion data when Qwen already has a current draft.
+          await LoadWorkflowAsync(projectId, token);
+          if (!internalModel || WorkflowSceneItems.Count == 0)
+          {
+            _generatedPlan = await App.Services.ApiClient.GeneratePlanAsync(projectId,
+                  new PlanRequest(_projectResponse?.Project.Name, brief, style,
+                      NumberOfVariants: 1, MaximumScenes: 24,
+                      ExpectedRevision: StudioPageHelpers.ExpectedRevision(_projectResponse?.Project),
+                      Provider: internalModel ? "local" : provider, Model: internalModel ? null : model, NativeAudio: nativeAudio),
+                  internalModel || provider == "local" ? "local" : "ai", token);
+          }
+          await RefreshProjectSnapshotAsync(projectId, token);
+          _session.SelectedVariantIndex = 0;
+          CommandStatus.Text = "Preparing editable direction and motion";
+          // Plan generation already publishes the shared planner draft.
+          // Preparing again would replace it with the previously saved direction.
+          await LoadSelectedProjectAsync(projectId, token);
+          if (internalModel)
+          {
+            CommandStatus.Text = "Baseline ready. Checking Qwen readiness";
+            JsonElement readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
+                      projectId, "automatic", "automatic", token, directorModel);
+            JsonElement director = readiness.GetProperty("director");
+            if (!director.GetProperty("ready").GetBoolean())
+            {
+              string reason = director.TryGetProperty("reason", out JsonElement reasonValue)
+                        ? reasonValue.GetString() ?? "The selected Qwen runtime is unavailable."
+                        : "The selected Qwen runtime is unavailable.";
+              CommandStatus.Text = $"Baseline draft ready. Qwen was not run: {reason}";
+              CommandProgress.Value = 100;
+              ShowStatus("Baseline draft retained", reason, InfoBarSeverity.Warning);
+              return;
+            }
+
+            try
+            {
+              CommandStatus.Text = "Queuing Qwen direction";
+              string instruction = string.Join("\n", new[] { brief, style is null ? null : "Visual style: " + style }
+                        .Where(value => !string.IsNullOrWhiteSpace(value)));
+              if (instruction.Length == 0)
+              {
+                instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
+              }
+
+              bool requireAudioNative = string.IsNullOrWhiteSpace(directorModel) || directorModel.Contains("omni", StringComparison.OrdinalIgnoreCase);
+              DirectorGenerationRequest request = new(_directorRevision, Guid.NewGuid().ToString(),
+                        instruction, ModelId: directorModel, RequireAudioNative: requireAudioNative);
+              JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);
+              _directorDraftJobId = queued.GetProperty("job_id").GetString()!;
+              _directorDraftJobStatus = queued.GetProperty("status").GetString();
+              _directorRevision = queued.GetProperty("revision").GetInt64();
+              _session.SetSelectedJob(projectId, _directorDraftJobId);
+              await WaitForCommandDirectorAsync(projectId, _directorDraftJobId, token);
+            }
+            catch (OperationCanceledException)
+            {
+              throw;
+            }
+            catch (Exception error) when (error is HttpRequestException or InvalidOperationException)
+            {
+              CommandStatus.Text = $"Baseline draft ready. Qwen stopped: {error.Message}";
+              CommandProgress.Value = 100;
+              ShowStatus("Baseline draft retained", error.Message, InfoBarSeverity.Warning);
+            }
+            return;
+          }
+          string actualProvider = _generatedPlan?.AdditionalData?.GetValueOrDefault("provider").ToString() ?? provider;
+          CommandStatus.Text = $"Draft ready ({actualProvider}). Edit below or continue to Render.";
+          CommandProgress.Value = 100;
         }
-        finally
-        {
-            CommandProvider_SelectionChanged(CommandProvider, null!);
-            _restoringCommand = false;
-        }
+        catch (OperationCanceledException) { CommandStatus.Text = "Canceled. Completed stages remain in the project."; throw; }
+        catch (Exception error) { CommandStatus.Text = $"Creation stopped: {error.Message}"; throw; }
+      });
+    }
+    finally { SetCommandBusy(false); }
+  }
+
+  private async void CommandRender_Click(object sender, RoutedEventArgs e)
+  {
+    if (_commandRunning || !TryGetActiveProjectId(out string projectId))
+    {
+      return;
     }
 
-    private void UpdateDirectorProof(ProjectDto project)
-    {
-        DirectorSignalProofText.Text = "Signal analysis: not available";
-        DirectorListeningProofText.Text = "Audio-native Director: not run";
-        DirectorTranscriptProofText.Text = "Transcript evidence: not available";
-        DirectorMeaningProofText.Text = "Meaning/theme: awaiting interpretation";
-        DirectorEmotionProofText.Text = "Emotional arc: awaiting interpretation";
-        DirectorMotifsProofText.Text = "Recurring motifs: awaiting interpretation";
-        DirectorDraftProofText.Text = "Draft provenance: deterministic baseline";
-        if (project.Meta.ValueKind != JsonValueKind.Object ||
-            !project.Meta.TryGetProperty("analysis", out JsonElement analysis) || analysis.ValueKind != JsonValueKind.Object) return;
-        if (analysis.TryGetProperty("signal_analysis", out JsonElement signal))
-            DirectorSignalProofText.Text = $"Signal analysis: {ReadString(signal, "status", "complete")} · exact timing is deterministic";
-        if (analysis.TryGetProperty("transcript_evidence", out JsonElement transcript))
-            DirectorTranscriptProofText.Text = $"Transcript evidence: {ReadString(transcript, "primary_source", "unknown")} · verification {ReadString(transcript, "verification_state", "unknown")}";
-        if (!analysis.TryGetProperty("audio_native_director", out JsonElement director) || director.ValueKind != JsonValueKind.Object) return;
-        JsonElement provenance = director.TryGetProperty("provenance", out JsonElement provenanceValue) ? provenanceValue : default;
-        DirectorListeningProofText.Text = $"Director semantic interpretation: {ReadString(provenance, "model_id", "audio-native model")} · {ReadString(provenance, "input_modality", "audio+text")}";
-        if (!director.TryGetProperty("semantic_interpretation", out JsonElement semantic)) return;
-        DirectorMeaningProofText.Text = $"Meaning/theme: {ReadString(semantic, "central_meaning", "not supplied")}";
-        if (semantic.TryGetProperty("emotional_arc", out JsonElement arc) && arc.ValueKind == JsonValueKind.Array)
-            DirectorEmotionProofText.Text = $"Emotional arc: {arc.GetArrayLength()} evidence-backed stage(s)";
-        if (semantic.TryGetProperty("motifs", out JsonElement motifs) && motifs.ValueKind == JsonValueKind.Array)
-            DirectorMotifsProofText.Text = "Recurring motifs: " + string.Join(", ", motifs.EnumerateArray().Select(value => value.GetString()).Where(value => !string.IsNullOrWhiteSpace(value)));
-        DirectorDraftProofText.Text = "Draft provenance: audio-native Qwen Director draft · Timeline unchanged until Review and Apply";
-    }
-
-    private static string ReadString(JsonElement parent, string property, string fallback) =>
-        parent.ValueKind == JsonValueKind.Object && parent.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? fallback : fallback;
-
-    private async void CancelCommand_Click(object sender, RoutedEventArgs e)
-    {
-        CancelCurrentOperation();
-        CommandStatus.Text = "Canceled. Completed stages remain in the project.";
-        if (_directorDraftJobStatus is "queued" or "running" or "paused" &&
-            _directorProjectId is string projectId && _directorDraftJobId is string jobId)
+    await RunBusyAsync("Preparing render handoff", async token =>
         {
-            await RunBusyAsync("Canceling Director", async token =>
-            {
-                var response = await App.Services.ApiClient.CancelJobAsync(projectId, jobId, token);
-                _directorDraftJobStatus = response.Job.Status;
-            });
-        }
-    }
-
-    private async void MakeCommand_Click(object sender, RoutedEventArgs e)
-    {
-        if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
-        string provider = GetComboTag(CommandProvider, "internal_qwen");
-        bool internalModel = provider == "internal_qwen";
-        string? directorModel = NullIfWhiteSpace(GetComboTag(CommandDirectorModel, ""));
-        string? model = NullIfWhiteSpace(CommandModel.Text);
-        string? brief = NullIfWhiteSpace(CommandBrief.Text);
-        string? style = NullIfWhiteSpace(CommandStyle.Text);
-        bool nativeAudio = CommandNativeAudio.IsChecked == true;
-        bool verifyLyrics = CommandVerifyLyrics.IsChecked == true;
-        bool separateVocals = CommandSeparateVocals.IsChecked == true;
-        SetCommandBusy(true);
-        try
-        {
-            await RunBusyAsync("Creating direction", async token =>
-            {
-                try
-                {
-                    await App.Services.ApiClient.SaveTranscriptionSettingsAsync(
-                        JsonSerializer.SerializeToElement(new { verification_enabled = verifyLyrics, separate_vocals = separateVocals }), token);
-                    if (_projectResponse?.Project.HasAudio != true && string.IsNullOrWhiteSpace(_pendingAudioPath))
-                        throw new InvalidOperationException("Choose source audio before creating direction.");
-                    CommandProgress.Value = 5;
-                    if (!string.IsNullOrWhiteSpace(_pendingAudioPath))
-                    {
-                        CommandStatus.Text = "Importing audio";
-                        await using var stream = System.IO.File.OpenRead(_pendingAudioPath);
-                        await App.Services.ApiClient.UploadAudioAsync(projectId, stream,
-                            System.IO.Path.GetFileName(_pendingAudioPath), GetAudioContentType(_pendingAudioPath), token);
-                        App.Services.Session.NotifyProjectContentChanged(projectId);
-                        _pendingAudioPath = null;
-                        PendingAudioText.Text = "Project audio selected";
-                        await RefreshProjectSnapshotAsync(projectId, token);
-                        CommandStatus.Text = "Analyzing imported audio";
-                        CommandAnalysisStatus.Text = "Analysis: active - extracting audio features and running the configured Whisper provider.";
-                        AnalysisResponse importedAnalysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, token);
-                        if (!importedAnalysis.Ok)
-                        {
-                            CommandAnalysisStatus.Text = "Analysis: failed - imported audio remains available for retry.";
-                            throw new InvalidOperationException("Audio analysis did not complete.");
-                        }
-                        await RefreshProjectSnapshotAsync(projectId, token);
-                    }
-                    if (_projectResponse?.Project.HasAnalysis != true)
-                    {
-                        CommandStatus.Text = "Analyzing audio";
-                        CommandAnalysisStatus.Text = "Analysis: active - extracting audio features and running the configured Whisper provider.";
-                        AnalysisResponse analysis = await App.Services.ApiClient.AnalyzeAudioAsync(projectId, token);
-                        if (!analysis.Ok)
-                        {
-                            CommandAnalysisStatus.Text = "Analysis: failed - project audio remains available for retry.";
-                            throw new InvalidOperationException("Audio analysis did not complete.");
-                        }
-                        await RefreshProjectSnapshotAsync(projectId, token);
-                    }
-                    token.ThrowIfCancellationRequested();
-                    CommandProgress.Value = 30;
-                    CommandStatus.Text = "Creating story, scenes, and visual direction";
-                    // Reuse reviewed camera/motion data when Qwen already has a current draft.
-                    await LoadWorkflowAsync(projectId, token);
-                    if (!internalModel || WorkflowSceneItems.Count == 0)
-                    {
-                        _generatedPlan = await App.Services.ApiClient.GeneratePlanAsync(projectId,
-                        new PlanRequest(_projectResponse?.Project.Name, brief, style,
-                            NumberOfVariants: 1, MaximumScenes: 24,
-                            ExpectedRevision: StudioPageHelpers.ExpectedRevision(_projectResponse?.Project),
-                            Provider: internalModel ? "local" : provider, Model: internalModel ? null : model, NativeAudio: nativeAudio),
-                        internalModel || provider == "local" ? "local" : "ai", token);
-                    }
-                    await RefreshProjectSnapshotAsync(projectId, token);
-                    _session.SelectedVariantIndex = 0;
-                    CommandStatus.Text = "Preparing editable direction and motion";
-                    // Plan generation already publishes the shared planner draft.
-                    // Preparing again would replace it with the previously saved direction.
-                    await LoadSelectedProjectAsync(projectId, token);
-                    if (internalModel)
-                    {
-                        CommandStatus.Text = "Baseline ready. Checking Qwen readiness";
-                        JsonElement readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
-                            projectId, "automatic", "automatic", token, directorModel);
-                        JsonElement director = readiness.GetProperty("director");
-                        if (!director.GetProperty("ready").GetBoolean())
-                        {
-                            string reason = director.TryGetProperty("reason", out JsonElement reasonValue)
-                                ? reasonValue.GetString() ?? "The selected Qwen runtime is unavailable."
-                                : "The selected Qwen runtime is unavailable.";
-                            CommandStatus.Text = $"Baseline draft ready. Qwen was not run: {reason}";
-                            CommandProgress.Value = 100;
-                            ShowStatus("Baseline draft retained", reason, InfoBarSeverity.Warning);
-                            return;
-                        }
-
-                        try
-                        {
-                            CommandStatus.Text = "Queuing Qwen direction";
-                            string instruction = string.Join("\n", new[] { brief, style is null ? null : "Visual style: " + style }
-                                .Where(value => !string.IsNullOrWhiteSpace(value)));
-                            if (instruction.Length == 0)
-                                instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
-                            bool requireAudioNative = string.IsNullOrWhiteSpace(directorModel) || directorModel.Contains("omni", StringComparison.OrdinalIgnoreCase);
-                            var request = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(),
-                                instruction, ModelId: directorModel, RequireAudioNative: requireAudioNative);
-                            JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);
-                            _directorDraftJobId = queued.GetProperty("job_id").GetString()!;
-                            _directorDraftJobStatus = queued.GetProperty("status").GetString();
-                            _directorRevision = queued.GetProperty("revision").GetInt64();
-                            _session.SetSelectedJob(projectId, _directorDraftJobId);
-                            await WaitForCommandDirectorAsync(projectId, _directorDraftJobId, token);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            throw;
-                        }
-                        catch (Exception error) when (error is HttpRequestException or InvalidOperationException)
-                        {
-                            CommandStatus.Text = $"Baseline draft ready. Qwen stopped: {error.Message}";
-                            CommandProgress.Value = 100;
-                            ShowStatus("Baseline draft retained", error.Message, InfoBarSeverity.Warning);
-                        }
-                        return;
-                    }
-                    string actualProvider = _generatedPlan?.AdditionalData?.GetValueOrDefault("provider").ToString() ?? provider;
-                    CommandStatus.Text = $"Draft ready ({actualProvider}). Edit below or continue to Render.";
-                    CommandProgress.Value = 100;
-                }
-                catch (OperationCanceledException) { CommandStatus.Text = "Canceled. Completed stages remain in the project."; throw; }
-                catch (Exception error) { CommandStatus.Text = $"Creation stopped: {error.Message}"; throw; }
-            });
-        }
-        finally { SetCommandBusy(false); }
-    }
-
-    private async void CommandRender_Click(object sender, RoutedEventArgs e)
-    {
-        if (_commandRunning || !TryGetActiveProjectId(out string projectId)) return;
-
-        await RunBusyAsync("Preparing render handoff", async token =>
-        {
-            if (!HasUnsavedWorkflowEdits())
-            {
-                await UseCommandProposalAsync(projectId, token);
-            }
-            if (!await CheckpointWorkspaceEditsAsync(projectId, token))
-            {
-                return;
-            }
-            if (_workflowStatus is not ("draft" or "applied"))
-            {
-                throw new InvalidOperationException("Create or recover a shared draft before opening Render.");
-            }
-            token.ThrowIfCancellationRequested();
-            _session.SetRenderContext("workspace-engine:" + GetComboTag(CommandRenderer, "auto"));
-            NavigateTo("render");
+          if (!HasUnsavedWorkflowEdits())
+          {
+            await UseCommandProposalAsync(projectId, token);
+          }
+          if (!await CheckpointWorkspaceEditsAsync(projectId, token))
+          {
+            return;
+          }
+          if (_workflowStatus is not ("draft" or "applied"))
+          {
+            throw new InvalidOperationException("Create or recover a shared draft before opening Render.");
+          }
+          token.ThrowIfCancellationRequested();
+          _session.SetRenderContext("workspace-engine:" + GetComboTag(CommandRenderer, "auto"));
+          NavigateTo("render");
         });
-    }
+  }
 }

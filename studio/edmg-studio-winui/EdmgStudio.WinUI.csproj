@@ -54,7 +54,9 @@
     <Content Include="$(EdmgReleaseCandidatePath)" Condition="'$(EdmgReleaseCandidatePath)' != ''" Link="release-candidate.json" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(EdmgVst3HostPath)" Condition="'$(EdmgVst3HostPath)' != '' And Exists('$(EdmgVst3HostPath)')" Link="EdmgStudio.Vst3Host.exe" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(EdmgVst3ScannerPath)" Condition="'$(EdmgVst3ScannerPath)' != '' And Exists('$(EdmgVst3ScannerPath)')" Link="EdmgStudio.Vst3Scanner.exe" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(EdmgJuceAudioHostPath)" Condition="'$(EdmgJuceAudioHostPath)' != '' And Exists('$(EdmgJuceAudioHostPath)')" Link="EdmgStudio.JuceAudioHost.exe" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="native\vst3-host\THIRD-PARTY-NOTICES.txt" Link="EdmgStudio.Vst3Host.THIRD-PARTY-NOTICES.txt" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="native\juce-audio-host\THIRD-PARTY-NOTICES.txt" Condition="'$(EdmgJuceAudioHostPath)' != '' And Exists('$(EdmgJuceAudioHostPath)')" Link="EdmgStudio.JuceAudioHost.THIRD-PARTY-NOTICES.txt" ExcludeFromResourceIndex="true" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="ValidateEdmgReleaseCandidate" BeforeTargets="PrepareForBuild" Condition="'$(EdmgPackageManifestPath)' != ''">

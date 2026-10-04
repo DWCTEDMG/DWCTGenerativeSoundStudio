@@ -9,6 +9,6 @@ namespace EdmgStudio.WinUI.Graphics;
 /// </summary>
 internal interface IFrameUploader : IDisposable
 {
-    ID3D11Texture2D Upload(OwnedCpuFrame frame);
-    void Reset();
+  ID3D11Texture2D Upload(OwnedCpuFrame frame);
+  void Reset();
 }

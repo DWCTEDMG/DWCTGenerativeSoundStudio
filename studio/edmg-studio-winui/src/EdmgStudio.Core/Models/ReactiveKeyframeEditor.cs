@@ -7,42 +7,58 @@ namespace EdmgStudio.Core.Models;
 /// <summary>A presentation projection; scheduling and time conversion remain in the backend.</summary>
 public sealed class ReactiveKeyframeEditor
 {
-    private readonly JsonObject _source;
+  private readonly JsonObject _source;
 
-    public ReactiveKeyframeEditor(JsonElement source)
+  public ReactiveKeyframeEditor(JsonElement source)
+  {
+    _source = JsonNode.Parse(source.GetRawText()) as JsonObject
+        ?? throw new JsonException("A reactive keyframe must be an object.");
+  }
+
+  public string Id => _source["id"]?.ToString() ?? _source["source_id"]?.ToString() ?? "Keyframe";
+  public string Timing => $"{ReadNumber("t", ReadNumber("time", 0)).ToString("0.###", CultureInfo.InvariantCulture)} s";
+  public string Placement => $"{Timing} · frame {_source["frame"]?.ToString() ?? "—"} · sample {_source["sample"]?.ToString() ?? "—"}";
+  public string Summary => $"{Timing} · strength {Strength:0.###} · zoom {Zoom:0.###}";
+  public bool IsEditable => !string.Equals(_source["locked"]?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+  public double Strength => ReadNumber("strength", ReadNumber("motion_score", 0.5));
+  public double Zoom => ReadNumber("zoom", 1);
+
+  public bool Refine(double strength, double zoom)
+  {
+    if (!IsEditable)
     {
-        _source = JsonNode.Parse(source.GetRawText()) as JsonObject
-            ?? throw new JsonException("A reactive keyframe must be an object.");
+      throw new InvalidOperationException("This keyframe is locked.");
     }
 
-    public string Id => _source["id"]?.ToString() ?? _source["source_id"]?.ToString() ?? "Keyframe";
-    public string Timing => $"{ReadNumber("t", ReadNumber("time", 0)).ToString("0.###", CultureInfo.InvariantCulture)} s";
-    public string Placement => $"{Timing} · frame {_source["frame"]?.ToString() ?? "—"} · sample {_source["sample"]?.ToString() ?? "—"}";
-    public string Summary => $"{Timing} · strength {Strength:0.###} · zoom {Zoom:0.###}";
-    public bool IsEditable => !string.Equals(_source["locked"]?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
-    public double Strength => ReadNumber("strength", ReadNumber("motion_score", 0.5));
-    public double Zoom => ReadNumber("zoom", 1);
-
-    public bool Refine(double strength, double zoom)
+    if (!double.IsFinite(strength) || strength is < 0 or > 1)
     {
-        if (!IsEditable) throw new InvalidOperationException("This keyframe is locked.");
-        if (!double.IsFinite(strength) || strength is < 0 or > 1)
-            throw new ArgumentOutOfRangeException(nameof(strength), "Strength must be between 0 and 1.");
-        if (!double.IsFinite(zoom) || zoom is < 0.01 or > 100)
-            throw new ArgumentOutOfRangeException(nameof(zoom), "Zoom must be between 0.01 and 100.");
-        if (Strength == strength && Zoom == zoom) return false;
-        _source["strength"] = strength;
-        _source["zoom"] = zoom;
-        return true;
+      throw new ArgumentOutOfRangeException(nameof(strength), "Strength must be between 0 and 1.");
     }
 
-    public JsonElement ToJson()
+    if (!double.IsFinite(zoom) || zoom is < 0.01 or > 100)
     {
-        using var document = JsonDocument.Parse(_source.ToJsonString());
-        return document.RootElement.Clone();
+      throw new ArgumentOutOfRangeException(nameof(zoom), "Zoom must be between 0.01 and 100.");
     }
 
-    private double ReadNumber(string name, double fallback) =>
-        double.TryParse(_source[name]?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-        && double.IsFinite(value) ? value : fallback;
+    if (Strength == strength && Zoom == zoom)
+    {
+      return false;
+    }
+
+    _source["strength"] = strength;
+    _source["zoom"] = zoom;
+    return true;
+  }
+
+  public JsonElement ToJson()
+  {
+    using JsonDocument document = JsonDocument.Parse(_source.ToJsonString());
+    return document.RootElement.Clone();
+  }
+
+  private double ReadNumber(string name, double fallback)
+  {
+    return double.TryParse(_source[name]?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+      && double.IsFinite(value) ? value : fallback;
+  }
 }

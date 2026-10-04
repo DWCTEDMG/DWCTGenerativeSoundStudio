@@ -158,7 +158,7 @@ public sealed partial class RenderPage : Page
               ? $"Director draft saved · {sceneCount} scenes · timeline handoff pending"
               : "No Director draft is applied";
 
-      var details = new List<string> { $"Director revision {revision}" };
+      List<string> details = [$"Director revision {revision}"];
       if (durationSeconds > 0)
       {
         details.Add($"Timeline {durationSeconds:0.#}s");
@@ -178,10 +178,12 @@ public sealed partial class RenderPage : Page
       details.Add(reactiveApplied ? "Reactive Lab applied" : "Reactive Lab not applied");
       AppliedPlanDetailText.Text = string.Join(" · ", details);
 
-      var mappings = new List<string>();
-      mappings.Add(string.IsNullOrWhiteSpace(audioFilename)
+      List<string> mappings =
+      [
+        string.IsNullOrWhiteSpace(audioFilename)
           ? "No project audio mapped"
-          : $"Audio: {audioFilename}");
+          : $"Audio: {audioFilename}"
+      ];
       if (mappedSections > 0)
       {
         mappings.Add($"{mappedSections} sections");
@@ -206,40 +208,50 @@ public sealed partial class RenderPage : Page
     }
   }
 
-  private static JsonElement ObjectProperty(JsonElement value, string name) =>
-      value.ValueKind == JsonValueKind.Object
+  private static JsonElement ObjectProperty(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object
       && value.TryGetProperty(name, out JsonElement property)
       && property.ValueKind == JsonValueKind.Object
           ? property
           : default;
+  }
 
-  private static int ArrayLength(JsonElement value, string name) =>
-      value.ValueKind == JsonValueKind.Object
+  private static int ArrayLength(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object
       && value.TryGetProperty(name, out JsonElement property)
       && property.ValueKind == JsonValueKind.Array
           ? property.GetArrayLength()
           : 0;
+  }
 
-  private static string StringProperty(JsonElement value, string name) =>
-      value.ValueKind == JsonValueKind.Object
+  private static string StringProperty(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object
       && value.TryGetProperty(name, out JsonElement property)
       && property.ValueKind == JsonValueKind.String
           ? property.GetString() ?? string.Empty
           : string.Empty;
+  }
 
-  private static int IntProperty(JsonElement value, string name) =>
-      value.ValueKind == JsonValueKind.Object
+  private static int IntProperty(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object
       && value.TryGetProperty(name, out JsonElement property)
       && property.TryGetInt32(out int number)
           ? number
           : 0;
+  }
 
-  private static double NumberProperty(JsonElement value, string name) =>
-      value.ValueKind == JsonValueKind.Object
+  private static double NumberProperty(JsonElement value, string name)
+  {
+    return value.ValueKind == JsonValueKind.Object
       && value.TryGetProperty(name, out JsonElement property)
       && property.TryGetDouble(out double number)
           ? number
           : 0;
+  }
 
   private async Task LoadExecutionPlaneAsync(CancellationToken cancellationToken)
   {
@@ -1178,7 +1190,7 @@ public sealed partial class RenderPage : Page
 
   private static IReadOnlyList<string> FindStringValues(JsonElement value, params string[] propertyNames)
   {
-    List<string> values = new();
+    List<string> values = [];
     CollectStringValues(value, propertyNames, values);
     return values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
   }
@@ -1524,7 +1536,8 @@ public sealed partial class RenderPage : Page
           0.3,
           20,
           7.0,
-          null) { Runtime = BuildOperationRuntime() };
+          null)
+    { Runtime = BuildOperationRuntime() };
   }
 
   private async void AnimateLayers_Click(object sender, RoutedEventArgs e)
@@ -1557,11 +1570,14 @@ public sealed partial class RenderPage : Page
           steps: Number(StillsStepsBox, 28),
           cfg: Number(StillsCfgBox, 7.0),
           sampler: "euler",
-          negativePrompt: StillsNegativeBox.Text.Trim()) { Runtime = BuildOperationRuntime() };
+          negativePrompt: StillsNegativeBox.Text.Trim())
+    { Runtime = BuildOperationRuntime() };
   }
 
-  private string OperationDevicePreference(string inherited) =>
-    double.IsFinite(OperationRuntimeDevice.Value) ? "cuda" : inherited;
+  private string OperationDevicePreference(string inherited)
+  {
+    return double.IsFinite(OperationRuntimeDevice.Value) ? "cuda" : inherited;
+  }
 
   private OperationRuntimeOptions? BuildOperationRuntime()
   {
@@ -1569,16 +1585,17 @@ public sealed partial class RenderPage : Page
     string precision = Selected(OperationRuntimePrecision, "inherit");
     string fallback = Selected(OperationRuntimeFallback, "inherit");
     int? device = double.IsFinite(OperationRuntimeDevice.Value) ? (int)OperationRuntimeDevice.Value : null;
-    if (mode == "inherit" && precision == "inherit" && fallback == "inherit" && device is null) return null;
-    return new OperationRuntimeOptions
-    {
-      Mode = mode is "inherit" or "off" ? null : mode,
-      Enabled = mode == "off" ? false : null,
-      Precision = precision == "inherit" ? null : precision,
-      AllowFallback = fallback == "inherit" ? null : fallback == "allow",
-      Strict = fallback == "inherit" ? null : fallback == "strict",
-      Device = device,
-    };
+    return mode == "inherit" && precision == "inherit" && fallback == "inherit" && device is null
+      ? null
+      : new OperationRuntimeOptions
+      {
+        Mode = mode is "inherit" or "off" ? null : mode,
+        Enabled = mode == "off" ? false : null,
+        Precision = precision == "inherit" ? null : precision,
+        AllowFallback = fallback == "inherit" ? null : fallback == "allow",
+        Strict = fallback == "inherit" ? null : fallback == "strict",
+        Device = device,
+      };
   }
 
   private async void RenderStills_Click(object sender, RoutedEventArgs e)
@@ -1649,7 +1666,8 @@ public sealed partial class RenderPage : Page
           cfg: Number(TensorCfgBox, 7.0),
           sampler: Selected(TensorSamplerComboBox, "pndm"),
           negativePrompt: TensorNegativeBox.Text.Trim(),
-          batchSize: Number(TensorBatchBox, 1)) { Runtime = BuildOperationRuntime() };
+          batchSize: Number(TensorBatchBox, 1))
+    { Runtime = BuildOperationRuntime() };
   }
 
   private async void PreviewTensorRt_Click(object sender, RoutedEventArgs e)
@@ -1710,14 +1728,14 @@ public sealed partial class RenderPage : Page
 
   private ComfyUiWorkflowExportOptions BuildComfyUiExportOptions()
   {
-    var advanced = ParseRequiredElement(
+    JsonElement advanced = ParseRequiredElement(
         ComfyExportAdvancedBox.Text,
         "ComfyUI advanced query",
         JsonValueKind.Object);
 
     string? JsonOption(string name)
     {
-      return advanced.TryGetProperty(name, out var value) &&
+      return advanced.TryGetProperty(name, out JsonElement value) &&
         value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
             ? value.GetRawText()
             : null;
@@ -1725,21 +1743,21 @@ public sealed partial class RenderPage : Page
 
     string? StringOption(string name)
     {
-      return advanced.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+      return advanced.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
             ? EmptyToNull(value.GetString())
             : null;
     }
 
     double NumberOption(string name, double fallback)
     {
-      return advanced.TryGetProperty(name, out var value) && value.TryGetDouble(out var number)
+      return advanced.TryGetProperty(name, out JsonElement value) && value.TryGetDouble(out double number)
             ? number
             : fallback;
     }
 
     long? LongOption(string name)
     {
-      return advanced.TryGetProperty(name, out var value) && value.TryGetInt64(out var number)
+      return advanced.TryGetProperty(name, out JsonElement value) && value.TryGetInt64(out long number)
             ? number
             : null;
     }
@@ -1817,7 +1835,7 @@ public sealed partial class RenderPage : Page
       ViewMode = Microsoft.Windows.Storage.Pickers.PickerViewMode.Thumbnail,
     };
     picker.FileTypeFilter.Add("*");
-    var file = await picker.PickSingleFileAsync();
+    PickFileResult? file = await picker.PickSingleFileAsync();
     if (file is null)
     {
       ShowStatus("No file was selected.", InfoBarSeverity.Informational);
@@ -2151,7 +2169,7 @@ public sealed partial class RenderPage : Page
 
   private static JsonArray ParseLoras(string value)
   {
-    JsonArray result = new();
+    JsonArray result = [];
     foreach (string entry in ParseStringList(value))
     {
       string[] parts = entry.Split('@', 2, StringSplitOptions.TrimEntries);
@@ -2183,7 +2201,7 @@ public sealed partial class RenderPage : Page
       throw new InvalidOperationException("Conductor intent sections must be a JSON array.");
     }
 
-    List<RenderIntentSection> result = new();
+    List<RenderIntentSection> result = [];
     foreach (JsonElement item in document.RootElement.EnumerateArray())
     {
       EnsureObject(item, "Each conductor intent section");
@@ -2213,7 +2231,7 @@ public sealed partial class RenderPage : Page
       throw new InvalidOperationException("Layer masks must be a JSON array.");
     }
 
-    List<LayerMaskSpec> result = new();
+    List<LayerMaskSpec> result = [];
     foreach (JsonElement item in document.RootElement.EnumerateArray())
     {
       EnsureObject(item, "Each layer mask");
@@ -2314,39 +2332,30 @@ public sealed partial class RenderPage : Page
 
   private static string? PropertyString(JsonElement value, string propertyName)
   {
-    if (!value.TryGetProperty(propertyName, out JsonElement property)
-        || property.ValueKind == JsonValueKind.Null)
-    {
-      return null;
-    }
-
-    return property.ValueKind != JsonValueKind.String
+    return !value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null
+      ? null
+      : property.ValueKind != JsonValueKind.String
           ? throw new InvalidOperationException($"'{propertyName}' must be a string.")
           : property.GetString();
   }
 
   private static double PropertyDouble(JsonElement value, string propertyName, double fallback)
   {
-    if (!value.TryGetProperty(propertyName, out JsonElement property)
-        || property.ValueKind == JsonValueKind.Null)
-    {
-      return fallback;
-    }
-
-    return !property.TryGetDouble(out double result)
+    return !value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null
+      ? fallback
+      : !property.TryGetDouble(out double result)
           ? throw new InvalidOperationException($"'{propertyName}' must be a number.")
           : result;
   }
 
   private static double? OptionalPropertyDouble(JsonElement value, string propertyName)
   {
-    if (!value.TryGetProperty(propertyName, out JsonElement property)
-        || property.ValueKind == JsonValueKind.Null)
-    {
-      return null;
-    }
-
-    return !property.TryGetDouble(out double result)
+    return !value.TryGetProperty(propertyName, out JsonElement property)
+        || property.ValueKind == JsonValueKind.Null
+      ? null
+      : !property.TryGetDouble(out double result)
           ? throw new InvalidOperationException($"'{propertyName}' must be a number.")
           : result;
   }
@@ -2364,7 +2373,7 @@ public sealed partial class RenderPage : Page
       throw new InvalidOperationException($"'{propertyName}' must be an array of strings.");
     }
 
-    List<string> result = new();
+    List<string> result = [];
     foreach (JsonElement item in property.EnumerateArray())
     {
       if (item.ValueKind != JsonValueKind.String)

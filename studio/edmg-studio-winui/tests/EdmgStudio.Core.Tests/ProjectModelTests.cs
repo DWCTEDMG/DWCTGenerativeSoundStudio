@@ -1,15 +1,15 @@
-using System.Text.Json;
 using EdmgStudio.Core.Models;
+using System.Text.Json;
 
 namespace EdmgStudio.Core.Tests;
 
 [TestClass]
 public sealed class ProjectModelTests
 {
-    [TestMethod]
-    public void ProjectRevisionMetadata_DeserializesFromCanonicalFields()
-    {
-        var project = JsonSerializer.Deserialize<ProjectDto>(
+  [TestMethod]
+  public void ProjectRevisionMetadata_DeserializesFromCanonicalFields()
+  {
+    ProjectDto project = JsonSerializer.Deserialize<ProjectDto>(
             """
             {
               "id": "p-revision",
@@ -23,14 +23,14 @@ public sealed class ProjectModelTests
             """,
             StudioJson.Options)!;
 
-        Assert.AreEqual(17L, project.Revision);
-        Assert.AreEqual("2026-08-12T09:30:00Z", project.UpdatedAt);
-    }
+    Assert.AreEqual(17L, project.Revision);
+    Assert.AreEqual("2026-08-12T09:30:00Z", project.UpdatedAt);
+  }
 
-    [TestMethod]
-    public void PersistedProjectMetadata_DrivesNativeWorkflowState()
-    {
-        var project = JsonSerializer.Deserialize<ProjectDto>(
+  [TestMethod]
+  public void PersistedProjectMetadata_DrivesNativeWorkflowState()
+  {
+    ProjectDto project = JsonSerializer.Deserialize<ProjectDto>(
             """
             {
               "id": "p1",
@@ -53,23 +53,23 @@ public sealed class ProjectModelTests
             """,
             StudioJson.Options)!;
 
-        Assert.IsTrue(project.HasAudio);
-        Assert.IsTrue(project.HasAnalysis);
-        Assert.IsTrue(project.HasPlan);
-        Assert.AreEqual("track.wav", project.AudioFileName);
-        Assert.AreEqual(4096L, project.AudioSizeBytes);
-        Assert.AreEqual(128D, project.Bpm);
-        Assert.AreEqual(42.5D, project.DurationSeconds);
-        Assert.AreEqual(2, project.SectionCount);
-        Assert.AreEqual("Transcription unavailable; audio features are ready", project.TranscriptStatus);
-        Assert.AreEqual("Variant 1", project.PlanVariants.Single().DisplayName);
-        Assert.AreEqual(1, project.PlanVariants.Single().SceneCount);
-    }
+    Assert.IsTrue(project.HasAudio);
+    Assert.IsTrue(project.HasAnalysis);
+    Assert.IsTrue(project.HasPlan);
+    Assert.AreEqual("track.wav", project.AudioFileName);
+    Assert.AreEqual(4096L, project.AudioSizeBytes);
+    Assert.AreEqual(128D, project.Bpm);
+    Assert.AreEqual(42.5D, project.DurationSeconds);
+    Assert.AreEqual(2, project.SectionCount);
+    Assert.AreEqual("Transcription unavailable; audio features are ready", project.TranscriptStatus);
+    Assert.AreEqual("Variant 1", project.PlanVariants.Single().DisplayName);
+    Assert.AreEqual(1, project.PlanVariants.Single().SceneCount);
+  }
 
-    [TestMethod]
-    public void LegacyAnalysisShapes_RemainReadableInTheNativeClient()
-    {
-        var project = JsonSerializer.Deserialize<ProjectDto>(
+  [TestMethod]
+  public void LegacyAnalysisShapes_RemainReadableInTheNativeClient()
+  {
+    ProjectDto project = JsonSerializer.Deserialize<ProjectDto>(
             """
             {
               "id": "legacy",
@@ -87,8 +87,8 @@ public sealed class ProjectModelTests
             """,
             StudioJson.Options)!;
 
-        Assert.AreEqual(96D, project.Bpm);
-        Assert.AreEqual(12.75D, project.DurationSeconds);
-        Assert.AreEqual("Transcript ready", project.TranscriptStatus);
-    }
+    Assert.AreEqual(96D, project.Bpm);
+    Assert.AreEqual(12.75D, project.DurationSeconds);
+    Assert.AreEqual("Transcript ready", project.TranscriptStatus);
+  }
 }

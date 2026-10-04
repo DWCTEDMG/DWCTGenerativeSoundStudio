@@ -334,6 +334,78 @@
                 </Border>
 
                 <Border Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Audio preview engine" />
+                        <ComboBox x:Name="AudioPreviewEngineComboBox"
+                                  AutomationProperties.AutomationId="SettingsAudioPreviewEngineComboBox"
+                                  Header="Engine"
+                                  SelectionChanged="AudioPreviewEngineComboBox_SelectionChanged"
+                                  Width="260"
+                                  HorizontalAlignment="Left">
+                            <ComboBoxItem Content="Windows AudioGraph (default)" Tag="AudioGraph" />
+                            <ComboBoxItem Content="JUCE preview" Tag="Juce" />
+                        </ComboBox>
+                        <TextBlock x:Name="AudioPreviewEngineStatusText"
+                                   AutomationProperties.AutomationId="SettingsAudioPreviewEngineStatusText"
+                                   Text="AudioGraph is selected."
+                                   TextWrapping="Wrap" />
+                        <Button x:Name="ReturnToAudioGraphButton"
+                                AutomationProperties.AutomationId="SettingsReturnToAudioGraphButton"
+                                Click="ReturnToAudioGraphButton_Click"
+                                Content="Return to AudioGraph"
+                                HorizontalAlignment="Left" />
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="JUCE host diagnostics" />
+                        <TextBlock x:Name="JuceLifecycleText"
+                                   AutomationProperties.AutomationId="SettingsJuceLifecycleText"
+                                   Text="JUCE host is stopped."
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="JuceIdentityText" Opacity="0.72" TextWrapping="Wrap" />
+                        <TextBlock x:Name="JuceRuntimeDiagnosticsText" Opacity="0.72" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="StartJuceButton" AutomationProperties.AutomationId="SettingsStartJuceButton"
+                                    Click="StartJuceButton_Click" Content="Start host" />
+                            <Button x:Name="RestartJuceButton" AutomationProperties.AutomationId="SettingsRestartJuceButton"
+                                    Click="RestartJuceButton_Click" Content="Restart host" />
+                            <Button x:Name="StopJuceButton" AutomationProperties.AutomationId="SettingsStopJuceButton"
+                                    Click="StopJuceButton_Click" Content="Stop host" />
+                            <Button x:Name="RefreshJuceDevicesButton" AutomationProperties.AutomationId="SettingsRefreshJuceDevicesButton"
+                                    Click="RefreshJuceDevicesButton_Click" Content="Discover devices" />
+                        </StackPanel>
+                        <ComboBox x:Name="JuceDeviceComboBox" AutomationProperties.AutomationId="SettingsJuceDeviceComboBox"
+                                  Header="Explicit JUCE output device" DisplayMemberPath="Name" PlaceholderText="Discover devices first" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ComboBox x:Name="JuceSampleRateComboBox" Header="Sample rate" SelectedIndex="1" Width="140">
+                                <x:Int32>44100</x:Int32>
+                                <x:Int32>48000</x:Int32>
+                                <x:Int32>96000</x:Int32>
+                            </ComboBox>
+                            <ComboBox x:Name="JuceBufferSizeComboBox" Header="Buffer frames" SelectedIndex="2" Width="140">
+                                <x:Int32>128</x:Int32>
+                                <x:Int32>256</x:Int32>
+                                <x:Int32>512</x:Int32>
+                                <x:Int32>1024</x:Int32>
+                            </ComboBox>
+                            <Button x:Name="OpenJuceDeviceButton" VerticalAlignment="Bottom"
+                                    AutomationProperties.AutomationId="SettingsOpenJuceDeviceButton"
+                                    Click="OpenJuceDeviceButton_Click" Content="Open device" />
+                            <Button x:Name="CloseJuceDeviceButton" VerticalAlignment="Bottom"
+                                    AutomationProperties.AutomationId="SettingsCloseJuceDeviceButton"
+                                    Click="CloseJuceDeviceButton_Click" Content="Close device" />
+                            <Button x:Name="PlayJuceToneButton" VerticalAlignment="Bottom"
+                                    AutomationProperties.AutomationId="SettingsPlayJuceToneButton"
+                                    Click="PlayJuceToneButton_Click" Content="Play 440 Hz proof" />
+                            <Button x:Name="StopJuceToneButton" VerticalAlignment="Bottom"
+                                    AutomationProperties.AutomationId="SettingsStopJuceToneButton"
+                                    Click="StopJuceToneButton_Click" Content="Stop proof" />
+                        </StackPanel>
+                        <TextBlock x:Name="JuceDeviceStatusText" Opacity="0.72" Text="No JUCE device has been opened." TextWrapping="Wrap" />
+                        <TextBlock Opacity="0.68"
+                                   Text="Selection is persisted locally and can change only while transport is stopped; it never changes project files. The current JUCE path provides host, device, transport, and prepared-Timeline diagnostics but is not yet wired as application Timeline playback. Callback load, xruns, and native graph latency remain unavailable until that integration is complete. AudioGraph remains the default and rollback path."
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="VST3 plugins" />
                         <TextBlock x:Name="Vst3CapabilityText"

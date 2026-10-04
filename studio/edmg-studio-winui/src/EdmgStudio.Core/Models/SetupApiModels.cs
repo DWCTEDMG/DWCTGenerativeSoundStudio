@@ -5,47 +5,47 @@ namespace EdmgStudio.Core.Models;
 
 public sealed class SetupStatusResponse
 {
-    [JsonPropertyName("ok")]
-    public bool Ok { get; init; }
+  [JsonPropertyName("ok")]
+  public bool Ok { get; init; }
 
-    [JsonPropertyName("ai_config")]
-    public JsonElement AiConfig { get; init; }
+  [JsonPropertyName("ai_config")]
+  public JsonElement AiConfig { get; init; }
 
-    [JsonPropertyName("toolchain")]
-    public JsonElement Toolchain { get; init; }
+  [JsonPropertyName("toolchain")]
+  public JsonElement Toolchain { get; init; }
 
-    [JsonPropertyName("backend_bundle")]
-    public JsonElement BackendBundle { get; init; }
+  [JsonPropertyName("backend_bundle")]
+  public JsonElement BackendBundle { get; init; }
 
-    [JsonPropertyName("ollama")]
-    public JsonElement Ollama { get; init; }
+  [JsonPropertyName("ollama")]
+  public JsonElement Ollama { get; init; }
 
-    [JsonPropertyName("comfyui")]
-    public JsonElement ComfyUi { get; init; }
+  [JsonPropertyName("comfyui")]
+  public JsonElement ComfyUi { get; init; }
 
-    [JsonPropertyName("ffmpeg")]
-    public JsonElement Ffmpeg { get; init; }
+  [JsonPropertyName("ffmpeg")]
+  public JsonElement Ffmpeg { get; init; }
 
-    [JsonPropertyName("edmg")]
-    public JsonElement Edmg { get; init; }
+  [JsonPropertyName("edmg")]
+  public JsonElement Edmg { get; init; }
 
-    [JsonPropertyName("sevenzip")]
-    public JsonElement SevenZip { get; init; }
+  [JsonPropertyName("sevenzip")]
+  public JsonElement SevenZip { get; init; }
 
-    [JsonPropertyName("hardware")]
-    public JsonElement Hardware { get; init; }
+  [JsonPropertyName("hardware")]
+  public JsonElement Hardware { get; init; }
 
-    [JsonPropertyName("system_readiness")]
-    public JsonElement SystemReadiness { get; init; }
+  [JsonPropertyName("system_readiness")]
+  public JsonElement SystemReadiness { get; init; }
 
-    [JsonPropertyName("tasks")]
-    public List<SetupTaskDto> Tasks { get; init; } = [];
+  [JsonPropertyName("tasks")]
+  public List<SetupTaskDto> Tasks { get; init; } = [];
 
-    [JsonPropertyName("status_cache")]
-    public SetupStatusCache? StatusCache { get; init; }
+  [JsonPropertyName("status_cache")]
+  public SetupStatusCache? StatusCache { get; init; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed record SetupStatusCache(
@@ -55,38 +55,38 @@ public sealed record SetupStatusCache(
 
 public sealed class SetupTaskDto
 {
-    [JsonPropertyName("id")]
-    public string Id { get; init; } = string.Empty;
+  [JsonPropertyName("id")]
+  public string Id { get; init; } = string.Empty;
 
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
+  [JsonPropertyName("name")]
+  public string Name { get; init; } = string.Empty;
 
-    [JsonPropertyName("status")]
-    public string Status { get; init; } = string.Empty;
+  [JsonPropertyName("status")]
+  public string Status { get; init; } = string.Empty;
 
-    [JsonPropertyName("progress")]
-    public double? Progress { get; init; }
+  [JsonPropertyName("progress")]
+  public double? Progress { get; init; }
 
-    [JsonPropertyName("last_log")]
-    public string? LastLog { get; init; }
+  [JsonPropertyName("last_log")]
+  public string? LastLog { get; init; }
 
-    [JsonPropertyName("error")]
-    public string? Error { get; init; }
+  [JsonPropertyName("error")]
+  public string? Error { get; init; }
 
-    [JsonPropertyName("started_at")]
-    public double? StartedAt { get; init; }
+  [JsonPropertyName("started_at")]
+  public double? StartedAt { get; init; }
 
-    [JsonPropertyName("ended_at")]
-    public double? EndedAt { get; init; }
+  [JsonPropertyName("ended_at")]
+  public double? EndedAt { get; init; }
 
-    [JsonPropertyName("cancel_requested")]
-    public bool CancelRequested { get; init; }
+  [JsonPropertyName("cancel_requested")]
+  public bool CancelRequested { get; init; }
 
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+  [JsonExtensionData]
+  public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 
-    [JsonIgnore]
-    public bool IsActive => Status is "queued" or "running";
+  [JsonIgnore]
+  public bool IsActive => Status is "queued" or "running";
 }
 
 public sealed record SetupTaskListResponse(

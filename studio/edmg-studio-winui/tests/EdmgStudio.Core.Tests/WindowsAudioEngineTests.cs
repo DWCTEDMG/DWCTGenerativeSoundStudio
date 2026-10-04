@@ -83,8 +83,8 @@ public sealed class WindowsAudioEngineTests
   [TestMethod]
   public void WorkerCompatibilityRequiresIdentityFormatAndCapacity()
   {
-    var insert = new MixerInsert("insert", 0, PluginId: "plugin", ModulePath: @"C:\Plugins\effect.vst3");
-    using var processor = new FakeInsertProcessor(@"C:\Plugins\effect.vst3", "plugin", 48_000, 512);
+    MixerInsert insert = new("insert", 0, PluginId: "plugin", ModulePath: @"C:\Plugins\effect.vst3");
+    using FakeInsertProcessor processor = new(@"C:\Plugins\effect.vst3", "plugin", 48_000, 512);
 
     Assert.IsTrue(WindowsAudioEngine.IsProcessorCompatible(processor, insert, 48_000, 256));
     Assert.IsFalse(WindowsAudioEngine.IsProcessorCompatible(processor, insert, 44_100, 256));
@@ -149,7 +149,11 @@ public sealed class WindowsAudioEngineTests
     public int ReportedLatencySamples => 0;
     public Vst3WorkerHealth Health => Vst3WorkerHealth.Ready;
     public string? Diagnostic => null;
-    public bool TryProcessInPlace(Span<float> interleavedStereo, int frames) => true;
+    public bool TryProcessInPlace(Span<float> interleavedStereo, int frames)
+    {
+      return true;
+    }
+
     public void Reset() { }
     public void Dispose() { }
   }

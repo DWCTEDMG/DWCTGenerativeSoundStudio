@@ -1,403 +1,420 @@
+using EdmgStudio.Core.Services;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using EdmgStudio.Core.Services;
 
 namespace EdmgStudio.Core.Tests;
 
 [TestClass]
 public sealed class StudioProjectMediaClientTests
 {
-    [TestMethod]
-    public async Task StreamProjectMediaAsync_UsesAuthenticatedProjectStreamWhenNoSignedUrlIsResolved()
+  [TestMethod]
+  public async Task StreamProjectMediaAsync_UsesAuthenticatedProjectStreamWhenNoSignedUrlIsResolved()
+  {
+    byte[] expected = [0x10, 0x20, 0x30];
+    HttpRequestMessage? captured = null;
+    using HttpClient apiHttpClient = new(new RecordingHandler((request, _) =>
     {
-        byte[] expected = [0x10, 0x20, 0x30];
-        HttpRequestMessage? captured = null;
-        using var apiHttpClient = new HttpClient(new RecordingHandler((request, _) =>
+      captured = request;
+      return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+      {
+        Content = new ByteArrayContent(expected)
+      });
+    }));
+    using StudioApiClient apiClient = new(
+        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+        new StaticTokenProvider("stream-token"),
+        apiHttpClient);
+    using StudioProjectMediaClient mediaClient = new(
+        apiClient,
+        new PassthroughStudioSignedMediaUrlResolver(),
+        new HttpClient(new RecordingHandler((_, _) =>
+            throw new AssertFailedException("Signed URL HTTP client should not be used when the resolver falls back to the project file API."))));
+
+    byte[] actual = await mediaClient.StreamProjectMediaAsync(
+        "project /#1",
+        "renders/final take #1.mp4",
+        async (file, cancellationToken) =>
         {
-            captured = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(expected)
-            });
-        }));
-        using var apiClient = new StudioApiClient(
-            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
-            new StaticTokenProvider("stream-token"),
-            apiHttpClient);
-        using var mediaClient = new StudioProjectMediaClient(
-            apiClient,
-            new PassthroughStudioSignedMediaUrlResolver(),
-            new HttpClient(new RecordingHandler((_, _) =>
-                throw new AssertFailedException("Signed URL HTTP client should not be used when the resolver falls back to the project file API."))));
+          using MemoryStream copy = new();
+          await file.Stream.CopyToAsync(copy, cancellationToken);
+          return copy.ToArray();
+        });
 
-        byte[] actual = await mediaClient.StreamProjectMediaAsync(
-            "project /#1",
-            "renders/final take #1.mp4",
-            async (file, cancellationToken) =>
-            {
-                using var copy = new MemoryStream();
-                await file.Stream.CopyToAsync(copy, cancellationToken);
-                return copy.ToArray();
-            });
+    CollectionAssert.AreEqual(expected, actual);
+    Assert.IsNotNull(captured);
+    Assert.AreEqual("/v1/projects/project%20%2F%231/file", captured.RequestUri!.AbsolutePath);
+    Assert.AreEqual("?path=renders%2Ffinal%20take%20%231.mp4", captured.RequestUri.Query);
+    Assert.AreEqual("Bearer", captured.Headers.Authorization?.Scheme);
+    Assert.AreEqual("stream-token", captured.Headers.Authorization?.Parameter);
+  }
 
-        CollectionAssert.AreEqual(expected, actual);
-        Assert.IsNotNull(captured);
-        Assert.AreEqual("/v1/projects/project%20%2F%231/file", captured.RequestUri!.AbsolutePath);
-        Assert.AreEqual("?path=renders%2Ffinal%20take%20%231.mp4", captured.RequestUri.Query);
-        Assert.AreEqual("Bearer", captured.Headers.Authorization?.Scheme);
-        Assert.AreEqual("stream-token", captured.Headers.Authorization?.Parameter);
-    }
-
-    [TestMethod]
-    public async Task StreamProjectMediaAsync_UsesResolvedSignedUrlWithoutAuthorization()
+  [TestMethod]
+  public async Task StreamProjectMediaAsync_UsesResolvedSignedUrlWithoutAuthorization()
+  {
+    byte[] expected = [0xAB, 0xCD];
+    TrackingContent content = new(expected);
+    int apiCalls = 0;
+    HttpRequestMessage? captured = null;
+    using HttpClient apiHttpClient = new(new RecordingHandler((_, _) =>
     {
-        byte[] expected = [0xAB, 0xCD];
-        var content = new TrackingContent(expected);
-        var apiCalls = 0;
-        HttpRequestMessage? captured = null;
-        using var apiHttpClient = new HttpClient(new RecordingHandler((_, _) =>
-        {
-            apiCalls++;
-            throw new AssertFailedException("The authenticated project file endpoint should not be used when a signed URL is resolved.");
-        }));
-        using var signedHttpClient = new HttpClient(new RecordingHandler((request, _) =>
-        {
-            captured = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
-        }));
-        using var apiClient = new StudioApiClient(
-            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
-            new StaticTokenProvider("stream-token"),
-            apiHttpClient);
-        using var mediaClient = new StudioProjectMediaClient(
-            apiClient,
-            new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
-                "renders/preview.png",
-                new Uri("https://cdn.example.invalid/media/preview.png?sig=abc"))),
-            signedHttpClient);
+      apiCalls++;
+      throw new AssertFailedException("The authenticated project file endpoint should not be used when a signed URL is resolved.");
+    }));
+    using HttpClient signedHttpClient = new(new RecordingHandler((request, _) =>
+    {
+      captured = request;
+      return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+    }));
+    using StudioApiClient apiClient = new(
+        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+        new StaticTokenProvider("stream-token"),
+        apiHttpClient);
+    using StudioProjectMediaClient mediaClient = new(
+        apiClient,
+        new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
+            "renders/preview.png",
+            new Uri("https://cdn.example.invalid/media/preview.png?sig=abc"))),
+        signedHttpClient);
 
-        byte[] actual = await mediaClient.StreamProjectMediaAsync(
+    byte[] actual = await mediaClient.StreamProjectMediaAsync(
+        "p1",
+        "renders/preview.png",
+        async (file, cancellationToken) =>
+        {
+          Assert.AreEqual(expected.Length, file.ContentHeaders.ContentLength);
+          using MemoryStream copy = new();
+          await file.Stream.CopyToAsync(copy, cancellationToken);
+          return copy.ToArray();
+        });
+
+    CollectionAssert.AreEqual(expected, actual);
+    Assert.AreEqual(0, apiCalls);
+    Assert.IsNotNull(captured);
+    Assert.AreEqual(new Uri("https://cdn.example.invalid/media/preview.png?sig=abc"), captured.RequestUri);
+    Assert.IsNull(captured.Headers.Authorization);
+    Assert.IsTrue(content.IsDisposed);
+    Assert.IsTrue(content.Stream.IsDisposed);
+  }
+
+  [TestMethod]
+  public async Task StreamProjectMediaAsync_RejectsUnsupportedSignedUrlSchemes()
+  {
+    using StudioApiClient apiClient = new(
+        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+        new StaticTokenProvider(null),
+        new HttpClient(new RecordingHandler((_, _) =>
+            throw new AssertFailedException("API HTTP client should not be called when validation fails first."))));
+    using StudioProjectMediaClient mediaClient = new(
+        apiClient,
+        new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
+            "renders/preview.png",
+            new Uri("file:///E:/secret-preview.png"))),
+        new HttpClient(new RecordingHandler((_, _) =>
+            throw new AssertFailedException("Signed URL HTTP client should not be called when validation fails first."))));
+
+    InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+        () => mediaClient.StreamProjectMediaAsync(
             "p1",
             "renders/preview.png",
-            async (file, cancellationToken) =>
-            {
-                Assert.AreEqual(expected.Length, file.ContentHeaders.ContentLength);
-                using var copy = new MemoryStream();
-                await file.Stream.CopyToAsync(copy, cancellationToken);
-                return copy.ToArray();
-            });
+            (_, _) => Task.FromResult(false)));
 
-        CollectionAssert.AreEqual(expected, actual);
-        Assert.AreEqual(0, apiCalls);
-        Assert.IsNotNull(captured);
-        Assert.AreEqual(new Uri("https://cdn.example.invalid/media/preview.png?sig=abc"), captured.RequestUri);
-        Assert.IsNull(captured.Headers.Authorization);
-        Assert.IsTrue(content.IsDisposed);
-        Assert.IsTrue(content.Stream.IsDisposed);
-    }
+    StringAssert.Contains(exception.Message, "http:// or https://");
+  }
 
-    [TestMethod]
-    public async Task StreamProjectMediaAsync_RejectsUnsupportedSignedUrlSchemes()
+  [TestMethod]
+  public async Task StreamProjectMediaAsync_UsesStudioApiSignedMediaResolverForNativeMedia()
+  {
+    byte[] expected = [0x44, 0x55];
+    HttpRequestMessage? signedRequest = null;
+    string? signedMediaRequestBody = null;
+    using HttpClient apiHttpClient = new(new RecordingHandler(async (request, cancellationToken) =>
     {
-        using var apiClient = new StudioApiClient(
-            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
-            new StaticTokenProvider(null),
-            new HttpClient(new RecordingHandler((_, _) =>
-                throw new AssertFailedException("API HTTP client should not be called when validation fails first."))));
-        using var mediaClient = new StudioProjectMediaClient(
-            apiClient,
-            new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
-                "renders/preview.png",
-                new Uri("file:///E:/secret-preview.png"))),
-            new HttpClient(new RecordingHandler((_, _) =>
-                throw new AssertFailedException("Signed URL HTTP client should not be called when validation fails first."))));
-
-        InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => mediaClient.StreamProjectMediaAsync(
-                "p1",
-                "renders/preview.png",
-                (_, _) => Task.FromResult(false)));
-
-        StringAssert.Contains(exception.Message, "http:// or https://");
-    }
-
-    [TestMethod]
-    public async Task StreamProjectMediaAsync_UsesStudioApiSignedMediaResolverForNativeMedia()
-    {
-        byte[] expected = [0x44, 0x55];
-        HttpRequestMessage? signedRequest = null;
-        string? signedMediaRequestBody = null;
-        using var apiHttpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+      if (request.Method == HttpMethod.Post &&
+              request.RequestUri?.AbsolutePath == "/v1/projects/p1/media-urls")
+      {
+        signedMediaRequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+        return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            if (request.Method == HttpMethod.Post &&
-                request.RequestUri?.AbsolutePath == "/v1/projects/p1/media-urls")
-            {
-                signedMediaRequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = JsonContent.Create(new
+          Content = JsonContent.Create(new
+          {
+            expires_at = 1760000000L,
+            urls = new[]
                     {
-                        expires_at = 1760000000L,
-                        urls = new[]
-                        {
                             new
                             {
                                 purpose = "file",
                                 url = "/signed/native-preview.mp4?sig=abc"
                             }
-                        }
-                    })
-                };
-            }
+                    }
+          })
+        };
+      }
 
-            throw new AssertFailedException("Only the signed-media contract should use the API client.");
-        }));
-        using var signedHttpClient = new HttpClient(new RecordingHandler((request, _) =>
-        {
-            signedRequest = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(expected)
-            });
-        }));
-        using var apiClient = new StudioApiClient(
-            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
-            new StaticTokenProvider("preview-token"),
-            apiHttpClient);
-        using var mediaClient = new StudioProjectMediaClient(
-            apiClient,
-            new StudioApiSignedMediaUrlResolver(apiClient),
-            signedHttpClient);
-
-        byte[] actual = await mediaClient.StreamProjectMediaAsync(
-            "p1",
-            "renders/native-preview.mp4",
-            async (file, cancellationToken) =>
-            {
-                using var copy = new MemoryStream();
-                await file.Stream.CopyToAsync(copy, cancellationToken);
-                return copy.ToArray();
-            });
-
-        CollectionAssert.AreEqual(expected, actual);
-        Assert.IsNotNull(signedRequest);
-        Assert.AreEqual("/signed/native-preview.mp4", signedRequest.RequestUri!.AbsolutePath);
-        Assert.IsNull(signedRequest.Headers.Authorization);
-        Assert.IsNotNull(signedMediaRequestBody);
-        using JsonDocument payload = JsonDocument.Parse(signedMediaRequestBody);
-        JsonElement request = payload.RootElement.GetProperty("requests")[0];
-        Assert.AreEqual("file", request.GetProperty("purpose").GetString());
-        Assert.AreEqual("renders/native-preview.mp4", request.GetProperty("path").GetString());
-    }
-
-    [TestMethod]
-    public async Task StreamProjectMediaAsync_FallsBackWhenSignedMediaContractIsUnavailable()
+      throw new AssertFailedException("Only the signed-media contract should use the API client.");
+    }));
+    using HttpClient signedHttpClient = new(new RecordingHandler((request, _) =>
     {
-        byte[] expected = [0x21, 0x22];
-        int signedGetCalls = 0;
-        var capturedApiUris = new List<Uri>();
-        using var apiHttpClient = new HttpClient(new RecordingHandler((request, _) =>
-        {
-            capturedApiUris.Add(request.RequestUri!);
-            return Task.FromResult((request.Method.Method, request.RequestUri!.AbsolutePath) switch
-            {
-                ("POST", "/v1/projects/p1/media-urls") => new HttpResponseMessage(HttpStatusCode.NotFound)
-                {
-                    Content = JsonContent.Create(new { error = new { code = "NOT_FOUND", message = "missing" } })
-                },
-                ("GET", "/v1/projects/p1/file") => new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new ByteArrayContent(expected)
-                },
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
-            });
-        }));
-        using var signedHttpClient = new HttpClient(new RecordingHandler((_, _) =>
-        {
-            signedGetCalls++;
-            throw new AssertFailedException("Signed download HTTP client should not be used after a fallback.");
-        }));
-        using var apiClient = new StudioApiClient(
-            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
-            new StaticTokenProvider("preview-token"),
-            apiHttpClient);
-        using var mediaClient = new StudioProjectMediaClient(
-            apiClient,
-            new StudioApiSignedMediaUrlResolver(apiClient),
-            signedHttpClient);
+      signedRequest = request;
+      return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+      {
+        Content = new ByteArrayContent(expected)
+      });
+    }));
+    using StudioApiClient apiClient = new(
+        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+        new StaticTokenProvider("preview-token"),
+        apiHttpClient);
+    using StudioProjectMediaClient mediaClient = new(
+        apiClient,
+        new StudioApiSignedMediaUrlResolver(apiClient),
+        signedHttpClient);
 
-        byte[] actual = await mediaClient.StreamProjectMediaAsync(
-            "p1",
-            "renders/native-preview.mp4",
-            async (file, cancellationToken) =>
-            {
-                using var copy = new MemoryStream();
-                await file.Stream.CopyToAsync(copy, cancellationToken);
-                return copy.ToArray();
-            });
+    byte[] actual = await mediaClient.StreamProjectMediaAsync(
+        "p1",
+        "renders/native-preview.mp4",
+        async (file, cancellationToken) =>
+        {
+          using MemoryStream copy = new();
+          await file.Stream.CopyToAsync(copy, cancellationToken);
+          return copy.ToArray();
+        });
 
-        CollectionAssert.AreEqual(expected, actual);
-        Assert.AreEqual(0, signedGetCalls);
-        CollectionAssert.AreEqual(
-            new[]
-            {
+    CollectionAssert.AreEqual(expected, actual);
+    Assert.IsNotNull(signedRequest);
+    Assert.AreEqual("/signed/native-preview.mp4", signedRequest.RequestUri!.AbsolutePath);
+    Assert.IsNull(signedRequest.Headers.Authorization);
+    Assert.IsNotNull(signedMediaRequestBody);
+    using JsonDocument payload = JsonDocument.Parse(signedMediaRequestBody);
+    JsonElement request = payload.RootElement.GetProperty("requests")[0];
+    Assert.AreEqual("file", request.GetProperty("purpose").GetString());
+    Assert.AreEqual("renders/native-preview.mp4", request.GetProperty("path").GetString());
+  }
+
+  [TestMethod]
+  public async Task StreamProjectMediaAsync_FallsBackWhenSignedMediaContractIsUnavailable()
+  {
+    byte[] expected = [0x21, 0x22];
+    int signedGetCalls = 0;
+    List<Uri> capturedApiUris = [];
+    using HttpClient apiHttpClient = new(new RecordingHandler((request, _) =>
+    {
+      capturedApiUris.Add(request.RequestUri!);
+      return Task.FromResult((request.Method.Method, request.RequestUri!.AbsolutePath) switch
+      {
+        ("POST", "/v1/projects/p1/media-urls") => new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+          Content = JsonContent.Create(new { error = new { code = "NOT_FOUND", message = "missing" } })
+        },
+        ("GET", "/v1/projects/p1/file") => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+          Content = new ByteArrayContent(expected)
+        },
+        _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+      });
+    }));
+    using HttpClient signedHttpClient = new(new RecordingHandler((_, _) =>
+    {
+      signedGetCalls++;
+      throw new AssertFailedException("Signed download HTTP client should not be used after a fallback.");
+    }));
+    using StudioApiClient apiClient = new(
+        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+        new StaticTokenProvider("preview-token"),
+        apiHttpClient);
+    using StudioProjectMediaClient mediaClient = new(
+        apiClient,
+        new StudioApiSignedMediaUrlResolver(apiClient),
+        signedHttpClient);
+
+    byte[] actual = await mediaClient.StreamProjectMediaAsync(
+        "p1",
+        "renders/native-preview.mp4",
+        async (file, cancellationToken) =>
+        {
+          using MemoryStream copy = new();
+          await file.Stream.CopyToAsync(copy, cancellationToken);
+          return copy.ToArray();
+        });
+
+    CollectionAssert.AreEqual(expected, actual);
+    Assert.AreEqual(0, signedGetCalls);
+    CollectionAssert.AreEqual(
+        new[]
+        {
                 "/v1/projects/p1/media-urls",
                 "/v1/projects/p1/file"
-            },
-            capturedApiUris.Select(uri => uri.AbsolutePath).ToArray());
-        Assert.AreEqual("?path=renders%2Fnative-preview.mp4", capturedApiUris[1].Query);
-    }
+        },
+        capturedApiUris.Select(uri => uri.AbsolutePath).ToArray());
+    Assert.AreEqual("?path=renders%2Fnative-preview.mp4", capturedApiUris[1].Query);
+  }
 
-    [TestMethod]
-    public async Task MaterializeProjectMediaAsync_WritesAndReplacesDestinationAtomically()
+  [TestMethod]
+  public async Task MaterializeProjectMediaAsync_WritesAndReplacesDestinationAtomically()
+  {
+    string directory = Path.Combine(Path.GetTempPath(), $"edmg-media-{Guid.NewGuid():N}");
+    string destination = Path.Combine(directory, "source.wav");
+    try
     {
-        string directory = Path.Combine(Path.GetTempPath(), $"edmg-media-{Guid.NewGuid():N}");
-        string destination = Path.Combine(directory, "source.wav");
-        try
-        {
-            Directory.CreateDirectory(directory);
-            await File.WriteAllBytesAsync(destination, [0x01]);
-            using var apiClient = CreateUnusedApiClient();
-            using var mediaClient = new StudioProjectMediaClient(
-                apiClient,
-                new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
-                    "assets/media/source.wav",
-                    new Uri("https://cdn.example.invalid/source.wav"))),
-                new HttpClient(new RecordingHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new ByteArrayContent([0x10, 0x20, 0x30])
-                }))));
+      _ = Directory.CreateDirectory(directory);
+      await File.WriteAllBytesAsync(destination, [0x01]);
+      using StudioApiClient apiClient = CreateUnusedApiClient();
+      using StudioProjectMediaClient mediaClient = new(
+          apiClient,
+          new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
+              "assets/media/source.wav",
+              new Uri("https://cdn.example.invalid/source.wav"))),
+          new HttpClient(new RecordingHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+          {
+            Content = new ByteArrayContent([0x10, 0x20, 0x30])
+          }))));
 
-            string actual = await mediaClient.MaterializeProjectMediaAsync(
-                "p1", "assets/media/source.wav", destination);
+      string actual = await mediaClient.MaterializeProjectMediaAsync(
+          "p1", "assets/media/source.wav", destination);
 
-            Assert.AreEqual(Path.GetFullPath(destination), actual);
-            CollectionAssert.AreEqual(new byte[] { 0x10, 0x20, 0x30 }, await File.ReadAllBytesAsync(destination));
-            Assert.IsEmpty(Directory.GetFiles(directory, "*.tmp"));
-        }
-        finally
-        {
-            if (Directory.Exists(directory)) Directory.Delete(directory, true);
-        }
+      Assert.AreEqual(Path.GetFullPath(destination), actual);
+      CollectionAssert.AreEqual(new byte[] { 0x10, 0x20, 0x30 }, await File.ReadAllBytesAsync(destination));
+      Assert.IsEmpty(Directory.GetFiles(directory, "*.tmp"));
     }
-
-    [TestMethod]
-    public async Task MaterializeProjectMediaAsync_RemovesTemporaryFileWhenDownloadFails()
+    finally
     {
-        string directory = Path.Combine(Path.GetTempPath(), $"edmg-media-{Guid.NewGuid():N}");
-        string destination = Path.Combine(directory, "source.wav");
-        try
-        {
-            using var apiClient = CreateUnusedApiClient();
-            using var mediaClient = new StudioProjectMediaClient(
-                apiClient,
-                new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
-                    "assets/media/source.wav",
-                    new Uri("https://cdn.example.invalid/source.wav"))),
-                new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
-                    new HttpResponseMessage(HttpStatusCode.InternalServerError)))));
-
-            await Assert.ThrowsExactlyAsync<StudioApiException>(() =>
-                mediaClient.MaterializeProjectMediaAsync("p1", "assets/media/source.wav", destination));
-
-            Assert.IsFalse(File.Exists(destination));
-            Assert.AreEqual(0, Directory.Exists(directory) ? Directory.GetFiles(directory, "*.tmp").Length : 0);
-        }
-        finally
-        {
-            if (Directory.Exists(directory)) Directory.Delete(directory, true);
-        }
+      if (Directory.Exists(directory))
+      {
+        Directory.Delete(directory, true);
+      }
     }
+  }
 
-    [TestMethod]
-    public async Task MaterializeProjectMediaAsync_RejectsMissingDestination()
+  [TestMethod]
+  public async Task MaterializeProjectMediaAsync_RemovesTemporaryFileWhenDownloadFails()
+  {
+    string directory = Path.Combine(Path.GetTempPath(), $"edmg-media-{Guid.NewGuid():N}");
+    string destination = Path.Combine(directory, "source.wav");
+    try
     {
-        using var apiClient = CreateUnusedApiClient();
-        using var mediaClient = new StudioProjectMediaClient(apiClient);
+      using StudioApiClient apiClient = CreateUnusedApiClient();
+      using StudioProjectMediaClient mediaClient = new(
+          apiClient,
+          new StaticSignedMediaResolver(ResolvedStudioProjectMedia.UseSignedUrl(
+              "assets/media/source.wav",
+              new Uri("https://cdn.example.invalid/source.wav"))),
+          new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
+              new HttpResponseMessage(HttpStatusCode.InternalServerError)))));
 
-        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
-            mediaClient.MaterializeProjectMediaAsync("p1", "assets/media/source.wav", " "));
+      _ = await Assert.ThrowsExactlyAsync<StudioApiException>(() =>
+          mediaClient.MaterializeProjectMediaAsync("p1", "assets/media/source.wav", destination));
+
+      Assert.IsFalse(File.Exists(destination));
+      Assert.AreEqual(0, Directory.Exists(directory) ? Directory.GetFiles(directory, "*.tmp").Length : 0);
     }
-
-    private static StudioApiClient CreateUnusedApiClient() => new(
-        new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
-        new StaticTokenProvider(null),
-        new HttpClient(new RecordingHandler((_, _) =>
-            throw new AssertFailedException("The API HTTP client should not be used by this test."))));
-
-    private sealed class StaticEndpointProvider(Uri backendUri) : IBackendEndpointProvider
+    finally
     {
-        public Uri CurrentBackendUri { get; } = backendUri;
+      if (Directory.Exists(directory))
+      {
+        Directory.Delete(directory, true);
+      }
     }
+  }
 
-    private sealed class StaticTokenProvider(string? token) : IBackendTokenProvider
+  [TestMethod]
+  public async Task MaterializeProjectMediaAsync_RejectsMissingDestination()
+  {
+    using StudioApiClient apiClient = CreateUnusedApiClient();
+    using StudioProjectMediaClient mediaClient = new(apiClient);
+
+    _ = await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+        mediaClient.MaterializeProjectMediaAsync("p1", "assets/media/source.wav", " "));
+  }
+
+  private static StudioApiClient CreateUnusedApiClient()
+  {
+    return new(
+      new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+      new StaticTokenProvider(null),
+      new HttpClient(new RecordingHandler((_, _) =>
+          throw new AssertFailedException("The API HTTP client should not be used by this test."))));
+  }
+
+  private sealed class StaticEndpointProvider(Uri backendUri) : IBackendEndpointProvider
+  {
+    public Uri CurrentBackendUri { get; } = backendUri;
+  }
+
+  private sealed class StaticTokenProvider(string? token) : IBackendTokenProvider
+  {
+    public ValueTask<string?> GetTokenAsync(CancellationToken cancellationToken = default)
     {
-        public ValueTask<string?> GetTokenAsync(CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(token);
+      return ValueTask.FromResult(token);
     }
+  }
 
-    private sealed class StaticSignedMediaResolver(ResolvedStudioProjectMedia resolution) : IStudioSignedMediaUrlResolver
+  private sealed class StaticSignedMediaResolver(ResolvedStudioProjectMedia resolution) : IStudioSignedMediaUrlResolver
+  {
+    public ValueTask<ResolvedStudioProjectMedia> ResolveProjectMediaAsync(
+        string projectId,
+        string relativePath,
+        CancellationToken cancellationToken = default)
     {
-        public ValueTask<ResolvedStudioProjectMedia> ResolveProjectMediaAsync(
-            string projectId,
-            string relativePath,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(resolution);
-        }
+      cancellationToken.ThrowIfCancellationRequested();
+      return ValueTask.FromResult(resolution);
     }
+  }
 
-    private sealed class RecordingHandler(
-        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
+  private sealed class RecordingHandler(
+      Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
+  {
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => callback(request, cancellationToken);
+      return callback(request, cancellationToken);
     }
+  }
 
-    private sealed class TrackingContent : HttpContent
+  private sealed class TrackingContent : HttpContent
+  {
+    private readonly byte[] _bytes;
+
+    public TrackingContent(byte[] bytes)
     {
-        private readonly byte[] _bytes;
-
-        public TrackingContent(byte[] bytes)
-        {
-            _bytes = bytes;
-            Headers.ContentLength = bytes.Length;
-            Stream = new TrackingStream(bytes);
-        }
-
-        public bool IsDisposed { get; private set; }
-
-        public TrackingStream Stream { get; }
-
-        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
-            => stream.WriteAsync(_bytes).AsTask();
-
-        protected override bool TryComputeLength(out long length)
-        {
-            length = _bytes.Length;
-            return true;
-        }
-
-        protected override Task<Stream> CreateContentReadStreamAsync()
-            => Task.FromResult<Stream>(Stream);
-
-        protected override void Dispose(bool disposing)
-        {
-            IsDisposed = true;
-            base.Dispose(disposing);
-        }
+      _bytes = bytes;
+      Headers.ContentLength = bytes.Length;
+      Stream = new TrackingStream(bytes);
     }
 
-    private sealed class TrackingStream(byte[] bytes) : MemoryStream(bytes)
+    public bool IsDisposed { get; private set; }
+
+    public TrackingStream Stream { get; }
+
+    protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
-        public bool IsDisposed { get; private set; }
-
-        protected override void Dispose(bool disposing)
-        {
-            IsDisposed = true;
-            base.Dispose(disposing);
-        }
+      return stream.WriteAsync(_bytes).AsTask();
     }
+
+    protected override bool TryComputeLength(out long length)
+    {
+      length = _bytes.Length;
+      return true;
+    }
+
+    protected override Task<Stream> CreateContentReadStreamAsync()
+    {
+      return Task.FromResult<Stream>(Stream);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+      IsDisposed = true;
+      base.Dispose(disposing);
+    }
+  }
+
+  private sealed class TrackingStream(byte[] bytes) : MemoryStream(bytes)
+  {
+    public bool IsDisposed { get; private set; }
+
+    protected override void Dispose(bool disposing)
+    {
+      IsDisposed = true;
+      base.Dispose(disposing);
+    }
+  }
 }

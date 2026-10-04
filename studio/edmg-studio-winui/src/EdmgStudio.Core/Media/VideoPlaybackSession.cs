@@ -2,333 +2,339 @@ namespace EdmgStudio.Core.Media;
 
 public sealed class VideoPlaybackSession : IAsyncDisposable
 {
-    private const string MaximumSpoolBytesEnvironmentVariable = "EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES";
-    private const long DefaultMaximumSpoolBytes = 512L * 1024 * 1024;
-    private readonly IVideoDecoder _decoder;
-    private readonly SemaphoreSlim _operationGate = new(1, 1);
-    private readonly object _disposeSync = new();
-    private Task? _disposeTask;
-    private CancellationTokenSource? _decodeCancellation;
-    private Task? _decodeTask;
-    private int _disposed;
+  private const string MaximumSpoolBytesEnvironmentVariable = "EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES";
+  private const long DefaultMaximumSpoolBytes = 512L * 1024 * 1024;
+  private readonly IVideoDecoder _decoder;
+  private readonly SemaphoreSlim _operationGate = new(1, 1);
+  private readonly object _disposeSync = new();
+  private Task? _disposeTask;
+  private CancellationTokenSource? _decodeCancellation;
+  private Task? _decodeTask;
+  private int _disposed;
 
-    private VideoPlaybackSession(string temporaryPath, VideoMetadata metadata, IVideoDecoder decoder)
-    {
-        TemporaryPath = temporaryPath;
-        Metadata = metadata;
-        _decoder = decoder;
-    }
+  private VideoPlaybackSession(string temporaryPath, VideoMetadata metadata, IVideoDecoder decoder)
+  {
+    TemporaryPath = temporaryPath;
+    Metadata = metadata;
+    _decoder = decoder;
+  }
 
-    public string TemporaryPath { get; }
+  public string TemporaryPath { get; }
 
-    public VideoMetadata Metadata { get; }
+  public VideoMetadata Metadata { get; }
 
-    public static async Task<VideoPlaybackSession> CreateAsync(
-        Stream source,
-        MediaToolPaths tools,
-        CancellationToken cancellationToken = default)
-        => await CreateAsync(
-            source,
-            tools,
-            knownContentLength: null,
-            cancellationToken).ConfigureAwait(false);
+  public static async Task<VideoPlaybackSession> CreateAsync(
+      Stream source,
+      MediaToolPaths tools,
+      CancellationToken cancellationToken = default)
+  {
+    return await CreateAsync(
+              source,
+              tools,
+              knownContentLength: null,
+              cancellationToken).ConfigureAwait(false);
+  }
 
-    public static async Task<VideoPlaybackSession> CreateAsync(
-        Stream source,
-        MediaToolPaths tools,
-        long? knownContentLength,
-        CancellationToken cancellationToken = default)
-        => await CreateAsync(
-            source,
-            new FfmpegVideoDecoder(tools),
-            Path.GetTempPath(),
-            knownContentLength,
-            cancellationToken).ConfigureAwait(false);
+  public static async Task<VideoPlaybackSession> CreateAsync(
+      Stream source,
+      MediaToolPaths tools,
+      long? knownContentLength,
+      CancellationToken cancellationToken = default)
+  {
+    return await CreateAsync(
+              source,
+              new FfmpegVideoDecoder(tools),
+              Path.GetTempPath(),
+              knownContentLength,
+              cancellationToken).ConfigureAwait(false);
+  }
 
-    internal static async Task<VideoPlaybackSession> CreateAsync(
+  internal static async Task<VideoPlaybackSession> CreateAsync(
+      Stream source,
+      IVideoDecoder decoder,
+      string temporaryDirectory,
+      CancellationToken cancellationToken = default)
+  {
+    return await CreateAsync(
+              source,
+              decoder,
+              temporaryDirectory,
+              knownContentLength: null,
+              cancellationToken).ConfigureAwait(false);
+  }
+
+  internal static async Task<VideoPlaybackSession> CreateAsync(
         Stream source,
         IVideoDecoder decoder,
         string temporaryDirectory,
-        CancellationToken cancellationToken = default)
-        => await CreateAsync(
-            source,
-            decoder,
-            temporaryDirectory,
-            knownContentLength: null,
-            cancellationToken).ConfigureAwait(false);
-
-    internal static async Task<VideoPlaybackSession> CreateAsync(
-        Stream source,
-        IVideoDecoder decoder,
-        string temporaryDirectory,
         long? knownContentLength,
         CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(source);
+    ArgumentNullException.ThrowIfNull(decoder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(temporaryDirectory);
+
+    long maximumSpoolBytes = ResolveMaximumSpoolBytes();
+    ValidateLength(GetRemainingLength(source, knownContentLength), maximumSpoolBytes);
+
+    _ = Directory.CreateDirectory(temporaryDirectory);
+    string temporaryPath = Path.Combine(temporaryDirectory, $"edmg-winui-video-{Guid.NewGuid():N}.media");
+    try
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(decoder);
-        ArgumentException.ThrowIfNullOrWhiteSpace(temporaryDirectory);
+      await using (FileStream destination = new(
+          temporaryPath,
+          FileMode.CreateNew,
+          FileAccess.Write,
+          FileShare.Read,
+          1024 * 1024,
+          FileOptions.Asynchronous | FileOptions.SequentialScan))
+      {
+        await CopyToTemporaryFileAsync(source, destination, maximumSpoolBytes, cancellationToken)
+            .ConfigureAwait(false);
+      }
 
-        long maximumSpoolBytes = ResolveMaximumSpoolBytes();
-        ValidateLength(GetRemainingLength(source, knownContentLength), maximumSpoolBytes);
+      VideoMetadata metadata = await decoder.ProbeAsync(temporaryPath, cancellationToken).ConfigureAwait(false);
+      return new VideoPlaybackSession(temporaryPath, metadata, decoder);
+    }
+    catch
+    {
+      TryDelete(temporaryPath);
+      throw;
+    }
+  }
 
-        Directory.CreateDirectory(temporaryDirectory);
-        string temporaryPath = Path.Combine(temporaryDirectory, $"edmg-winui-video-{Guid.NewGuid():N}.media");
-        try
-        {
-            await using (var destination = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.Read,
-                1024 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                await CopyToTemporaryFileAsync(source, destination, maximumSpoolBytes, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+  public async Task DecodeAsync(
+      TimeSpan startPosition,
+      Action<EdmgStudio.Core.Graphics.OwnedCpuFrame> submitFrame,
+      bool paceFrames = true,
+      int? maximumFrames = null,
+      CancellationToken cancellationToken = default)
+  {
+    ThrowIfDisposed();
 
-            VideoMetadata metadata = await decoder.ProbeAsync(temporaryPath, cancellationToken).ConfigureAwait(false);
-            return new VideoPlaybackSession(temporaryPath, metadata, decoder);
-        }
-        catch
-        {
-            TryDelete(temporaryPath);
-            throw;
-        }
+    CancellationTokenSource decodeCancellation;
+    Task decodeTask;
+    await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+    try
+    {
+      ThrowIfDisposed();
+      // Stop and replacement must be one transition: simultaneous seeks must
+      // never overwrite the only handle to a still-running decoder.
+      await StopCoreAsync().ConfigureAwait(false);
+      ThrowIfDisposed();
+      cancellationToken.ThrowIfCancellationRequested();
+      decodeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+      try
+      {
+        decodeTask = _decoder.DecodeAsync(
+            TemporaryPath,
+            Metadata,
+            startPosition,
+            submitFrame,
+            paceFrames,
+            maximumFrames,
+            decodeCancellation.Token);
+      }
+      catch
+      {
+        decodeCancellation.Dispose();
+        throw;
+      }
+      _decodeCancellation = decodeCancellation;
+      _decodeTask = decodeTask;
+    }
+    finally
+    {
+      _ = _operationGate.Release();
     }
 
-    public async Task DecodeAsync(
-        TimeSpan startPosition,
-        Action<EdmgStudio.Core.Graphics.OwnedCpuFrame> submitFrame,
-        bool paceFrames = true,
-        int? maximumFrames = null,
-        CancellationToken cancellationToken = default)
+    try
     {
-        ThrowIfDisposed();
+      await decodeTask.ConfigureAwait(false);
+    }
+    finally
+    {
+      await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+      try
+      {
+        if (ReferenceEquals(_decodeCancellation, decodeCancellation))
+        {
+          _decodeCancellation = null;
+          _decodeTask = null;
+        }
+      }
+      finally
+      {
+        _ = _operationGate.Release();
+      }
 
-        CancellationTokenSource decodeCancellation;
-        Task decodeTask;
-        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ThrowIfDisposed();
-            // Stop and replacement must be one transition: simultaneous seeks must
-            // never overwrite the only handle to a still-running decoder.
-            await StopCoreAsync().ConfigureAwait(false);
-            ThrowIfDisposed();
-            cancellationToken.ThrowIfCancellationRequested();
-            decodeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            try
-            {
-                decodeTask = _decoder.DecodeAsync(
-                    TemporaryPath,
-                    Metadata,
-                    startPosition,
-                    submitFrame,
-                    paceFrames,
-                    maximumFrames,
-                    decodeCancellation.Token);
-            }
-            catch
-            {
-                decodeCancellation.Dispose();
-                throw;
-            }
-            _decodeCancellation = decodeCancellation;
-            _decodeTask = decodeTask;
-        }
-        finally
-        {
-            _operationGate.Release();
-        }
+      decodeCancellation.Dispose();
+    }
+  }
 
-        try
-        {
-            await decodeTask.ConfigureAwait(false);
-        }
-        finally
-        {
-            await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-            try
-            {
-                if (ReferenceEquals(_decodeCancellation, decodeCancellation))
-                {
-                    _decodeCancellation = null;
-                    _decodeTask = null;
-                }
-            }
-            finally
-            {
-                _operationGate.Release();
-            }
+  public void Cancel()
+  {
+    try
+    {
+      _decodeCancellation?.Cancel();
+    }
+    catch (ObjectDisposedException)
+    {
+    }
+  }
 
-            decodeCancellation.Dispose();
-        }
+  public async Task StopAsync()
+  {
+    await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+    try
+    {
+      await StopCoreAsync().ConfigureAwait(false);
+    }
+    finally
+    {
+      _ = _operationGate.Release();
     }
 
-    public void Cancel()
+  }
+
+  // Caller owns _operationGate. Decode errors belong to the playback caller;
+  // teardown must still clear state and remove temporary media after failure.
+  private async Task StopCoreAsync()
+  {
+    Task? decodeTask = _decodeTask;
+    _decodeCancellation?.Cancel();
+    try
     {
-        try
-        {
-            _decodeCancellation?.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
+      if (decodeTask is not null)
+      {
+        await decodeTask.ConfigureAwait(false);
+      }
+    }
+    catch (Exception) when (decodeTask?.IsCompleted == true)
+    {
+      // DecodeAsync still observes and reports the original failure.
+    }
+    finally
+    {
+      _decodeCancellation = null;
+      _decodeTask = null;
+    }
+  }
+
+  public ValueTask DisposeAsync()
+  {
+    lock (_disposeSync)
+    {
+      _ = Interlocked.Exchange(ref _disposed, 1);
+      return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+    }
+  }
+
+  private async Task DisposeCoreAsync()
+  {
+    try
+    {
+      await StopAsync().ConfigureAwait(false);
+    }
+    finally
+    {
+      // A DecodeAsync continuation or a queued StopAsync may still need
+      // the managed semaphore. It has no native wait handle to release.
+      TryDelete(TemporaryPath);
+    }
+  }
+
+  private void ThrowIfDisposed()
+  {
+    ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+  }
+
+  private static async Task CopyToTemporaryFileAsync(
+      Stream source,
+      Stream destination,
+      long maximumSpoolBytes,
+      CancellationToken cancellationToken)
+  {
+    byte[] buffer = new byte[1024 * 1024];
+    long totalBytes = 0;
+    while (true)
+    {
+      long remainingBudget = maximumSpoolBytes - totalBytes;
+      if (remainingBudget < 0)
+      {
+        throw new InvalidDataException($"Video previews cannot exceed {FormatByteLimit(maximumSpoolBytes)} of temporary playback data.");
+      }
+
+      int requestLength = remainingBudget >= buffer.Length
+          ? buffer.Length
+          : checked((int)remainingBudget + 1);
+      int read = await source.ReadAsync(buffer.AsMemory(0, requestLength), cancellationToken).ConfigureAwait(false);
+      if (read == 0)
+      {
+        break;
+      }
+
+      totalBytes = checked(totalBytes + read);
+      ValidateLength(totalBytes, maximumSpoolBytes);
+      await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task StopAsync()
-    {
-        await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-        try
-        {
-            await StopCoreAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            _operationGate.Release();
-        }
+    await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+  }
 
+  private static long? GetRemainingLength(Stream source, long? knownContentLength)
+  {
+    if (!source.CanSeek)
+    {
+      return knownContentLength;
     }
 
-    // Caller owns _operationGate. Decode errors belong to the playback caller;
-    // teardown must still clear state and remove temporary media after failure.
-    private async Task StopCoreAsync()
+    long remaining = checked(source.Length - source.Position);
+    return remaining < 0 ? throw new InvalidDataException("The video stream position is outside the available data.") : remaining;
+  }
+
+  private static void ValidateLength(long? length, long maximumSpoolBytes)
+  {
+    if (length is not null && length.Value > maximumSpoolBytes)
     {
-        Task? decodeTask = _decodeTask;
-        _decodeCancellation?.Cancel();
-        try
-        {
-            if (decodeTask is not null)
-            {
-                await decodeTask.ConfigureAwait(false);
-            }
-        }
-        catch (Exception) when (decodeTask?.IsCompleted == true)
-        {
-            // DecodeAsync still observes and reports the original failure.
-        }
-        finally
-        {
-            _decodeCancellation = null;
-            _decodeTask = null;
-        }
+      throw new InvalidDataException(
+          $"Video previews cannot exceed {FormatByteLimit(maximumSpoolBytes)} of temporary playback data.");
     }
+  }
 
-    public ValueTask DisposeAsync()
+  private static long ResolveMaximumSpoolBytes()
+  {
+    string? configured = Environment.GetEnvironmentVariable(MaximumSpoolBytesEnvironmentVariable)?.Trim();
+    return long.TryParse(configured, out long value) && value > 0
+        ? value
+        : DefaultMaximumSpoolBytes;
+  }
+
+  private static string FormatByteLimit(long bytes)
+  {
+    const long kilobyte = 1024;
+    const long megabyte = 1024 * kilobyte;
+    const long gigabyte = 1024 * megabyte;
+    return bytes switch
     {
-        lock (_disposeSync)
-        {
-            Interlocked.Exchange(ref _disposed, 1);
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
-        }
-    }
+      >= gigabyte => $"{bytes / (double)gigabyte:0.##} GB",
+      >= megabyte => $"{bytes / (double)megabyte:0.##} MB",
+      >= kilobyte => $"{bytes / (double)kilobyte:0.##} KB",
+      _ => $"{bytes} bytes"
+    };
+  }
 
-    private async Task DisposeCoreAsync()
+  private static void TryDelete(string path)
+  {
+    try
     {
-        try
-        {
-            await StopAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            // A DecodeAsync continuation or a queued StopAsync may still need
-            // the managed semaphore. It has no native wait handle to release.
-            TryDelete(TemporaryPath);
-        }
+      File.Delete(path);
     }
-
-    private void ThrowIfDisposed()
+    catch (IOException)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
     }
-
-    private static async Task CopyToTemporaryFileAsync(
-        Stream source,
-        Stream destination,
-        long maximumSpoolBytes,
-        CancellationToken cancellationToken)
+    catch (UnauthorizedAccessException)
     {
-        byte[] buffer = new byte[1024 * 1024];
-        long totalBytes = 0;
-        while (true)
-        {
-            long remainingBudget = maximumSpoolBytes - totalBytes;
-            if (remainingBudget < 0)
-            {
-                throw new InvalidDataException($"Video previews cannot exceed {FormatByteLimit(maximumSpoolBytes)} of temporary playback data.");
-            }
-
-            int requestLength = remainingBudget >= buffer.Length
-                ? buffer.Length
-                : checked((int)remainingBudget + 1);
-            int read = await source.ReadAsync(buffer.AsMemory(0, requestLength), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalBytes = checked(totalBytes + read);
-            ValidateLength(totalBytes, maximumSpoolBytes);
-            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-        }
-
-        await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
-
-    private static long? GetRemainingLength(Stream source, long? knownContentLength)
-    {
-        if (!source.CanSeek)
-        {
-            return knownContentLength;
-        }
-
-        long remaining = checked(source.Length - source.Position);
-        return remaining < 0 ? throw new InvalidDataException("The video stream position is outside the available data.") : remaining;
-    }
-
-    private static void ValidateLength(long? length, long maximumSpoolBytes)
-    {
-        if (length is not null && length.Value > maximumSpoolBytes)
-        {
-            throw new InvalidDataException(
-                $"Video previews cannot exceed {FormatByteLimit(maximumSpoolBytes)} of temporary playback data.");
-        }
-    }
-
-    private static long ResolveMaximumSpoolBytes()
-    {
-        string? configured = Environment.GetEnvironmentVariable(MaximumSpoolBytesEnvironmentVariable)?.Trim();
-        return long.TryParse(configured, out long value) && value > 0
-            ? value
-            : DefaultMaximumSpoolBytes;
-    }
-
-    private static string FormatByteLimit(long bytes)
-    {
-        const long kilobyte = 1024;
-        const long megabyte = 1024 * kilobyte;
-        const long gigabyte = 1024 * megabyte;
-        return bytes switch
-        {
-            >= gigabyte => $"{bytes / (double)gigabyte:0.##} GB",
-            >= megabyte => $"{bytes / (double)megabyte:0.##} MB",
-            >= kilobyte => $"{bytes / (double)kilobyte:0.##} KB",
-            _ => $"{bytes} bytes"
-        };
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
+  }
 }

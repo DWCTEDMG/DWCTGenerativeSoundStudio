@@ -8,45 +8,45 @@ public sealed record ProjectTimelineMutation(CanonicalProject Project, JsonObjec
 
 public enum TimelineSnapMode
 {
-    Off,
-    Sample,
-    Frame,
-    Beat,
-    HalfBeat,
-    QuarterBeat,
+  Off,
+  Sample,
+  Frame,
+  Beat,
+  HalfBeat,
+  QuarterBeat,
 }
 
 public static class ProjectTimelineOperations
 {
-    private static readonly HashSet<string> SupportedTrackTypes = new(StringComparer.Ordinal)
+  private static readonly HashSet<string> SupportedTrackTypes = new(StringComparer.Ordinal)
     {
         "audio", "video", "midi", "instrument", "folder", "group", "fx", "marker", "tempo",
         "signature", "automation", "ai_visual", "prompt", "scene", "reference", "master"
     };
 
-    public static ProjectTimelineMutation AddTrack(CanonicalProject project, string id, string type, string? name = null)
+  public static ProjectTimelineMutation AddTrack(CanonicalProject project, string id, string type, string? name = null)
+  {
+    ArgumentNullException.ThrowIfNull(project);
+    ArgumentException.ThrowIfNullOrWhiteSpace(id);
+    ArgumentException.ThrowIfNullOrWhiteSpace(type);
+    if (!SupportedTrackTypes.Contains(type))
     {
-        ArgumentNullException.ThrowIfNull(project);
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        ArgumentException.ThrowIfNullOrWhiteSpace(type);
-        if (!SupportedTrackTypes.Contains(type))
-        {
-            throw new ArgumentOutOfRangeException(nameof(type), "Unsupported track type.");
-        }
+      throw new ArgumentOutOfRangeException(nameof(type), "Unsupported track type.");
+    }
 
-        EnsureIdAvailable(project, id);
+    EnsureIdAvailable(project, id);
 
-        string trackName = string.IsNullOrWhiteSpace(name)
-            ? char.ToUpperInvariant(type[0]) + type[1..]
-            : name.Trim();
-        var trackMetadata = new JsonObject
-        {
-            ["id"] = id,
-            ["type"] = type,
-            ["name"] = trackName,
-            ["clips"] = new JsonArray()
-        };
-        var track = new Track(
+    string trackName = string.IsNullOrWhiteSpace(name)
+        ? char.ToUpperInvariant(type[0]) + type[1..]
+        : name.Trim();
+    JsonObject trackMetadata = new()
+    {
+      ["id"] = id,
+      ["type"] = type,
+      ["name"] = trackName,
+      ["clips"] = new JsonArray()
+    };
+    Track track = new(
             id,
             trackName,
             type,
@@ -58,669 +58,784 @@ public static class ProjectTimelineOperations
             false,
             [],
             trackMetadata);
-        CanonicalProject updated = WithTracks(project, [.. project.Tracks, track]);
-        return new ProjectTimelineMutation(updated, new JsonObject
-        {
-            ["kind"] = "add_track",
-            ["track_type"] = type,
-            ["new_id"] = id,
-            ["name"] = trackName
-        });
-    }
-
-    public static ProjectTimelineMutation ReorderTrack(CanonicalProject project, string trackId, int destinationIndex)
+    CanonicalProject updated = WithTracks(project, [.. project.Tracks, track]);
+    return new ProjectTimelineMutation(updated, new JsonObject
     {
-        ArgumentNullException.ThrowIfNull(project);
-        ArgumentException.ThrowIfNullOrWhiteSpace(trackId);
-        if (destinationIndex < 0 || destinationIndex >= project.Tracks.Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(destinationIndex));
-        }
+      ["kind"] = "add_track",
+      ["track_type"] = type,
+      ["new_id"] = id,
+      ["name"] = trackName
+    });
+  }
 
-        var tracks = project.Tracks.ToList();
-        int sourceIndex = tracks.FindIndex(track => string.Equals(track.Id, trackId, StringComparison.Ordinal));
-        if (sourceIndex < 0)
-        {
-            throw new InvalidOperationException($"Track '{trackId}' was not found.");
-        }
-
-        if (tracks[sourceIndex].Locked)
-        {
-            throw new InvalidOperationException($"Unlock track '{trackId}' before reordering it.");
-        }
-
-        Track moved = tracks[sourceIndex];
-        tracks.RemoveAt(sourceIndex);
-        tracks.Insert(destinationIndex, moved);
-        return new ProjectTimelineMutation(WithTracks(project, tracks), new JsonObject
-        {
-            ["kind"] = "reorder_track",
-            ["track_id"] = trackId,
-            ["index"] = destinationIndex
-        });
-    }
-
-    public static ProjectTimelineMutation SetTrackState(
-        CanonicalProject project,
-        string trackId,
-        bool? locked = null,
-        bool? muted = null,
-        bool? solo = null,
-        bool? recordArmed = null,
-        bool? inputMonitoring = null)
+  public static ProjectTimelineMutation ReorderTrack(CanonicalProject project, string trackId, int destinationIndex)
+  {
+    ArgumentNullException.ThrowIfNull(project);
+    ArgumentException.ThrowIfNullOrWhiteSpace(trackId);
+    if (destinationIndex < 0 || destinationIndex >= project.Tracks.Count)
     {
-        ArgumentNullException.ThrowIfNull(project);
-        ArgumentException.ThrowIfNullOrWhiteSpace(trackId);
-        if (locked is null && muted is null && solo is null && recordArmed is null && inputMonitoring is null)
-        {
-            throw new ArgumentException("At least one track state value is required.", nameof(trackId));
-        }
-
-        var tracks = project.Tracks.ToList();
-        int index = tracks.FindIndex(track => string.Equals(track.Id, trackId, StringComparison.Ordinal));
-        if (index < 0)
-        {
-            throw new InvalidOperationException($"Track '{trackId}' was not found.");
-        }
-
-        Track current = tracks[index];
-        bool unlockOnly = locked is false && muted is null && solo is null && recordArmed is null && inputMonitoring is null;
-        if (current.Locked && !unlockOnly)
-        {
-            throw new InvalidOperationException($"Unlock track '{trackId}' before changing its state.");
-        }
-
-        JsonObject metadata = current.Metadata.DeepClone().AsObject();
-        SetOptional(metadata, "locked", locked);
-        SetOptional(metadata, "muted", muted);
-        SetOptional(metadata, "solo", solo);
-        SetOptional(metadata, "record_armed", recordArmed);
-        SetOptional(metadata, "input_monitoring", inputMonitoring);
-        tracks[index] = current with
-        {
-            Locked = locked ?? current.Locked,
-            Muted = muted ?? current.Muted,
-            Solo = solo ?? current.Solo,
-            RecordArmed = recordArmed ?? current.RecordArmed,
-            InputMonitoring = inputMonitoring ?? current.InputMonitoring,
-            Metadata = metadata
-        };
-
-        var operation = new JsonObject { ["kind"] = "set_track_state", ["track_id"] = trackId };
-        SetOptional(operation, "locked", locked);
-        SetOptional(operation, "muted", muted);
-        SetOptional(operation, "solo", solo);
-        SetOptional(operation, "record_armed", recordArmed);
-        SetOptional(operation, "input_monitoring", inputMonitoring);
-        return new ProjectTimelineMutation(WithTracks(project, tracks), operation);
+      throw new ArgumentOutOfRangeException(nameof(destinationIndex));
     }
 
-    public static ProjectTimelineMutation MoveEvent(
-        CanonicalProject project,
-        string trackId,
-        string eventId,
-        TimelinePosition position)
+    List<Track> tracks = project.Tracks.ToList();
+    int sourceIndex = tracks.FindIndex(track => string.Equals(track.Id, trackId, StringComparison.Ordinal));
+    if (sourceIndex < 0)
     {
-        var (tracks, trackIndex, eventIndex, track, item) = FindEditableEvent(project, trackId, eventId);
-        if (position.Samples < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(position));
-        }
-
-        TimelineEvent moved = item with
-        {
-            Start = position,
-            End = new TimelinePosition(checked(position.Samples + item.Duration.Samples)),
-        };
-        tracks[trackIndex] = track with { Events = ReplaceEvent(track.Events, eventIndex, moved) };
-        JsonObject editing = EditingClone(project);
-        ShiftClipEditing(editing, new HashSet<string>(StringComparer.Ordinal) { eventId },
-            checked(position.Samples - item.Start.Samples));
-        ReconcileCrossfades(editing, tracks, new HashSet<string>(StringComparer.Ordinal) { eventId });
-        return new ProjectTimelineMutation(FinalizeEditing(project, tracks, editing),
-            Operation("move", trackId, eventId, position));
+      throw new InvalidOperationException($"Track '{trackId}' was not found.");
     }
 
-    public static ProjectTimelineMutation TrimEvent(
-        CanonicalProject project,
-        string trackId,
-        string eventId,
-        string edge,
-        TimelinePosition position)
+    if (tracks[sourceIndex].Locked)
     {
-        var (tracks, trackIndex, eventIndex, track, item) = FindEditableEvent(project, trackId, eventId);
-        TimelineEvent trimmed;
-        if (edge == "start" && position.Samples >= item.Start.Samples && position.Samples < item.End.Samples)
-        {
-            trimmed = item with
-            {
-                Start = position,
-                Source = AdvanceSource(item, checked(position.Samples - item.Start.Samples), project.Timebase),
-            };
-        }
-        else if (edge == "end" && position.Samples > item.Start.Samples && position.Samples <= item.End.Samples)
-        {
-            trimmed = item with
-            {
-                End = position,
-                Source = SetSourceEnd(item, checked(position.Samples - item.Start.Samples), project.Timebase),
-            };
-        }
-        else
-        {
-            throw new ArgumentOutOfRangeException(nameof(position), "Trim must shorten the selected edge within the event.");
-        }
-
-        tracks[trackIndex] = track with { Events = ReplaceEvent(track.Events, eventIndex, trimmed) };
-        JsonObject operation = Operation("trim", trackId, eventId, position);
-        operation["edge"] = edge;
-        JsonObject editing = EditingClone(project);
-        TrimCompRanges(editing, eventId, trimmed.Start.Samples, trimmed.End.Samples);
-        ReconcileCrossfades(editing, tracks, new HashSet<string>(StringComparer.Ordinal) { eventId });
-        return new ProjectTimelineMutation(FinalizeEditing(project, tracks, editing), operation);
+      throw new InvalidOperationException($"Unlock track '{trackId}' before reordering it.");
     }
 
-    public static ProjectTimelineMutation SplitEvent(
-        CanonicalProject project,
-        string trackId,
-        string eventId,
-        TimelinePosition position,
-        string newId,
-        IReadOnlyList<string>? rightTakeIds = null,
-        IReadOnlyList<string>? rightCompIds = null)
+    Track moved = tracks[sourceIndex];
+    tracks.RemoveAt(sourceIndex);
+    tracks.Insert(destinationIndex, moved);
+    return new ProjectTimelineMutation(WithTracks(project, tracks), new JsonObject
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(newId);
-        EnsureIdAvailable(project, newId);
-        var (tracks, trackIndex, eventIndex, track, item) = FindEditableEvent(project, trackId, eventId);
-        if (position.Samples <= item.Start.Samples || position.Samples >= item.End.Samples)
-        {
-            throw new ArgumentOutOfRangeException(nameof(position), "Split must be inside the event.");
-        }
+      ["kind"] = "reorder_track",
+      ["track_id"] = trackId,
+      ["index"] = destinationIndex
+    });
+  }
 
-        long offset = checked(position.Samples - item.Start.Samples);
-        TimelineEvent left = item with { End = position, Source = SetSourceEnd(item, offset, project.Timebase) };
-        TimelineEvent right = item with
-        {
-            Id = newId,
-            Start = position,
-            Source = AdvanceSource(item, offset, project.Timebase),
-            Data = item.Data.DeepClone().AsObject(),
-        };
-        var events = track.Events.ToList();
-        events[eventIndex] = left;
-        events.Insert(eventIndex + 1, right);
-        tracks[trackIndex] = track with { Events = events };
-        JsonObject operation = Operation("split", trackId, eventId, position);
-        operation["new_id"] = newId;
-        if (rightTakeIds is not null)
-        {
-            operation["right_take_ids"] = new JsonArray(rightTakeIds.Select(id => JsonValue.Create(id)).ToArray());
-        }
-        if (rightCompIds is not null)
-        {
-            operation["right_comp_ids"] = new JsonArray(rightCompIds.Select(id => JsonValue.Create(id)).ToArray());
-        }
-        return new ProjectTimelineMutation(
-            ApplySplitEditing(project, tracks, item, left, right, position.Samples, rightTakeIds ?? [], rightCompIds ?? []),
-            operation);
-    }
-
-    public static ProjectTimelineMutation DuplicateEvent(
-        CanonicalProject project,
-        string trackId,
-        string eventId,
-        string newId,
-        IReadOnlyList<string>? newTakeIds = null,
-        IReadOnlyList<string>? newCompIds = null)
+  public static ProjectTimelineMutation SetTrackState(
+      CanonicalProject project,
+      string trackId,
+      bool? locked = null,
+      bool? muted = null,
+      bool? solo = null,
+      bool? recordArmed = null,
+      bool? inputMonitoring = null)
+  {
+    ArgumentNullException.ThrowIfNull(project);
+    ArgumentException.ThrowIfNullOrWhiteSpace(trackId);
+    if (locked is null && muted is null && solo is null && recordArmed is null && inputMonitoring is null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(newId);
-        EnsureIdAvailable(project, newId);
-        var (tracks, trackIndex, _, track, item) = FindEditableEvent(project, trackId, eventId);
-        TimelinePosition start = item.End;
-        TimelineEvent duplicate = item with
+      throw new ArgumentException("At least one track state value is required.", nameof(trackId));
+    }
+
+    List<Track> tracks = project.Tracks.ToList();
+    int index = tracks.FindIndex(track => string.Equals(track.Id, trackId, StringComparison.Ordinal));
+    if (index < 0)
+    {
+      throw new InvalidOperationException($"Track '{trackId}' was not found.");
+    }
+
+    Track current = tracks[index];
+    bool unlockOnly = locked is false && muted is null && solo is null && recordArmed is null && inputMonitoring is null;
+    if (current.Locked && !unlockOnly)
+    {
+      throw new InvalidOperationException($"Unlock track '{trackId}' before changing its state.");
+    }
+
+    JsonObject metadata = current.Metadata.DeepClone().AsObject();
+    SetOptional(metadata, "locked", locked);
+    SetOptional(metadata, "muted", muted);
+    SetOptional(metadata, "solo", solo);
+    SetOptional(metadata, "record_armed", recordArmed);
+    SetOptional(metadata, "input_monitoring", inputMonitoring);
+    tracks[index] = current with
+    {
+      Locked = locked ?? current.Locked,
+      Muted = muted ?? current.Muted,
+      Solo = solo ?? current.Solo,
+      RecordArmed = recordArmed ?? current.RecordArmed,
+      InputMonitoring = inputMonitoring ?? current.InputMonitoring,
+      Metadata = metadata
+    };
+
+    JsonObject operation = new() { ["kind"] = "set_track_state", ["track_id"] = trackId };
+    SetOptional(operation, "locked", locked);
+    SetOptional(operation, "muted", muted);
+    SetOptional(operation, "solo", solo);
+    SetOptional(operation, "record_armed", recordArmed);
+    SetOptional(operation, "input_monitoring", inputMonitoring);
+    return new ProjectTimelineMutation(WithTracks(project, tracks), operation);
+  }
+
+  public static ProjectTimelineMutation MoveEvent(
+      CanonicalProject project,
+      string trackId,
+      string eventId,
+      TimelinePosition position)
+  {
+    (List<Track>? tracks, int trackIndex, int eventIndex, Track? track, TimelineEvent? item) = FindEditableEvent(project, trackId, eventId);
+    if (position.Samples < 0)
+    {
+      throw new ArgumentOutOfRangeException(nameof(position));
+    }
+
+    TimelineEvent moved = item with
+    {
+      Start = position,
+      End = new TimelinePosition(checked(position.Samples + item.Duration.Samples)),
+    };
+    tracks[trackIndex] = track with { Events = ReplaceEvent(track.Events, eventIndex, moved) };
+    JsonObject editing = EditingClone(project);
+    ShiftClipEditing(editing, new HashSet<string>(StringComparer.Ordinal) { eventId },
+        checked(position.Samples - item.Start.Samples));
+    ReconcileCrossfades(editing, tracks, new HashSet<string>(StringComparer.Ordinal) { eventId });
+    return new ProjectTimelineMutation(FinalizeEditing(project, tracks, editing),
+        Operation("move", trackId, eventId, position));
+  }
+
+  public static ProjectTimelineMutation TrimEvent(
+      CanonicalProject project,
+      string trackId,
+      string eventId,
+      string edge,
+      TimelinePosition position)
+  {
+    (List<Track>? tracks, int trackIndex, int eventIndex, Track? track, TimelineEvent? item) = FindEditableEvent(project, trackId, eventId);
+    TimelineEvent trimmed = edge == "start" && position.Samples >= item.Start.Samples && position.Samples < item.End.Samples
+      ? (item with
+      {
+        Start = position,
+        Source = AdvanceSource(item, checked(position.Samples - item.Start.Samples), project.Timebase),
+      })
+      : edge == "end" && position.Samples > item.Start.Samples && position.Samples <= item.End.Samples
+        ? (item with
         {
-            Id = newId,
-            Start = start,
-            End = new TimelinePosition(checked(start.Samples + item.Duration.Samples)),
-            Data = item.Data.DeepClone().AsObject(),
-        };
-        tracks[trackIndex] = track with { Events = [.. track.Events, duplicate] };
-        JsonObject operation = Operation("duplicate", trackId, eventId);
-        operation["new_id"] = newId;
-        ProfessionalEditingOperations.AddDuplicateEditingIds(project, eventId, operation,
-            newTakeIds ?? [], newCompIds ?? []);
-        return new ProjectTimelineMutation(
-            ApplyDuplicateEditing(project, tracks, item, duplicate, newTakeIds ?? [], newCompIds ?? []), operation);
-    }
+          End = position,
+          Source = SetSourceEnd(item, checked(position.Samples - item.Start.Samples), project.Timebase),
+        })
+        : throw new ArgumentOutOfRangeException(nameof(position), "Trim must shorten the selected edge within the event.");
+    tracks[trackIndex] = track with { Events = ReplaceEvent(track.Events, eventIndex, trimmed) };
+    JsonObject operation = Operation("trim", trackId, eventId, position);
+    operation["edge"] = edge;
+    JsonObject editing = EditingClone(project);
+    TrimCompRanges(editing, eventId, trimmed.Start.Samples, trimmed.End.Samples);
+    ReconcileCrossfades(editing, tracks, new HashSet<string>(StringComparer.Ordinal) { eventId });
+    return new ProjectTimelineMutation(FinalizeEditing(project, tracks, editing), operation);
+  }
 
-    public static ProjectTimelineMutation DeleteEvent(CanonicalProject project, string trackId, string eventId)
+  public static ProjectTimelineMutation SplitEvent(
+      CanonicalProject project,
+      string trackId,
+      string eventId,
+      TimelinePosition position,
+      string newId,
+      IReadOnlyList<string>? rightTakeIds = null,
+      IReadOnlyList<string>? rightCompIds = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(newId);
+    EnsureIdAvailable(project, newId);
+    (List<Track>? tracks, int trackIndex, int eventIndex, Track? track, TimelineEvent? item) = FindEditableEvent(project, trackId, eventId);
+    if (position.Samples <= item.Start.Samples || position.Samples >= item.End.Samples)
     {
-        var (tracks, trackIndex, eventIndex, track, _) = FindEditableEvent(project, trackId, eventId);
-        var events = track.Events.ToList();
-        events.RemoveAt(eventIndex);
-        tracks[trackIndex] = track with { Events = events };
-        JsonObject editing = EditingClone(project);
-        RemoveClipEditing(editing, eventId);
-        return new ProjectTimelineMutation(FinalizeEditing(project, tracks, editing),
-            Operation("delete", trackId, eventId));
+      throw new ArgumentOutOfRangeException(nameof(position), "Split must be inside the event.");
     }
 
-    public static ProjectTimelineMutation AddMarker(
-        CanonicalProject project,
-        string id,
-        string name,
-        TimelinePosition position,
-        string? color = null)
+    long offset = checked(position.Samples - item.Start.Samples);
+    TimelineEvent left = item with { End = position, Source = SetSourceEnd(item, offset, project.Timebase) };
+    TimelineEvent right = item with
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        EnsureIdAvailable(project, id);
-        ValidatePosition(position);
-        string markerName = string.IsNullOrWhiteSpace(name) ? "Marker" : name.Trim();
-        var marker = new TimelineMarker(id, markerName, position, color, new JsonObject());
-        var markers = project.Markers.Append(marker).OrderBy(item => item.Position.Samples).ToArray();
-        var operation = new JsonObject
-        {
-            ["kind"] = "add_marker",
-            ["new_id"] = id,
-            ["name"] = markerName,
-            ["position"] = SampleText(position),
-        };
-        if (!string.IsNullOrWhiteSpace(color)) operation["color"] = color;
-        return new ProjectTimelineMutation(project with { Markers = markers }, operation);
-    }
-
-    public static ProjectTimelineMutation MoveMarker(CanonicalProject project, string markerId, TimelinePosition position)
+      Id = newId,
+      Start = position,
+      Source = AdvanceSource(item, offset, project.Timebase),
+      Data = item.Data.DeepClone().AsObject(),
+    };
+    List<TimelineEvent> events = track.Events.ToList();
+    events[eventIndex] = left;
+    events.Insert(eventIndex + 1, right);
+    tracks[trackIndex] = track with { Events = events };
+    JsonObject operation = Operation("split", trackId, eventId, position);
+    operation["new_id"] = newId;
+    if (rightTakeIds is not null)
     {
-        ArgumentNullException.ThrowIfNull(project);
-        ValidatePosition(position);
-        var markers = project.Markers.ToList();
-        int index = markers.FindIndex(marker => marker.Id == markerId);
-        if (index < 0) throw new InvalidOperationException($"Marker '{markerId}' was not found.");
-        markers[index] = markers[index] with { Position = position };
-        return new ProjectTimelineMutation(
-            project with { Markers = markers.OrderBy(item => item.Position.Samples).ToArray() },
-            new JsonObject { ["kind"] = "move_marker", ["marker_id"] = markerId, ["position"] = SampleText(position) });
+      operation["right_take_ids"] = new JsonArray(rightTakeIds.Select(id => JsonValue.Create(id)).ToArray());
     }
-
-    public static ProjectTimelineMutation DeleteMarker(CanonicalProject project, string markerId)
+    if (rightCompIds is not null)
     {
-        ArgumentNullException.ThrowIfNull(project);
-        TimelineMarker marker = project.Markers.FirstOrDefault(item => item.Id == markerId)
-            ?? throw new InvalidOperationException($"Marker '{markerId}' was not found.");
-        return new ProjectTimelineMutation(
-            project with { Markers = project.Markers.Where(item => item != marker).ToArray() },
-            new JsonObject { ["kind"] = "delete_marker", ["marker_id"] = markerId });
+      operation["right_comp_ids"] = new JsonArray(rightCompIds.Select(id => JsonValue.Create(id)).ToArray());
     }
+    return new ProjectTimelineMutation(
+        ApplySplitEditing(project, tracks, item, left, right, position.Samples, rightTakeIds ?? [], rightCompIds ?? []),
+        operation);
+  }
 
-    public static TimelinePosition Snap(
-        ProjectTimebase timebase,
-        TimelinePosition position,
-        TimelineSnapMode mode,
-        decimal beatsPerMinute = 120)
+  public static ProjectTimelineMutation DuplicateEvent(
+      CanonicalProject project,
+      string trackId,
+      string eventId,
+      string newId,
+      IReadOnlyList<string>? newTakeIds = null,
+      IReadOnlyList<string>? newCompIds = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(newId);
+    EnsureIdAvailable(project, newId);
+    (List<Track>? tracks, int trackIndex, int _, Track? track, TimelineEvent? item) = FindEditableEvent(project, trackId, eventId);
+    TimelinePosition start = item.End;
+    TimelineEvent duplicate = item with
     {
-        ArgumentNullException.ThrowIfNull(timebase);
-        ValidatePosition(position);
-        return mode switch
-        {
-            TimelineSnapMode.Off or TimelineSnapMode.Sample => position,
-            TimelineSnapMode.Frame => timebase.FromFrame(timebase.ToFrame(position)),
-            TimelineSnapMode.Beat => SnapBeat(timebase, position, beatsPerMinute, 1),
-            TimelineSnapMode.HalfBeat => SnapBeat(timebase, position, beatsPerMinute, 2),
-            TimelineSnapMode.QuarterBeat => SnapBeat(timebase, position, beatsPerMinute, 4),
-            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
-        };
-    }
+      Id = newId,
+      Start = start,
+      End = new TimelinePosition(checked(start.Samples + item.Duration.Samples)),
+      Data = item.Data.DeepClone().AsObject(),
+    };
+    tracks[trackIndex] = track with { Events = [.. track.Events, duplicate] };
+    JsonObject operation = Operation("duplicate", trackId, eventId);
+    operation["new_id"] = newId;
+    ProfessionalEditingOperations.AddDuplicateEditingIds(project, eventId, operation,
+        newTakeIds ?? [], newCompIds ?? []);
+    return new ProjectTimelineMutation(
+        ApplyDuplicateEditing(project, tracks, item, duplicate, newTakeIds ?? [], newCompIds ?? []), operation);
+  }
 
-    private static CanonicalProject WithTracks(CanonicalProject project, IReadOnlyList<Track> tracks)
+  public static ProjectTimelineMutation DeleteEvent(CanonicalProject project, string trackId, string eventId)
+  {
+    (List<Track>? tracks, int trackIndex, int eventIndex, Track? track, TimelineEvent _) = FindEditableEvent(project, trackId, eventId);
+    List<TimelineEvent> events = track.Events.ToList();
+    events.RemoveAt(eventIndex);
+    tracks[trackIndex] = track with { Events = events };
+    JsonObject editing = EditingClone(project);
+    RemoveClipEditing(editing, eventId);
+    return new ProjectTimelineMutation(FinalizeEditing(project, tracks, editing),
+        Operation("delete", trackId, eventId));
+  }
+
+  public static ProjectTimelineMutation AddMarker(
+      CanonicalProject project,
+      string id,
+      string name,
+      TimelinePosition position,
+      string? color = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(id);
+    EnsureIdAvailable(project, id);
+    ValidatePosition(position);
+    string markerName = string.IsNullOrWhiteSpace(name) ? "Marker" : name.Trim();
+    TimelineMarker marker = new(id, markerName, position, color, []);
+    TimelineMarker[] markers = project.Markers.Append(marker).OrderBy(item => item.Position.Samples).ToArray();
+    JsonObject operation = new()
     {
-        Track[] ordered = tracks.Select((track, index) => track with { Order = index }).ToArray();
-        return project with { Tracks = ordered };
+      ["kind"] = "add_marker",
+      ["new_id"] = id,
+      ["name"] = markerName,
+      ["position"] = SampleText(position),
+    };
+    if (!string.IsNullOrWhiteSpace(color))
+    {
+      operation["color"] = color;
     }
 
-    private static ProjectTimelineMutation Mutation(CanonicalProject project, IReadOnlyList<Track> tracks, JsonObject operation) =>
-        new(WithTracks(project, tracks), operation);
+    return new ProjectTimelineMutation(project with { Markers = markers }, operation);
+  }
 
-    private static CanonicalProject ApplyDuplicateEditing(CanonicalProject project, IReadOnlyList<Track> tracks,
+  public static ProjectTimelineMutation MoveMarker(CanonicalProject project, string markerId, TimelinePosition position)
+  {
+    ArgumentNullException.ThrowIfNull(project);
+    ValidatePosition(position);
+    List<TimelineMarker> markers = project.Markers.ToList();
+    int index = markers.FindIndex(marker => marker.Id == markerId);
+    if (index < 0)
+    {
+      throw new InvalidOperationException($"Marker '{markerId}' was not found.");
+    }
+
+    markers[index] = markers[index] with { Position = position };
+    return new ProjectTimelineMutation(
+        project with { Markers = markers.OrderBy(item => item.Position.Samples).ToArray() },
+        new JsonObject { ["kind"] = "move_marker", ["marker_id"] = markerId, ["position"] = SampleText(position) });
+  }
+
+  public static ProjectTimelineMutation DeleteMarker(CanonicalProject project, string markerId)
+  {
+    ArgumentNullException.ThrowIfNull(project);
+    TimelineMarker marker = project.Markers.FirstOrDefault(item => item.Id == markerId)
+        ?? throw new InvalidOperationException($"Marker '{markerId}' was not found.");
+    return new ProjectTimelineMutation(
+        project with { Markers = project.Markers.Where(item => item != marker).ToArray() },
+        new JsonObject { ["kind"] = "delete_marker", ["marker_id"] = markerId });
+  }
+
+  public static TimelinePosition Snap(
+      ProjectTimebase timebase,
+      TimelinePosition position,
+      TimelineSnapMode mode,
+      decimal beatsPerMinute = 120)
+  {
+    ArgumentNullException.ThrowIfNull(timebase);
+    ValidatePosition(position);
+    return mode switch
+    {
+      TimelineSnapMode.Off or TimelineSnapMode.Sample => position,
+      TimelineSnapMode.Frame => timebase.FromFrame(timebase.ToFrame(position)),
+      TimelineSnapMode.Beat => SnapBeat(timebase, position, beatsPerMinute, 1),
+      TimelineSnapMode.HalfBeat => SnapBeat(timebase, position, beatsPerMinute, 2),
+      TimelineSnapMode.QuarterBeat => SnapBeat(timebase, position, beatsPerMinute, 4),
+      _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+    };
+  }
+
+  private static CanonicalProject WithTracks(CanonicalProject project, IReadOnlyList<Track> tracks)
+  {
+    Track[] ordered = tracks.Select((track, index) => track with { Order = index }).ToArray();
+    return project with { Tracks = ordered };
+  }
+
+  private static ProjectTimelineMutation Mutation(CanonicalProject project, IReadOnlyList<Track> tracks, JsonObject operation)
+  {
+    return new(WithTracks(project, tracks), operation);
+  }
+
+  private static CanonicalProject ApplyDuplicateEditing(CanonicalProject project, IReadOnlyList<Track> tracks,
         TimelineEvent source, TimelineEvent duplicate, IReadOnlyList<string> takeIds, IReadOnlyList<string> compIds)
-    {
-        JsonObject editing = EditingClone(project);
-        JsonArray takes = Array(editing, "takes"), comps = Array(editing, "comp_ranges");
-        JsonObject[] sourceTakes = takes.OfType<JsonObject>().Where(t => Text(t, "clip_id") == source.Id).ToArray();
-        JsonObject[] sourceComps = comps.OfType<JsonObject>().Where(c => Text(c, "clip_id") == source.Id).ToArray();
-        var takeMap = sourceTakes.Select((take, index) => (Text(take, "id"), takeIds[index]))
+  {
+    JsonObject editing = EditingClone(project);
+    JsonArray takes = Array(editing, "takes"), comps = Array(editing, "comp_ranges");
+    JsonObject[] sourceTakes = takes.OfType<JsonObject>().Where(t => Text(t, "clip_id") == source.Id).ToArray();
+    JsonObject[] sourceComps = comps.OfType<JsonObject>().Where(c => Text(c, "clip_id") == source.Id).ToArray();
+    Dictionary<string, string> takeMap = sourceTakes.Select((take, index) => (Text(take, "id"), takeIds[index]))
             .ToDictionary(pair => pair.Item1, pair => pair.Item2, StringComparer.Ordinal);
-        foreach ((JsonObject take, int index) in sourceTakes.Select((value, index) => (value, index)))
-        {
-            JsonObject copy = take.DeepClone().AsObject();
-            copy["id"] = takeIds[index]; copy["clip_id"] = duplicate.Id; takes.Add(copy);
-        }
-        RemapActiveTake(duplicate.Data, takeMap);
-        long delta = duplicate.Start.Samples - source.Start.Samples;
-        foreach ((JsonObject comp, int index) in sourceComps.Select((value, index) => (value, index)))
-        {
-            JsonObject copy = comp.DeepClone().AsObject();
-            copy["id"] = compIds[index]; copy["clip_id"] = duplicate.Id;
-            copy["take_id"] = takeMap[Text(comp, "take_id")];
-            copy["start_sample"] = (Sample(comp, "start_sample") + delta).ToString(CultureInfo.InvariantCulture);
-            copy["end_sample"] = (Sample(comp, "end_sample") + delta).ToString(CultureInfo.InvariantCulture);
-            comps.Add(copy);
-        }
-        return FinalizeEditing(project, tracks, editing);
-    }
-
-    private static CanonicalProject ApplySplitEditing(CanonicalProject project, IReadOnlyList<Track> tracks,
-        TimelineEvent source, TimelineEvent left, TimelineEvent right, long position,
-        IReadOnlyList<string> takeIds, IReadOnlyList<string> compIds)
+    foreach ((JsonObject take, int index) in sourceTakes.Select((value, index) => (value, index)))
     {
-        JsonObject editing = EditingClone(project);
-        JsonArray takes = Array(editing, "takes"), comps = Array(editing, "comp_ranges");
-        JsonObject[] sourceTakes = takes.OfType<JsonObject>().Where(t => Text(t, "clip_id") == source.Id).ToArray();
-        JsonObject[] rightComps = comps.OfType<JsonObject>()
-            .Where(c => Text(c, "clip_id") == source.Id && Sample(c, "end_sample") > position).ToArray();
-        ValidateEditingIds(project, takeIds, sourceTakes.Length, compIds, rightComps.Length);
-        var takeMap = sourceTakes.Select((take, index) => (Text(take, "id"), takeIds[index]))
+      JsonObject copy = take.DeepClone().AsObject();
+      copy["id"] = takeIds[index]; copy["clip_id"] = duplicate.Id; takes.Add(copy);
+    }
+    RemapActiveTake(duplicate.Data, takeMap);
+    long delta = duplicate.Start.Samples - source.Start.Samples;
+    foreach ((JsonObject comp, int index) in sourceComps.Select((value, index) => (value, index)))
+    {
+      JsonObject copy = comp.DeepClone().AsObject();
+      copy["id"] = compIds[index]; copy["clip_id"] = duplicate.Id;
+      copy["take_id"] = takeMap[Text(comp, "take_id")];
+      copy["start_sample"] = (Sample(comp, "start_sample") + delta).ToString(CultureInfo.InvariantCulture);
+      copy["end_sample"] = (Sample(comp, "end_sample") + delta).ToString(CultureInfo.InvariantCulture);
+      comps.Add(copy);
+    }
+    return FinalizeEditing(project, tracks, editing);
+  }
+
+  private static CanonicalProject ApplySplitEditing(CanonicalProject project, IReadOnlyList<Track> tracks,
+      TimelineEvent source, TimelineEvent left, TimelineEvent right, long position,
+      IReadOnlyList<string> takeIds, IReadOnlyList<string> compIds)
+  {
+    JsonObject editing = EditingClone(project);
+    JsonArray takes = Array(editing, "takes"), comps = Array(editing, "comp_ranges");
+    JsonObject[] sourceTakes = takes.OfType<JsonObject>().Where(t => Text(t, "clip_id") == source.Id).ToArray();
+    JsonObject[] rightComps = comps.OfType<JsonObject>()
+        .Where(c => Text(c, "clip_id") == source.Id && Sample(c, "end_sample") > position).ToArray();
+    ValidateEditingIds(project, takeIds, sourceTakes.Length, compIds, rightComps.Length);
+    Dictionary<string, string> takeMap = sourceTakes.Select((take, index) => (Text(take, "id"), takeIds[index]))
             .ToDictionary(pair => pair.Item1, pair => pair.Item2, StringComparer.Ordinal);
-        foreach ((JsonObject take, int index) in sourceTakes.Select((value, index) => (value, index)))
-        {
-            JsonObject copy = take.DeepClone().AsObject();
-            copy["id"] = takeIds[index]; copy["clip_id"] = right.Id; takes.Add(copy);
-        }
-        RemapActiveTake(right.Data, takeMap);
-        var rightIdMap = rightComps.Select((comp, index) => (Text(comp, "id"), compIds[index]))
+    foreach ((JsonObject take, int index) in sourceTakes.Select((value, index) => (value, index)))
+    {
+      JsonObject copy = take.DeepClone().AsObject();
+      copy["id"] = takeIds[index]; copy["clip_id"] = right.Id; takes.Add(copy);
+    }
+    RemapActiveTake(right.Data, takeMap);
+    Dictionary<string, string> rightIdMap = rightComps.Select((comp, index) => (Text(comp, "id"), compIds[index]))
             .ToDictionary(pair => pair.Item1, pair => pair.Item2, StringComparer.Ordinal);
-        var retained = new JsonArray();
-        var duplicated = new JsonArray();
-        foreach (JsonObject comp in comps.OfType<JsonObject>())
-        {
-            if (Text(comp, "clip_id") != source.Id) { retained.Add(comp.DeepClone()); continue; }
-            long start = Sample(comp, "start_sample"), end = Sample(comp, "end_sample");
-            if (start < position)
-            {
-                JsonObject copy = comp.DeepClone().AsObject(); copy["end_sample"] = Math.Min(end, position).ToString(CultureInfo.InvariantCulture);
-                retained.Add(copy);
-            }
-            if (end > position)
-            {
-                JsonObject copy = comp.DeepClone().AsObject();
-                copy["id"] = rightIdMap[Text(comp, "id")]; copy["clip_id"] = right.Id;
-                copy["take_id"] = takeMap[Text(comp, "take_id")];
-                copy["start_sample"] = Math.Max(start, position).ToString(CultureInfo.InvariantCulture);
-                duplicated.Add(copy);
-            }
-        }
-        foreach (JsonNode? comp in duplicated) retained.Add(comp?.DeepClone());
-        editing["comp_ranges"] = retained;
-        ReconcileCrossfades(editing, tracks, new HashSet<string>(StringComparer.Ordinal) { source.Id });
-        return FinalizeEditing(project, tracks, editing);
+    JsonArray retained = [];
+    JsonArray duplicated = [];
+    foreach (JsonObject comp in comps.OfType<JsonObject>())
+    {
+      if (Text(comp, "clip_id") != source.Id) { retained.Add(comp.DeepClone()); continue; }
+      long start = Sample(comp, "start_sample"), end = Sample(comp, "end_sample");
+      if (start < position)
+      {
+        JsonObject copy = comp.DeepClone().AsObject(); copy["end_sample"] = Math.Min(end, position).ToString(CultureInfo.InvariantCulture);
+        retained.Add(copy);
+      }
+      if (end > position)
+      {
+        JsonObject copy = comp.DeepClone().AsObject();
+        copy["id"] = rightIdMap[Text(comp, "id")]; copy["clip_id"] = right.Id;
+        copy["take_id"] = takeMap[Text(comp, "take_id")];
+        copy["start_sample"] = Math.Max(start, position).ToString(CultureInfo.InvariantCulture);
+        duplicated.Add(copy);
+      }
+    }
+    foreach (JsonNode? comp in duplicated)
+    {
+      retained.Add(comp?.DeepClone());
     }
 
-    private static void ShiftClipEditing(JsonObject editing, IReadOnlySet<string> clipIds, long delta)
+    editing["comp_ranges"] = retained;
+    ReconcileCrossfades(editing, tracks, new HashSet<string>(StringComparer.Ordinal) { source.Id });
+    return FinalizeEditing(project, tracks, editing);
+  }
+
+  private static void ShiftClipEditing(JsonObject editing, IReadOnlySet<string> clipIds, long delta)
+  {
+    if (delta == 0)
     {
-        if (delta == 0) return;
-        foreach (JsonObject comp in Array(editing, "comp_ranges").OfType<JsonObject>())
-        {
-            if (!clipIds.Contains(Text(comp, "clip_id"))) continue;
-            comp["start_sample"] = checked(Sample(comp, "start_sample") + delta).ToString(CultureInfo.InvariantCulture);
-            comp["end_sample"] = checked(Sample(comp, "end_sample") + delta).ToString(CultureInfo.InvariantCulture);
-        }
-        foreach (JsonObject crossfade in Array(editing, "crossfades").OfType<JsonObject>())
-        {
-            if (!clipIds.Contains(Text(crossfade, "left_clip_id")) ||
-                !clipIds.Contains(Text(crossfade, "right_clip_id"))) continue;
-            crossfade["start_sample"] = checked(Sample(crossfade, "start_sample") + delta).ToString(CultureInfo.InvariantCulture);
-            crossfade["end_sample"] = checked(Sample(crossfade, "end_sample") + delta).ToString(CultureInfo.InvariantCulture);
-        }
+      return;
     }
 
-    private static void TrimCompRanges(JsonObject editing, string clipId, long start, long end)
+    foreach (JsonObject comp in Array(editing, "comp_ranges").OfType<JsonObject>())
     {
-        var retained = new JsonArray();
-        foreach (JsonObject comp in Array(editing, "comp_ranges").OfType<JsonObject>())
-        {
-            if (Text(comp, "clip_id") != clipId) { retained.Add(comp.DeepClone()); continue; }
-            long compStart = Math.Max(Sample(comp, "start_sample"), start);
-            long compEnd = Math.Min(Sample(comp, "end_sample"), end);
-            if (compStart >= compEnd) continue;
-            JsonObject copy = comp.DeepClone().AsObject();
-            copy["start_sample"] = compStart.ToString(CultureInfo.InvariantCulture);
-            copy["end_sample"] = compEnd.ToString(CultureInfo.InvariantCulture);
-            retained.Add(copy);
-        }
-        editing["comp_ranges"] = retained;
+      if (!clipIds.Contains(Text(comp, "clip_id")))
+      {
+        continue;
+      }
+
+      comp["start_sample"] = checked(Sample(comp, "start_sample") + delta).ToString(CultureInfo.InvariantCulture);
+      comp["end_sample"] = checked(Sample(comp, "end_sample") + delta).ToString(CultureInfo.InvariantCulture);
+    }
+    foreach (JsonObject crossfade in Array(editing, "crossfades").OfType<JsonObject>())
+    {
+      if (!clipIds.Contains(Text(crossfade, "left_clip_id")) ||
+          !clipIds.Contains(Text(crossfade, "right_clip_id")))
+      {
+        continue;
+      }
+
+      crossfade["start_sample"] = checked(Sample(crossfade, "start_sample") + delta).ToString(CultureInfo.InvariantCulture);
+      crossfade["end_sample"] = checked(Sample(crossfade, "end_sample") + delta).ToString(CultureInfo.InvariantCulture);
+    }
+  }
+
+  private static void TrimCompRanges(JsonObject editing, string clipId, long start, long end)
+  {
+    JsonArray retained = [];
+    foreach (JsonObject comp in Array(editing, "comp_ranges").OfType<JsonObject>())
+    {
+      if (Text(comp, "clip_id") != clipId) { retained.Add(comp.DeepClone()); continue; }
+      long compStart = Math.Max(Sample(comp, "start_sample"), start);
+      long compEnd = Math.Min(Sample(comp, "end_sample"), end);
+      if (compStart >= compEnd)
+      {
+        continue;
+      }
+
+      JsonObject copy = comp.DeepClone().AsObject();
+      copy["start_sample"] = compStart.ToString(CultureInfo.InvariantCulture);
+      copy["end_sample"] = compEnd.ToString(CultureInfo.InvariantCulture);
+      retained.Add(copy);
+    }
+    editing["comp_ranges"] = retained;
+  }
+
+  private static void ReconcileCrossfades(JsonObject editing, IReadOnlyList<Track> tracks,
+      IReadOnlySet<string> changedClipIds)
+  {
+    Dictionary<string, TimelineEvent> clips = tracks.SelectMany(track => track.Events)
+        .ToDictionary(item => item.Id, StringComparer.Ordinal);
+    JsonArray retained = [];
+    foreach (JsonObject crossfade in Array(editing, "crossfades").OfType<JsonObject>())
+    {
+      string leftId = Text(crossfade, "left_clip_id"), rightId = Text(crossfade, "right_clip_id");
+      if (!changedClipIds.Contains(leftId) && !changedClipIds.Contains(rightId))
+      {
+        retained.Add(crossfade.DeepClone());
+        continue;
+      }
+      if (!clips.TryGetValue(leftId, out TimelineEvent? left) ||
+          !clips.TryGetValue(rightId, out TimelineEvent? right))
+      {
+        continue;
+      }
+
+      long start = Math.Max(Sample(crossfade, "start_sample"), Math.Max(left.Start.Samples, right.Start.Samples));
+      long end = Math.Min(Sample(crossfade, "end_sample"), Math.Min(left.End.Samples, right.End.Samples));
+      if (start >= end)
+      {
+        continue;
+      }
+
+      JsonObject copy = crossfade.DeepClone().AsObject();
+      copy["start_sample"] = start.ToString(CultureInfo.InvariantCulture);
+      copy["end_sample"] = end.ToString(CultureInfo.InvariantCulture);
+      retained.Add(copy);
+    }
+    editing["crossfades"] = retained;
+  }
+
+  private static void RemoveClipEditing(JsonObject editing, string clipId)
+  {
+    HashSet<string> takeIds = Array(editing, "takes").OfType<JsonObject>()
+        .Where(take => Text(take, "clip_id") == clipId).Select(take => Text(take, "id"))
+        .ToHashSet(StringComparer.Ordinal);
+    editing["takes"] = new JsonArray(Array(editing, "takes").OfType<JsonObject>()
+        .Where(take => Text(take, "clip_id") != clipId).Select(take => take.DeepClone()).ToArray());
+    editing["comp_ranges"] = new JsonArray(Array(editing, "comp_ranges").OfType<JsonObject>()
+        .Where(comp => Text(comp, "clip_id") != clipId && !takeIds.Contains(Text(comp, "take_id")))
+        .Select(comp => comp.DeepClone()).ToArray());
+    editing["crossfades"] = new JsonArray(Array(editing, "crossfades").OfType<JsonObject>()
+        .Where(crossfade => Text(crossfade, "left_clip_id") != clipId &&
+                            Text(crossfade, "right_clip_id") != clipId)
+        .Select(crossfade => crossfade.DeepClone()).ToArray());
+  }
+
+  private static void ValidateEditingIds(CanonicalProject project, IReadOnlyList<string> takeIds, int takeCount,
+      IReadOnlyList<string> compIds, int compCount)
+  {
+    if (takeIds.Count != takeCount || compIds.Count != compCount)
+    {
+      throw new ArgumentException("Split requires deterministic IDs for every right-side take and comp range.");
     }
 
-    private static void ReconcileCrossfades(JsonObject editing, IReadOnlyList<Track> tracks,
-        IReadOnlySet<string> changedClipIds)
+    string[] supplied = [.. takeIds, .. compIds];
+    if (supplied.Any(string.IsNullOrWhiteSpace) || supplied.Distinct(StringComparer.Ordinal).Count() != supplied.Length)
     {
-        Dictionary<string, TimelineEvent> clips = tracks.SelectMany(track => track.Events)
-            .ToDictionary(item => item.Id, StringComparer.Ordinal);
-        var retained = new JsonArray();
-        foreach (JsonObject crossfade in Array(editing, "crossfades").OfType<JsonObject>())
-        {
-            string leftId = Text(crossfade, "left_clip_id"), rightId = Text(crossfade, "right_clip_id");
-            if (!changedClipIds.Contains(leftId) && !changedClipIds.Contains(rightId))
-            {
-                retained.Add(crossfade.DeepClone());
-                continue;
-            }
-            if (!clips.TryGetValue(leftId, out TimelineEvent? left) ||
-                !clips.TryGetValue(rightId, out TimelineEvent? right)) continue;
-            long start = Math.Max(Sample(crossfade, "start_sample"), Math.Max(left.Start.Samples, right.Start.Samples));
-            long end = Math.Min(Sample(crossfade, "end_sample"), Math.Min(left.End.Samples, right.End.Samples));
-            if (start >= end) continue;
-            JsonObject copy = crossfade.DeepClone().AsObject();
-            copy["start_sample"] = start.ToString(CultureInfo.InvariantCulture);
-            copy["end_sample"] = end.ToString(CultureInfo.InvariantCulture);
-            retained.Add(copy);
-        }
-        editing["crossfades"] = retained;
+      throw new InvalidOperationException("Split editing IDs must be nonempty and unique.");
     }
 
-    private static void RemoveClipEditing(JsonObject editing, string clipId)
+    foreach (string id in supplied)
     {
-        HashSet<string> takeIds = Array(editing, "takes").OfType<JsonObject>()
-            .Where(take => Text(take, "clip_id") == clipId).Select(take => Text(take, "id"))
-            .ToHashSet(StringComparer.Ordinal);
-        editing["takes"] = new JsonArray(Array(editing, "takes").OfType<JsonObject>()
-            .Where(take => Text(take, "clip_id") != clipId).Select(take => take.DeepClone()).ToArray());
-        editing["comp_ranges"] = new JsonArray(Array(editing, "comp_ranges").OfType<JsonObject>()
-            .Where(comp => Text(comp, "clip_id") != clipId && !takeIds.Contains(Text(comp, "take_id")))
-            .Select(comp => comp.DeepClone()).ToArray());
-        editing["crossfades"] = new JsonArray(Array(editing, "crossfades").OfType<JsonObject>()
-            .Where(crossfade => Text(crossfade, "left_clip_id") != clipId &&
-                                Text(crossfade, "right_clip_id") != clipId)
-            .Select(crossfade => crossfade.DeepClone()).ToArray());
+      EnsureIdAvailable(project, id);
+    }
+  }
+
+  private static CanonicalProject FinalizeEditing(CanonicalProject project, IReadOnlyList<Track> tracks, JsonObject editing)
+  {
+    CanonicalProject updated = WithTracks(project, tracks);
+    JsonObject timeline = ProjectTimelineContracts.RebuildTimeline(updated);
+    timeline["editing"] = editing;
+    updated = updated with { Timeline = timeline };
+    ProfessionalEditingContracts.ValidateAgainstProject(updated, ProfessionalEditingContracts.Read(timeline));
+    return updated;
+  }
+
+  private static JsonObject EditingClone(CanonicalProject project)
+  {
+    return project.Timeline["editing"] is JsonObject editing
+      ? editing.DeepClone().AsObject()
+      : new JsonObject
+      {
+        ["schema_version"] = ProfessionalEditingContracts.SchemaVersion,
+        ["automation_lanes"] = new JsonArray(),
+        ["takes"] = new JsonArray(),
+        ["comp_ranges"] = new JsonArray(),
+        ["crossfades"] = new JsonArray()
+      };
+  }
+
+  private static JsonArray Array(JsonObject owner, string name)
+  {
+    if (owner[name] is JsonArray array)
+    {
+      return array;
     }
 
-    private static void ValidateEditingIds(CanonicalProject project, IReadOnlyList<string> takeIds, int takeCount,
-        IReadOnlyList<string> compIds, int compCount)
+    array = [];
+    owner[name] = array;
+    return array;
+  }
+  private static string Text(JsonObject owner, string name)
+  {
+    return owner[name]!.GetValue<string>();
+  }
+
+  private static long Sample(JsonObject owner, string name)
+  {
+    return long.Parse(Text(owner, name), CultureInfo.InvariantCulture);
+  }
+
+  private static void RemapActiveTake(JsonObject eventData, IReadOnlyDictionary<string, string> takeMap)
+  {
+    JsonObject data = eventData["data"] as JsonObject ?? eventData;
+    if (data["active_take_id"] is JsonValue value && value.TryGetValue<string>(out string? id))
     {
-        if (takeIds.Count != takeCount || compIds.Count != compCount)
-            throw new ArgumentException("Split requires deterministic IDs for every right-side take and comp range.");
-        string[] supplied = [.. takeIds, .. compIds];
-        if (supplied.Any(string.IsNullOrWhiteSpace) || supplied.Distinct(StringComparer.Ordinal).Count() != supplied.Length)
-            throw new InvalidOperationException("Split editing IDs must be nonempty and unique.");
-        foreach (string id in supplied) EnsureIdAvailable(project, id);
+      data["active_take_id"] = takeMap[id];
+    }
+  }
+
+  private static JsonObject Operation(string kind, string trackId, string eventId, TimelinePosition? position = null)
+  {
+    JsonObject operation = new() { ["kind"] = kind, ["track_id"] = trackId, ["clip_id"] = eventId };
+    if (position.HasValue)
+    {
+      operation["position"] = SampleText(position.Value);
     }
 
-    private static CanonicalProject FinalizeEditing(CanonicalProject project, IReadOnlyList<Track> tracks, JsonObject editing)
+    return operation;
+  }
+
+  private static (List<Track> Tracks, int TrackIndex, int EventIndex, Track Track, TimelineEvent Event) FindEditableEvent(
+      CanonicalProject project,
+      string trackId,
+      string eventId)
+  {
+    ArgumentNullException.ThrowIfNull(project);
+    ArgumentException.ThrowIfNullOrWhiteSpace(trackId);
+    ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
+    List<Track> tracks = project.Tracks.ToList();
+    int trackIndex = tracks.FindIndex(track => track.Id == trackId);
+    if (trackIndex < 0)
     {
-        CanonicalProject updated = WithTracks(project, tracks);
-        JsonObject timeline = ProjectTimelineContracts.RebuildTimeline(updated);
-        timeline["editing"] = editing;
-        updated = updated with { Timeline = timeline };
-        ProfessionalEditingContracts.ValidateAgainstProject(updated, ProfessionalEditingContracts.Read(timeline));
-        return updated;
+      throw new InvalidOperationException($"Track '{trackId}' was not found.");
     }
 
-    private static JsonObject EditingClone(CanonicalProject project) => project.Timeline["editing"] is JsonObject editing
-        ? editing.DeepClone().AsObject()
-        : new JsonObject { ["schema_version"] = ProfessionalEditingContracts.SchemaVersion,
-            ["automation_lanes"] = new JsonArray(), ["takes"] = new JsonArray(),
-            ["comp_ranges"] = new JsonArray(), ["crossfades"] = new JsonArray() };
-    private static JsonArray Array(JsonObject owner, string name)
+    Track track = tracks[trackIndex];
+    if (track.Locked)
     {
-        if (owner[name] is JsonArray array) return array;
-        array = [];
-        owner[name] = array;
-        return array;
-    }
-    private static string Text(JsonObject owner, string name) => owner[name]!.GetValue<string>();
-    private static long Sample(JsonObject owner, string name) => long.Parse(Text(owner, name), CultureInfo.InvariantCulture);
-    private static void RemapActiveTake(JsonObject eventData, IReadOnlyDictionary<string, string> takeMap)
-    {
-        JsonObject data = eventData["data"] as JsonObject ?? eventData;
-        if (data["active_take_id"] is JsonValue value && value.TryGetValue<string>(out string? id))
-            data["active_take_id"] = takeMap[id];
+      throw new InvalidOperationException($"Unlock track '{trackId}' before editing it.");
     }
 
-    private static JsonObject Operation(string kind, string trackId, string eventId, TimelinePosition? position = null)
+    int eventIndex = track.Events.ToList().FindIndex(item => item.Id == eventId);
+    if (eventIndex < 0)
     {
-        var operation = new JsonObject { ["kind"] = kind, ["track_id"] = trackId, ["clip_id"] = eventId };
-        if (position.HasValue) operation["position"] = SampleText(position.Value);
-        return operation;
+      throw new InvalidOperationException($"Timeline event '{eventId}' was not found.");
     }
 
-    private static (List<Track> Tracks, int TrackIndex, int EventIndex, Track Track, TimelineEvent Event) FindEditableEvent(
-        CanonicalProject project,
-        string trackId,
-        string eventId)
+    TimelineEvent item = track.Events[eventIndex];
+    return ReadBoolean(item.Data["locked"])
+          ? throw new InvalidOperationException($"Unlock event '{eventId}' before editing it.")
+          : ((List<Track> Tracks, int TrackIndex, int EventIndex, Track Track, TimelineEvent Event))(tracks, trackIndex, eventIndex, track, item);
+  }
+
+  private static IReadOnlyList<TimelineEvent> ReplaceEvent(IReadOnlyList<TimelineEvent> source, int index, TimelineEvent item)
+  {
+    List<TimelineEvent> events = source.ToList();
+    events[index] = item;
+    return events;
+  }
+
+  private static SourceRange? AdvanceSource(TimelineEvent item, long projectSampleDelta, ProjectTimebase timebase)
+  {
+    if (item.Source is null)
     {
-        ArgumentNullException.ThrowIfNull(project);
-        ArgumentException.ThrowIfNullOrWhiteSpace(trackId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
-        var tracks = project.Tracks.ToList();
-        int trackIndex = tracks.FindIndex(track => track.Id == trackId);
-        if (trackIndex < 0) throw new InvalidOperationException($"Track '{trackId}' was not found.");
-        Track track = tracks[trackIndex];
-        if (track.Locked) throw new InvalidOperationException($"Unlock track '{trackId}' before editing it.");
-        int eventIndex = track.Events.ToList().FindIndex(item => item.Id == eventId);
-        if (eventIndex < 0) throw new InvalidOperationException($"Timeline event '{eventId}' was not found.");
-        TimelineEvent item = track.Events[eventIndex];
-        if (ReadBoolean(item.Data["locked"])) throw new InvalidOperationException($"Unlock event '{eventId}' before editing it.");
-        return (tracks, trackIndex, eventIndex, track, item);
+      return null;
     }
 
-    private static IReadOnlyList<TimelineEvent> ReplaceEvent(IReadOnlyList<TimelineEvent> source, int index, TimelineEvent item)
-    {
-        var events = source.ToList();
-        events[index] = item;
-        return events;
-    }
+    SourcePosition start = AddSourceDelta(item.Source.Start, projectSampleDelta, item, timebase);
+    return new SourceRange(start, item.Source.End);
+  }
 
-    private static SourceRange? AdvanceSource(TimelineEvent item, long projectSampleDelta, ProjectTimebase timebase)
-    {
-        if (item.Source is null) return null;
-        SourcePosition start = AddSourceDelta(item.Source.Start, projectSampleDelta, item, timebase);
-        return new SourceRange(start, item.Source.End);
-    }
+  private static SourceRange? SetSourceEnd(TimelineEvent item, long projectSampleDelta, ProjectTimebase timebase)
+  {
+    return item.Source is null
+          ? null
+          : new SourceRange(item.Source.Start, AddSourceDelta(item.Source.Start, projectSampleDelta, item, timebase));
+  }
 
-    private static SourceRange? SetSourceEnd(TimelineEvent item, long projectSampleDelta, ProjectTimebase timebase)
-    {
-        if (item.Source is null) return null;
-        return new SourceRange(item.Source.Start, AddSourceDelta(item.Source.Start, projectSampleDelta, item, timebase));
-    }
-
-    private static SourcePosition AddSourceDelta(
+  private static SourcePosition AddSourceDelta(
         SourcePosition source,
         long projectSampleDelta,
         TimelineEvent item,
         ProjectTimebase timebase)
+  {
+    decimal speed = ReadDecimal(item.Data["data"]?["speed"] ?? item.Data["speed"], 1);
+    if (speed <= 0)
     {
-        decimal speed = ReadDecimal(item.Data["data"]?["speed"] ?? item.Data["speed"], 1);
-        if (speed <= 0) throw new InvalidDataException("Timeline event speed must be positive.");
-        (BigInteger speedNumerator, BigInteger speedDenominator) = DecimalFraction(speed);
-        (BigInteger remainderNumerator, BigInteger remainderDenominator) = ParseFraction(source.Remainder);
-        BigInteger denominator = timebase.SampleRate;
-        BigInteger commonDenominator = remainderDenominator * denominator * speedDenominator;
-        BigInteger numerator = (new BigInteger(source.Samples) * remainderDenominator + remainderNumerator) * denominator * speedDenominator
-            + new BigInteger(projectSampleDelta) * source.SampleRate * speedNumerator * remainderDenominator;
-        BigInteger rounded = RoundAwayFromZero(numerator, commonDenominator);
-        BigInteger remainder = numerator - rounded * commonDenominator;
-        if (rounded < 0 || rounded > long.MaxValue) throw new OverflowException("Source position exceeds the supported range.");
-        return new SourcePosition(source.SampleRate, (long)rounded, CanonicalFraction(remainder, commonDenominator));
+      throw new InvalidDataException("Timeline event speed must be positive.");
     }
 
-    private static void EnsureIdAvailable(CanonicalProject project, string id)
+    (BigInteger speedNumerator, BigInteger speedDenominator) = DecimalFraction(speed);
+    (BigInteger remainderNumerator, BigInteger remainderDenominator) = ParseFraction(source.Remainder);
+    BigInteger denominator = timebase.SampleRate;
+    BigInteger commonDenominator = remainderDenominator * denominator * speedDenominator;
+    BigInteger numerator = (((new BigInteger(source.Samples) * remainderDenominator) + remainderNumerator) * denominator * speedDenominator)
+        + (new BigInteger(projectSampleDelta) * source.SampleRate * speedNumerator * remainderDenominator);
+    BigInteger rounded = RoundAwayFromZero(numerator, commonDenominator);
+    BigInteger remainder = numerator - (rounded * commonDenominator);
+    return rounded < BigInteger.Zero || rounded > long.MaxValue
+          ? throw new OverflowException("Source position exceeds the supported range.")
+          : new SourcePosition(source.SampleRate, (long)rounded, CanonicalFraction(remainder, commonDenominator));
+  }
+
+  private static void EnsureIdAvailable(CanonicalProject project, string id)
+  {
+    if (project.Tracks.Any(track => track.Id == id || track.Events.Any(item => item.Id == id)) ||
+        project.Markers.Any(marker => marker.Id == id) || project.MediaAssets.Any(asset => asset.Id == id) ||
+        (ProfessionalEditingContracts.Read(project.Timeline) is { } editing &&
+        (editing.AutomationLanes.Any(lane => lane.Id == id || lane.Points.Any(point => point.Id == id)) ||
+         editing.Takes.Any(take => take.Id == id) || editing.CompRanges.Any(comp => comp.Id == id) ||
+         editing.Crossfades.Any(crossfade => crossfade.Id == id))))
     {
-        if (project.Tracks.Any(track => track.Id == id || track.Events.Any(item => item.Id == id)) ||
-            project.Markers.Any(marker => marker.Id == id) || project.MediaAssets.Any(asset => asset.Id == id) ||
-            ProfessionalEditingContracts.Read(project.Timeline) is { } editing &&
-            (editing.AutomationLanes.Any(lane => lane.Id == id || lane.Points.Any(point => point.Id == id)) ||
-             editing.Takes.Any(take => take.Id == id) || editing.CompRanges.Any(comp => comp.Id == id) ||
-             editing.Crossfades.Any(crossfade => crossfade.Id == id)))
-        {
-            throw new InvalidOperationException($"The timeline ID '{id}' is already in use.");
-        }
+      throw new InvalidOperationException($"The timeline ID '{id}' is already in use.");
+    }
+  }
+
+  private static TimelinePosition SnapBeat(
+      ProjectTimebase timebase,
+      TimelinePosition position,
+      decimal beatsPerMinute,
+      int subdivision)
+  {
+    (BigInteger bpmNumerator, BigInteger bpmDenominator) = DecimalFraction(beatsPerMinute);
+    if (bpmNumerator <= 0)
+    {
+      throw new ArgumentOutOfRangeException(nameof(bpmNumerator), "Tempo must be positive.");
     }
 
-    private static TimelinePosition SnapBeat(
-        ProjectTimebase timebase,
-        TimelinePosition position,
-        decimal beatsPerMinute,
-        int subdivision)
+    BigInteger gridNumerator = new BigInteger(timebase.SampleRate) * 60 * bpmDenominator;
+    BigInteger gridDenominator = bpmNumerator * subdivision;
+    BigInteger snappedIndex = RoundAwayFromZero(new BigInteger(position.Samples) * gridDenominator, gridNumerator);
+    BigInteger samples = RoundAwayFromZero(snappedIndex * gridNumerator, gridDenominator);
+    return samples > long.MaxValue
+          ? throw new OverflowException("Snapped position exceeds the supported range.")
+          : new TimelinePosition((long)samples);
+  }
+
+  private static (BigInteger Numerator, BigInteger Denominator) DecimalFraction(decimal value)
+  {
+    int[] bits = decimal.GetBits(value);
+    int scale = (bits[3] >> 16) & 0x7F;
+    BigInteger numerator = (new BigInteger((uint)bits[2]) << 64) |
+                            (new BigInteger((uint)bits[1]) << 32) |
+                            (uint)bits[0];
+    if ((bits[3] & int.MinValue) != 0)
     {
-        (BigInteger bpmNumerator, BigInteger bpmDenominator) = DecimalFraction(beatsPerMinute);
-        if (bpmNumerator <= 0) throw new ArgumentOutOfRangeException(nameof(bpmNumerator), "Tempo must be positive.");
-        BigInteger gridNumerator = new BigInteger(timebase.SampleRate) * 60 * bpmDenominator;
-        BigInteger gridDenominator = bpmNumerator * subdivision;
-        BigInteger snappedIndex = RoundAwayFromZero(new BigInteger(position.Samples) * gridDenominator, gridNumerator);
-        BigInteger samples = RoundAwayFromZero(snappedIndex * gridNumerator, gridDenominator);
-        if (samples > long.MaxValue) throw new OverflowException("Snapped position exceeds the supported range.");
-        return new TimelinePosition((long)samples);
+      numerator = -numerator;
     }
 
-    private static (BigInteger Numerator, BigInteger Denominator) DecimalFraction(decimal value)
+    BigInteger denominator = BigInteger.Pow(10, scale);
+    BigInteger divisor = BigInteger.GreatestCommonDivisor(BigInteger.Abs(numerator), denominator);
+    return (numerator / divisor, denominator / divisor);
+  }
+
+  private static (BigInteger Numerator, BigInteger Denominator) ParseFraction(string value)
+  {
+    if (value == "0")
     {
-        int[] bits = decimal.GetBits(value);
-        int scale = (bits[3] >> 16) & 0x7F;
-        BigInteger numerator = ((new BigInteger((uint)bits[2]) << 64) |
-                                (new BigInteger((uint)bits[1]) << 32) |
-                                (uint)bits[0]);
-        if ((bits[3] & int.MinValue) != 0) numerator = -numerator;
-        BigInteger denominator = BigInteger.Pow(10, scale);
-        BigInteger divisor = BigInteger.GreatestCommonDivisor(BigInteger.Abs(numerator), denominator);
-        return (numerator / divisor, denominator / divisor);
+      return (BigInteger.Zero, BigInteger.One);
     }
 
-    private static (BigInteger Numerator, BigInteger Denominator) ParseFraction(string value)
+    string[] parts = value.Split('/');
+    return (BigInteger.Parse(parts[0], CultureInfo.InvariantCulture), BigInteger.Parse(parts[1], CultureInfo.InvariantCulture));
+  }
+
+  private static BigInteger RoundAwayFromZero(BigInteger numerator, BigInteger denominator)
+  {
+    BigInteger sign = numerator.Sign < 0 ? -1 : 1;
+    return sign * BigInteger.DivRem((BigInteger.Abs(numerator) * 2) + denominator, denominator * 2, out _);
+  }
+
+  private static string CanonicalFraction(BigInteger numerator, BigInteger denominator)
+  {
+    if (numerator.IsZero)
     {
-        if (value == "0") return (BigInteger.Zero, BigInteger.One);
-        string[] parts = value.Split('/');
-        return (BigInteger.Parse(parts[0], CultureInfo.InvariantCulture), BigInteger.Parse(parts[1], CultureInfo.InvariantCulture));
+      return "0";
     }
 
-    private static BigInteger RoundAwayFromZero(BigInteger numerator, BigInteger denominator)
+    BigInteger divisor = BigInteger.GreatestCommonDivisor(BigInteger.Abs(numerator), denominator);
+    return $"{numerator / divisor}/{denominator / divisor}";
+  }
+
+  private static decimal ReadDecimal(JsonNode? node, decimal fallback)
+  {
+    return node is JsonValue value && value.TryGetValue<decimal>(out decimal result) ? result : fallback;
+  }
+
+  private static bool ReadBoolean(JsonNode? node)
+  {
+    return node is JsonValue value && value.TryGetValue<bool>(out bool result) && result;
+  }
+
+  private static string SampleText(TimelinePosition position)
+  {
+    return position.Samples.ToString(CultureInfo.InvariantCulture);
+  }
+
+  private static void ValidatePosition(TimelinePosition position)
+  {
+    if (position.Samples < 0)
     {
-        BigInteger sign = numerator.Sign < 0 ? -1 : 1;
-        return sign * BigInteger.DivRem(BigInteger.Abs(numerator) * 2 + denominator, denominator * 2, out _);
+      throw new ArgumentOutOfRangeException(nameof(position));
     }
+  }
 
-    private static string CanonicalFraction(BigInteger numerator, BigInteger denominator)
+  private static void SetOptional(JsonObject target, string propertyName, bool? value)
+  {
+    if (value.HasValue)
     {
-        if (numerator.IsZero) return "0";
-        BigInteger divisor = BigInteger.GreatestCommonDivisor(BigInteger.Abs(numerator), denominator);
-        return $"{numerator / divisor}/{denominator / divisor}";
+      target[propertyName] = value.Value;
     }
-
-    private static decimal ReadDecimal(JsonNode? node, decimal fallback) =>
-        node is JsonValue value && value.TryGetValue<decimal>(out decimal result) ? result : fallback;
-
-    private static bool ReadBoolean(JsonNode? node) =>
-        node is JsonValue value && value.TryGetValue<bool>(out bool result) && result;
-
-    private static string SampleText(TimelinePosition position) => position.Samples.ToString(CultureInfo.InvariantCulture);
-
-    private static void ValidatePosition(TimelinePosition position)
-    {
-        if (position.Samples < 0) throw new ArgumentOutOfRangeException(nameof(position));
-    }
-
-    private static void SetOptional(JsonObject target, string propertyName, bool? value)
-    {
-        if (value.HasValue)
-        {
-            target[propertyName] = value.Value;
-        }
-    }
+  }
 }

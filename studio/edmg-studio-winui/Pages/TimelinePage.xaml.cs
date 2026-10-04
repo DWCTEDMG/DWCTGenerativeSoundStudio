@@ -1,17 +1,10 @@
-using System.Collections.ObjectModel;
-using System.Collections.Immutable;
-using System.Diagnostics;
-using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using EdmgStudio.Core.Models;
-using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Audio;
+using EdmgStudio.Core.Models;
 using EdmgStudio.Core.RemoteControl;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -19,6 +12,13 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using System.Collections.Immutable;
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Windows.Foundation;
 using Windows.Storage;
 using Windows.Storage.Pickers;
@@ -30,845 +30,872 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class TimelinePage : Page
 {
-    private const double DefaultDurationSeconds = 60;
-    private const double FallbackFps = 30;
-    private const double TrackHeight = 56;
-    private const double ClipVerticalInset = 6;
-    private const double MinimumPixelsPerSecond = 12;
-    private const double MaximumPixelsPerSecond = 360;
-    private const string PointerToolSettingKey = "Timeline.PointerTool";
-    private const string ViewStateSettingPrefix = "Timeline.ViewState.";
-    // Timeline playback competes with video-frame decoding and a dense WinUI editing surface.
-    // A 1024-frame shared-mode quantum provides underrun headroom while keeping interaction latency low.
-    private const int DefaultAudioBufferFrames = 1024;
+  private const double DefaultDurationSeconds = 60;
+  private const double FallbackFps = 30;
+  private const double TrackHeight = 56;
+  private const double ClipVerticalInset = 6;
+  private const double MinimumPixelsPerSecond = 12;
+  private const double MaximumPixelsPerSecond = 360;
+  private const string PointerToolSettingKey = "Timeline.PointerTool";
+  private const string ViewStateSettingPrefix = "Timeline.ViewState.";
+  // Timeline playback competes with video-frame decoding and a dense WinUI editing surface.
+  // A 1024-frame shared-mode quantum provides underrun headroom while keeping interaction latency low.
+  private const int DefaultAudioBufferFrames = 1024;
 
-    private readonly DispatcherTimer _transportTimer = new()
+  private readonly DispatcherTimer _transportTimer = new()
+  {
+    Interval = TimeSpan.FromMilliseconds(1000 / FallbackFps)
+  };
+  private EditorHistoryState _editorHistory = new();
+  private long _editorRevision;
+  private readonly ObservableCollection<CameraKeyframeListItem> _cameraKeyframeItems = [];
+  private readonly ApplicationDataContainer? _settings;
+
+  private CancellationTokenSource? _pageCancellation;
+  private CancellationTokenSource? _previewCancellation;
+  private CancellationTokenSource? _automationCancellation;
+  private CancellationTokenSource? _postAlignmentCancellation;
+  private JsonObject? _timelineDocument;
+  private CanonicalProject? _canonicalProject;
+  private JsonObject? _recoveryDocument;
+  private IReadOnlyList<TimelineLaneDocument> _lanes = [];
+  private IReadOnlyList<TimelineCameraKeyframeDocument> _cameraKeyframes = [];
+  private ProjectDto? _project;
+  private string? _loadedProjectId;
+  private string? _selectedLaneId;
+  private string? _selectedTrackId;
+  private string? _selectedCameraKeyframeIdentity;
+  private string? _selectedMarkerId;
+  private string _selectedSourcePath = string.Empty;
+  private int _loadedVariantIndex;
+  private Border? _selectedClipBorder;
+  private Line? _playheadLine;
+  private TimelineLaneDocument? _dragOriginalLane;
+  private TimelineLaneDocument? _dragProvisionalLane;
+  private JsonObject? _dragBeforeSnapshot;
+  private Border? _dragBorder;
+  private uint _dragPointerId;
+  private Point _dragStartPoint;
+  private DragMode _dragMode;
+  private double _durationSeconds = DefaultDurationSeconds;
+  private double _positionSeconds;
+  private double _pixelsPerSecond = 80;
+  private long _previewGeneration;
+  private long _audioGraphGeneration;
+  private string? _configuredAudioGraphKey;
+  private string? _configuredJuceGraphKey;
+  private long _juceSnapshotRevision;
+  private long _juceSeekSequence;
+  private readonly SemaphoreSlim _juceTransportGate = new(1, 1);
+  private bool _isLoaded;
+  private readonly bool _isXamlInitialized;
+  private bool _isBusy;
+  private bool _isAutomationBusy;
+  private bool _isDirty;
+  private bool _rippleEnabled;
+  private bool _positionPointerActive;
+  private bool _updatingPosition;
+  private bool _updatingPointerTool;
+  private bool _updatingZoom;
+  private bool _syncingScroll;
+  private bool _rulerPointerActive;
+  private uint _rulerPointerId;
+  private bool _suppressSessionChange;
+  private bool _suppressCameraSelectionChange;
+  private bool _suppressMarkerSelectionChange;
+  private bool _revisionConflictInterruptedOperation;
+  private bool _suppressProfessionalSelectionChange;
+  private string? _selectedAutomationLaneId;
+  private string? _selectedAutomationPointId;
+  private string? _selectedTakeId;
+  private string? _selectedCompRangeId;
+  private string? _selectedCrossfadeId;
+  private AlignmentResult? _pendingPostAlignment;
+  private string? _pendingPostAlignmentMediaId;
+  private SyncMethod _pendingPostAlignmentMethod;
+  private string? _pendingPostAlignmentProjectId;
+  private long _pendingPostAlignmentRevision;
+  private JsonObject? _pendingPostAlignmentDocument;
+  private ReconformPlan? _pendingReconformPlan;
+  private string? _pendingReconformProjectId;
+  private long _pendingReconformRevision;
+  private JsonObject? _pendingReconformDocument;
+  private bool _creatingAutomationPoint;
+  private bool _creatingCompRange;
+  private string? _selectedVst3InsertId;
+  private readonly Dictionary<string, ImmutableArray<Vst3ParameterDescriptor>> _vst3Parameters = new(StringComparer.Ordinal);
+  private readonly HashSet<string> _activeVst3InstanceIds = new(StringComparer.Ordinal);
+  private AudioAutomationSnapshot _automationSnapshot = new([]);
+  private TimelinePointerTool _pointerTool;
+  private readonly List<IDisposable> _commandRegistrations = [];
+
+  public TimelinePage()
+  {
+    InitializeComponent();
+    ZoomSlider.Maximum = MaximumPixelsPerSecond;
+    ZoomSlider.Minimum = MinimumPixelsPerSecond;
+    ZoomSlider.Value = _pixelsPerSecond;
+    try
     {
-        Interval = TimeSpan.FromMilliseconds(1000 / FallbackFps)
-    };
-    private EditorHistoryState _editorHistory = new();
-    private long _editorRevision;
-    private readonly ObservableCollection<CameraKeyframeListItem> _cameraKeyframeItems = [];
-    private readonly ApplicationDataContainer? _settings;
-
-    private CancellationTokenSource? _pageCancellation;
-    private CancellationTokenSource? _previewCancellation;
-    private CancellationTokenSource? _automationCancellation;
-    private CancellationTokenSource? _postAlignmentCancellation;
-    private JsonObject? _timelineDocument;
-    private CanonicalProject? _canonicalProject;
-    private JsonObject? _recoveryDocument;
-    private IReadOnlyList<TimelineLaneDocument> _lanes = [];
-    private IReadOnlyList<TimelineCameraKeyframeDocument> _cameraKeyframes = [];
-    private ProjectDto? _project;
-    private string? _loadedProjectId;
-    private string? _selectedLaneId;
-    private string? _selectedTrackId;
-    private string? _selectedCameraKeyframeIdentity;
-    private string? _selectedMarkerId;
-    private string _selectedSourcePath = string.Empty;
-    private int _loadedVariantIndex;
-    private Border? _selectedClipBorder;
-    private Line? _playheadLine;
-    private TimelineLaneDocument? _dragOriginalLane;
-    private TimelineLaneDocument? _dragProvisionalLane;
-    private JsonObject? _dragBeforeSnapshot;
-    private Border? _dragBorder;
-    private uint _dragPointerId;
-    private Point _dragStartPoint;
-    private DragMode _dragMode;
-    private double _durationSeconds = DefaultDurationSeconds;
-    private double _positionSeconds;
-    private double _pixelsPerSecond = 80;
-    private long _previewGeneration;
-    private long _audioGraphGeneration;
-    private string? _configuredAudioGraphKey;
-    private bool _isLoaded;
-    private bool _isXamlInitialized;
-    private bool _isBusy;
-    private bool _isAutomationBusy;
-    private bool _isDirty;
-    private bool _rippleEnabled;
-    private bool _positionPointerActive;
-    private bool _updatingPosition;
-    private bool _updatingPointerTool;
-    private bool _updatingZoom;
-    private bool _syncingScroll;
-    private bool _rulerPointerActive;
-    private uint _rulerPointerId;
-    private bool _suppressSessionChange;
-    private bool _suppressCameraSelectionChange;
-    private bool _suppressMarkerSelectionChange;
-    private bool _revisionConflictInterruptedOperation;
-    private bool _suppressProfessionalSelectionChange;
-    private string? _selectedAutomationLaneId;
-    private string? _selectedAutomationPointId;
-    private string? _selectedTakeId;
-    private string? _selectedCompRangeId;
-    private string? _selectedCrossfadeId;
-    private AlignmentResult? _pendingPostAlignment;
-    private string? _pendingPostAlignmentMediaId;
-    private SyncMethod _pendingPostAlignmentMethod;
-    private string? _pendingPostAlignmentProjectId;
-    private long _pendingPostAlignmentRevision;
-    private JsonObject? _pendingPostAlignmentDocument;
-    private ReconformPlan? _pendingReconformPlan;
-    private string? _pendingReconformProjectId;
-    private long _pendingReconformRevision;
-    private JsonObject? _pendingReconformDocument;
-    private bool _creatingAutomationPoint;
-    private bool _creatingCompRange;
-    private string? _selectedVst3InsertId;
-    private readonly Dictionary<string, ImmutableArray<Vst3ParameterDescriptor>> _vst3Parameters = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _activeVst3InstanceIds = new(StringComparer.Ordinal);
-    private AudioAutomationSnapshot _automationSnapshot = new([]);
-    private TimelinePointerTool _pointerTool;
-    private readonly List<IDisposable> _commandRegistrations = [];
-
-    public TimelinePage()
+      _settings = ApplicationData.Current.LocalSettings;
+    }
+    catch
     {
-        InitializeComponent();
-        ZoomSlider.Maximum = MaximumPixelsPerSecond;
-        ZoomSlider.Minimum = MinimumPixelsPerSecond;
-        ZoomSlider.Value = _pixelsPerSecond;
+      _settings = null;
+    }
+
+    _pointerTool = LoadPointerTool();
+    CameraKeyframeListView.ItemsSource = _cameraKeyframeItems;
+    AddHandler(KeyDownEvent, new KeyEventHandler(TimelinePage_KeyDown), true);
+    Loaded += OnLoaded;
+    Unloaded += OnUnloaded;
+    _transportTimer.Tick += TransportTimer_Tick;
+    ApplyPointerToolUi();
+    UpdateTransportUi();
+    UpdateCommandState();
+    _isXamlInitialized = true;
+  }
+
+  private async void OnLoaded(object sender, RoutedEventArgs e)
+  {
+    if (_isLoaded)
+    {
+      return;
+    }
+
+    _isLoaded = true;
+    App.Services.Session.Changed += Session_Changed;
+    App.Services.Session.ProjectContentChanged += Session_ProjectContentChanged;
+    App.Services.Transport.StateChanged += Transport_StateChanged;
+    App.Services.AudioPreviewEngineSelection.SelectionChanged += AudioPreviewEngineSelection_Changed;
+    App.Services.Commands.StateChanged += Commands_StateChanged;
+    App.Services.RemoteControl.Changed += RemoteControl_Changed;
+    RegisterRemoteCommands();
+    RefreshQuickControls();
+    await LoadActiveProjectAsync();
+  }
+
+  private void OnUnloaded(object sender, RoutedEventArgs e)
+  {
+    if (!_isLoaded)
+    {
+      return;
+    }
+
+    _isLoaded = false;
+    App.Services.Session.Changed -= Session_Changed;
+    App.Services.Session.ProjectContentChanged -= Session_ProjectContentChanged;
+    App.Services.Transport.StateChanged -= Transport_StateChanged;
+    App.Services.AudioPreviewEngineSelection.SelectionChanged -= AudioPreviewEngineSelection_Changed;
+    App.Services.Commands.StateChanged -= Commands_StateChanged;
+    App.Services.RemoteControl.Changed -= RemoteControl_Changed;
+    foreach (IDisposable registration in _commandRegistrations)
+    {
+      registration.Dispose();
+    }
+
+    _commandRegistrations.Clear();
+    PersistViewState();
+    _transportTimer.Stop();
+    CancelPreview();
+    _automationCancellation?.Cancel();
+    _automationCancellation?.Dispose();
+    _automationCancellation = null;
+    CancelPostAlignment();
+    _pageCancellation?.Cancel();
+    _pageCancellation?.Dispose();
+    _pageCancellation = null;
+    _ = Interlocked.Increment(ref _audioGraphGeneration);
+    _configuredJuceGraphKey = null;
+    _ = StopJucePreviewAsync();
+    _ = RemoveAllVst3WorkersAsync();
+  }
+
+  private void AudioPreviewEngineSelection_Changed(object? sender, AudioPreviewEngine engine)
+  {
+    _configuredAudioGraphKey = null;
+    _configuredJuceGraphKey = null;
+    _ = Interlocked.Increment(ref _audioGraphGeneration);
+    if (_isLoaded && _pageCancellation is { } cancellation)
+    {
+      _ = ConfigureAudioEngineAsync(cancellation.Token);
+    }
+  }
+
+  private void Session_Changed(object? sender, EventArgs e)
+  {
+    if (!_isLoaded || _suppressSessionChange)
+    {
+      return;
+    }
+
+    if (!DispatcherQueue.TryEnqueue(() => { _ = ObserveSessionChangeAsync(); }))
+    {
+      CrashLogger.Write("Timeline session change could not be dispatched because the page dispatcher is unavailable.");
+    }
+  }
+
+  private void Session_ProjectContentChanged(object? sender, ProjectContentChangedEventArgs e)
+  {
+    if (!_isLoaded || _isDirty || !string.Equals(e.ProjectId, _loadedProjectId, StringComparison.Ordinal))
+    {
+      return;
+    }
+
+    if (!DispatcherQueue.TryEnqueue(() => { _ = LoadActiveProjectAsync(forceReload: true); }))
+    {
+      CrashLogger.Write("Timeline project-content refresh could not be dispatched.");
+    }
+  }
+
+  private async Task ObserveSessionChangeAsync()
+  {
+    try
+    {
+      await HandleSessionChangeAsync();
+    }
+    catch (Exception ex)
+    {
+      CrashLogger.Write("Timeline session change failed.", ex);
+      ShowInfo(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+    }
+  }
+
+  private async Task HandleSessionChangeAsync()
+  {
+    string requestedProjectId = App.Services.Session.ActiveProjectId;
+    if (string.Equals(requestedProjectId, _loadedProjectId, StringComparison.Ordinal))
+    {
+      _loadedVariantIndex = App.Services.Session.SelectedVariantIndex;
+      RefreshWorkflowPlanSummary();
+      UpdateCommandState();
+      return;
+    }
+
+    if (_isDirty && !string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      bool replace = await ConfirmAsync(
+          "Switch Timeline project?",
+          "The active Workspace project changed. Switch projects and discard the current unsaved Timeline edits?",
+          "Switch project");
+      if (!replace)
+      {
+        _suppressSessionChange = true;
         try
         {
-            _settings = ApplicationData.Current.LocalSettings;
-        }
-        catch
-        {
-            _settings = null;
-        }
-
-        _pointerTool = LoadPointerTool();
-        CameraKeyframeListView.ItemsSource = _cameraKeyframeItems;
-        AddHandler(KeyDownEvent, new KeyEventHandler(TimelinePage_KeyDown), true);
-        Loaded += OnLoaded;
-        Unloaded += OnUnloaded;
-        _transportTimer.Tick += TransportTimer_Tick;
-        ApplyPointerToolUi();
-        UpdateTransportUi();
-        UpdateCommandState();
-        _isXamlInitialized = true;
-    }
-
-    private async void OnLoaded(object sender, RoutedEventArgs e)
-    {
-        if (_isLoaded)
-        {
-            return;
-        }
-
-        _isLoaded = true;
-        App.Services.Session.Changed += Session_Changed;
-        App.Services.Session.ProjectContentChanged += Session_ProjectContentChanged;
-        App.Services.Transport.StateChanged += Transport_StateChanged;
-        App.Services.Commands.StateChanged += Commands_StateChanged;
-        App.Services.RemoteControl.Changed += RemoteControl_Changed;
-        RegisterRemoteCommands();
-        RefreshQuickControls();
-        await LoadActiveProjectAsync();
-    }
-
-    private void OnUnloaded(object sender, RoutedEventArgs e)
-    {
-        if (!_isLoaded)
-        {
-            return;
-        }
-
-        _isLoaded = false;
-        App.Services.Session.Changed -= Session_Changed;
-        App.Services.Session.ProjectContentChanged -= Session_ProjectContentChanged;
-        App.Services.Transport.StateChanged -= Transport_StateChanged;
-        App.Services.Commands.StateChanged -= Commands_StateChanged;
-        App.Services.RemoteControl.Changed -= RemoteControl_Changed;
-        foreach (IDisposable registration in _commandRegistrations) registration.Dispose();
-        _commandRegistrations.Clear();
-        PersistViewState();
-        _transportTimer.Stop();
-        CancelPreview();
-        _automationCancellation?.Cancel();
-        _automationCancellation?.Dispose();
-        _automationCancellation = null;
-        CancelPostAlignment();
-        _pageCancellation?.Cancel();
-        _pageCancellation?.Dispose();
-        _pageCancellation = null;
-        Interlocked.Increment(ref _audioGraphGeneration);
-        _ = RemoveAllVst3WorkersAsync();
-    }
-
-    private void Session_Changed(object? sender, EventArgs e)
-    {
-        if (!_isLoaded || _suppressSessionChange)
-        {
-            return;
-        }
-
-        if (!DispatcherQueue.TryEnqueue(() => { _ = ObserveSessionChangeAsync(); }))
-            CrashLogger.Write("Timeline session change could not be dispatched because the page dispatcher is unavailable.");
-    }
-
-    private void Session_ProjectContentChanged(object? sender, ProjectContentChangedEventArgs e)
-    {
-        if (!_isLoaded || _isDirty || !string.Equals(e.ProjectId, _loadedProjectId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        if (!DispatcherQueue.TryEnqueue(() => { _ = LoadActiveProjectAsync(forceReload: true); }))
-            CrashLogger.Write("Timeline project-content refresh could not be dispatched.");
-    }
-
-    private async Task ObserveSessionChangeAsync()
-    {
-        try
-        {
-            await HandleSessionChangeAsync();
-        }
-        catch (Exception ex)
-        {
-            CrashLogger.Write("Timeline session change failed.", ex);
-            ShowInfo(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
-        }
-    }
-
-    private async Task HandleSessionChangeAsync()
-    {
-        string requestedProjectId = App.Services.Session.ActiveProjectId;
-        if (string.Equals(requestedProjectId, _loadedProjectId, StringComparison.Ordinal))
-        {
-            _loadedVariantIndex = App.Services.Session.SelectedVariantIndex;
-            RefreshWorkflowPlanSummary();
-            UpdateCommandState();
-            return;
-        }
-
-        if (_isDirty && !string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            bool replace = await ConfirmAsync(
-                "Switch Timeline project?",
-                "The active Workspace project changed. Switch projects and discard the current unsaved Timeline edits?",
-                "Switch project");
-            if (!replace)
-            {
-                _suppressSessionChange = true;
-                try
-                {
-                    App.Services.Session.ActiveProjectId = _loadedProjectId;
-                    App.Services.Session.SelectedVariantIndex = _loadedVariantIndex;
-                }
-                finally
-                {
-                    _suppressSessionChange = false;
-                }
-
-                ShowAutomationInfo(
-                    "Project switch canceled. Your Timeline edits are still loaded.",
-                    InfoBarSeverity.Informational);
-                RefreshWorkflowPlanSummary();
-                UpdateCommandState();
-                return;
-            }
-        }
-
-        await LoadActiveProjectAsync();
-    }
-
-    private async Task LoadActiveProjectAsync(bool forceReload = false)
-    {
-        string? projectId = App.Services.Session.ActiveProjectId;
-        if (string.IsNullOrWhiteSpace(projectId))
-        {
-            ClearTimeline("Select a project in Projects to begin editing.");
-            return;
-        }
-
-        if (!forceReload &&
-            _isBusy &&
-            string.Equals(_loadedProjectId, projectId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        CancelPostAlignment();
-        _pageCancellation?.Cancel();
-        _pageCancellation?.Dispose();
-        _pageCancellation = new CancellationTokenSource();
-        CancellationToken cancellationToken = _pageCancellation.Token;
-
-        SetBusy(true);
-        StopPlayback();
-        CancelPreview();
-        await RemoveAllVst3WorkersAsync();
-        ResetAiEditProposal();
-        SourceAssetComboBox.ItemsSource = null;
-        SourceAssetComboBox.SelectedItem = null;
-        SelectSource(string.Empty);
-        PageInfoBar.IsOpen = false;
-        StatusText.Text = "Loading timeline...";
-
-        try
-        {
-            var projectTask = App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-            var timelineTask = App.Services.ApiClient.GetEditorStateAsync(projectId, cancellationToken);
-            var recoveryTask = App.Services.ApiClient.GetRecoveryAsync(projectId, cancellationToken);
-            await Task.WhenAll(projectTask, timelineTask, recoveryTask);
-
-            _project = projectTask.Result.Project;
-            _loadedProjectId = projectId;
-            _loadedVariantIndex = App.Services.Session.SelectedVariantIndex;
-            ApplyEditorState(timelineTask.Result);
-            _recoveryDocument = JsonNode.Parse(recoveryTask.Result.GetRawText()) as JsonObject;
-            _lanes = TimelineProjection.Project(_timelineDocument);
-            _canonicalProject = ProjectTimelineContracts.FromTimeline(_project, _timelineDocument);
-            _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
-            _durationSeconds = ResolveDuration(_project, _lanes);
-            RestoreViewState(projectId);
-            _selectedCameraKeyframeIdentity = null;
-            _isDirty = false;
-
-            RefreshEditor(updateRawText: true);
-            ApplyRestoredViewport();
-            SyncTransportConfiguration();
-            ApplyLoopToTransport();
-            await ConfigureAudioEngineAsync(cancellationToken);
-            RefreshRecoverySummary();
-            RefreshWorkflowPlanSummary();
-            try
-            {
-                await LoadWorkflowAssetsAsync(cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                CrashLogger.Write($"Timeline workflow assets could not be loaded for project '{projectId}'.", ex);
-                ShowAutomationInfo(
-                    $"Timeline loaded, but project sources could not be refreshed: {ex.Message}",
-                    InfoBarSeverity.Warning);
-            }
-
-            StatusText.Text = "Timeline ready.";
-            await RefreshPreviewAsync(force: false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            CrashLogger.Write($"Timeline could not be loaded for project '{projectId}'.", ex);
-            ClearTimeline("The timeline could not be loaded.");
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
+          App.Services.Session.ActiveProjectId = _loadedProjectId;
+          App.Services.Session.SelectedVariantIndex = _loadedVariantIndex;
         }
         finally
         {
-            SetBusy(false);
-        }
-    }
-
-    private static JsonObject ExtractTimeline(JsonElement response)
-    {
-        JsonElement timeline = response;
-        if (response.ValueKind == JsonValueKind.Object &&
-            response.TryGetProperty("timeline", out JsonElement wrappedTimeline))
-        {
-            timeline = wrappedTimeline;
+          _suppressSessionChange = false;
         }
 
-        return JsonNode.Parse(timeline.GetRawText()) as JsonObject
-            ?? throw new JsonException("The backend returned an invalid timeline document.");
-    }
-
-    private static double ResolveDuration(
-        ProjectDto? project,
-        IReadOnlyList<TimelineLaneDocument> lanes)
-    {
-        if (project?.DurationSeconds is double projectDuration &&
-            double.IsFinite(projectDuration) &&
-            projectDuration > 0)
-        {
-            return projectDuration;
-        }
-
-        double laneDuration = lanes.Count == 0 ? 0 : lanes.Max(lane => lane.EndSeconds);
-        return laneDuration > 0 ? laneDuration : DefaultDurationSeconds;
-    }
-
-    private void ClearTimeline(string message)
-    {
-        _transportTimer.Stop();
-        App.Services.Transport.Stop();
-        CancelPreview();
-        _loadedProjectId = null;
-        _project = null;
-        _timelineDocument = null;
-        _canonicalProject = null;
-        _configuredAudioGraphKey = null;
-        Interlocked.Increment(ref _audioGraphGeneration);
-        _recoveryDocument = null;
-        _lanes = [];
-        _cameraKeyframes = [];
-        _selectedLaneId = null;
-        _selectedTrackId = null;
-        _selectedCameraKeyframeIdentity = null;
-        _selectedMarkerId = null;
-        _selectedAutomationLaneId = null;
-        _selectedAutomationPointId = null;
-        _selectedTakeId = null;
-        _selectedCompRangeId = null;
-        _selectedCrossfadeId = null;
-        _pendingPostAlignment = null;
-        _pendingPostAlignmentMediaId = null;
-        _pendingPostAlignmentDocument = null;
-        _pendingReconformPlan = null;
-        _pendingReconformDocument = null;
-        _creatingAutomationPoint = false;
-        _creatingCompRange = false;
-        _automationSnapshot = new([]);
-        _selectedSourcePath = string.Empty;
-        _editorHistory = new();
-        _editorRevision = 0;
-        _isDirty = false;
-        _positionSeconds = 0;
-        ResetAiEditProposal();
-        ProjectText.Text = "No active project";
-        DurationSummaryText.Text = message;
-        TimelineTextBox.Text = string.Empty;
-        BackupSummaryText.Text = "No recovery information is available.";
-        StatusText.Text = message;
-        TrackHeadersPanel.Children.Clear();
-        RulerCanvas.Children.Clear();
-        TimelineCanvas.Children.Clear();
-        _cameraKeyframeItems.Clear();
-        CameraKeyframeListView.SelectedItem = null;
-        MarkerComboBox.ItemsSource = null;
-        MarkerComboBox.SelectedItem = null;
-        SelectedClipTitle.Text = "No clip selected";
-        SelectedClipSubtitle.Text = "Select a clip to inspect its timing and media properties.";
-        SelectedMixerTrackTitle.Text = "No track selected";
-        SelectedMixerTrackSubtitle.Text = "Select a track header or a clip to edit its channel.";
-        ProfessionalSelectionText.Text = "Select a native track or clip to begin.";
-        ProfessionalEditStatusText.Text = "No advanced edit has run.";
-        AutomationLaneListView.ItemsSource = null;
-        AutomationPointListView.ItemsSource = null;
-        TakeListView.ItemsSource = null;
-        CompRangeListView.ItemsSource = null;
-        CrossfadePartnerComboBox.ItemsSource = null;
-        SetProfessionalEditingEnabled(false, false, false, false);
-        ResetPostProductionEditor(message);
-        PreviewSurface.ShowEmpty(message);
-        PreviewHintText.Text = message;
-        SourceAssetComboBox.ItemsSource = null;
-        SourceAssetComboBox.SelectedItem = null;
-        SelectedSourceText.Text = "No source selected.";
-        RefreshCameraEditor();
+        ShowAutomationInfo(
+            "Project switch canceled. Your Timeline edits are still loaded.",
+            InfoBarSeverity.Informational);
         RefreshWorkflowPlanSummary();
         UpdateCommandState();
+        return;
+      }
     }
 
-    private void RefreshEditor(bool updateRawText)
+    await LoadActiveProjectAsync();
+  }
+
+  private async Task LoadActiveProjectAsync(bool forceReload = false)
+  {
+    string? projectId = App.Services.Session.ActiveProjectId;
+    if (string.IsNullOrWhiteSpace(projectId))
     {
-        if (_timelineDocument is null)
-        {
-            return;
-        }
-
-        InvalidatePostPreviews();
-
-        _lanes = TimelineProjection.Project(_timelineDocument);
-        _canonicalProject = _project is null ? null : ProjectTimelineContracts.FromTimeline(_project, _timelineDocument);
-        _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
-        _durationSeconds = Math.Max(
-            TimelineProjection.MinimumDurationSeconds,
-            ResolveDuration(_project, _lanes));
-        _positionSeconds = Math.Clamp(_positionSeconds, 0, _durationSeconds);
-
-        if (_selectedLaneId is not null &&
-            !_lanes.Any(lane => lane.StableId == _selectedLaneId))
-        {
-            _selectedLaneId = null;
-        }
-        if (_selectedCameraKeyframeIdentity is not null &&
-            !_cameraKeyframes.Any(
-                keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity))
-        {
-            _selectedCameraKeyframeIdentity = null;
-        }
-        if (_selectedMarkerId is not null &&
-            _canonicalProject?.Markers.All(marker => marker.Id != _selectedMarkerId) != false)
-        {
-            _selectedMarkerId = null;
-        }
-        if (_selectedTrackId is not null &&
-            _canonicalProject?.Tracks.All(track => track.Id != _selectedTrackId) != false)
-        {
-            _selectedTrackId = null;
-        }
-        if (_selectedTrackId is null && SelectedLane is { IsLayer: false } selectedLane)
-        {
-            _selectedTrackId = _canonicalProject?.Tracks.ElementAtOrDefault(selectedLane.TrackIndex)?.Id;
-        }
-        _selectedTrackId ??= _canonicalProject?.Tracks.FirstOrDefault()?.Id;
-
-        ProjectText.Text = _project?.Name ?? _loadedProjectId ?? "Timeline";
-        int clipCount = _lanes.Count(lane => !lane.IsLayer);
-        int overlayCount = _lanes.Count(lane => lane.IsLayer);
-        DurationSummaryText.Text =
-            $"{FormatClock(_durationSeconds)}  •  {clipCount} clips  •  {overlayCount} overlays  •  {TrackCount} tracks";
-        PositionSlider.Maximum = _durationSeconds;
-        CameraTimeNumberBox.Maximum = _durationSeconds;
-        LoopInNumberBox.Maximum = _durationSeconds;
-        LoopOutNumberBox.Maximum = _durationSeconds;
-        if (!double.IsFinite(LoopOutNumberBox.Value) ||
-            LoopOutNumberBox.Value <= 0 ||
-            LoopOutNumberBox.Value > _durationSeconds)
-        {
-            LoopOutNumberBox.Value = _durationSeconds;
-        }
-
-        if (updateRawText)
-        {
-            TimelineTextBox.Text = _timelineDocument.ToJsonString(new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-        }
-
-        RenderTrackHeaders();
-        RenderRuler();
-        RenderTimeline();
-        PopulateInspector();
-        RefreshMixerEditor();
-        RefreshProfessionalEditingEditor();
-        RefreshPostProductionEditor();
-        RefreshMarkers();
-        RefreshCameraEditor();
-        UpdateTransportUi();
-        UpdateCommandState();
+      ClearTimeline("Select a project in Projects to begin editing.");
+      return;
     }
 
-    private int TrackCount =>
-        Math.Max(
-            1,
-            Math.Max(
-                _canonicalProject?.Tracks.Count ?? 0,
-                _lanes
-                .Where(lane => !lane.IsLayer)
-                .Select(lane => lane.TrackIndex + 1)
-                .DefaultIfEmpty(1)
-                .Max()));
-
-    private int OverlayVisualTrackIndex => TrackCount;
-
-    private int CameraVisualTrackIndex => TrackCount + 1;
-
-    private int VisualTrackCount => TrackCount + 2;
-
-    private double SurfaceWidth =>
-        Math.Max(720, Math.Ceiling(_durationSeconds * _pixelsPerSecond));
-
-    private void RenderTrackHeaders()
+    if (!forceReload &&
+        _isBusy &&
+        string.Equals(_loadedProjectId, projectId, StringComparison.Ordinal))
     {
-        TrackHeadersPanel.Children.Clear();
-        JsonObject? timelineDocument = _timelineDocument;
-        for (int trackIndex = 0; trackIndex < TrackCount; trackIndex++)
-        {
-            Track? track = _canonicalProject?.Tracks.ElementAtOrDefault(trackIndex);
-            string? trackId = track?.Id;
-            bool selected = trackId is not null && string.Equals(trackId, _selectedTrackId, StringComparison.Ordinal);
-            var panel = new Grid
-            {
-                Tag = trackId,
-                Height = TrackHeight,
-                Padding = new Thickness(12, 7, 10, 6),
-                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                BorderThickness = new Thickness(selected ? 3 : 0, 0, 0, 1),
-                Background = selected
-                    ? (Brush)Application.Current.Resources["AccentFillColorTertiaryBrush"]
-                    : null
-            };
-            panel.PointerPressed += TrackHeader_PointerPressed;
-            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            panel.ColumnDefinitions.Add(new ColumnDefinition());
-            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var title = new TextBlock
-            {
-                Text = track?.Name ?? $"Track {trackIndex + 1}",
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            };
-            var detail = new TextBlock
-            {
-                Text = $"{_lanes.Count(lane => !lane.IsLayer && lane.TrackIndex == trackIndex)} clips",
-                Opacity = 0.62,
-                FontSize = 11
-            };
-            Grid.SetRow(detail, 1);
-            var lockButton = new Button
-            {
-                Tag = trackIndex,
-                Content = timelineDocument is not null &&
-                          TimelineProjection.IsTrackLocked(timelineDocument, trackIndex)
-                    ? "Unlock"
-                    : "Lock",
-                Padding = new Thickness(7, 2, 7, 2),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(lockButton, 1);
-            Grid.SetRowSpan(lockButton, 2);
-            lockButton.Click += TrackLockButton_Click;
-            panel.Children.Add(title);
-            panel.Children.Add(detail);
-            panel.Children.Add(lockButton);
-            TrackHeadersPanel.Children.Add(panel);
-        }
-
-        var overlayPanel = new Grid
-        {
-            Height = TrackHeight,
-            Padding = new Thickness(12, 7, 10, 6),
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-            BorderThickness = new Thickness(0, 0, 0, 1)
-        };
-        overlayPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        overlayPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var overlayTitle = new TextBlock
-        {
-            Text = "Overlays",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis
-        };
-        var overlayDetail = new TextBlock
-        {
-            Text = $"{_lanes.Count(lane => lane.IsLayer)} layers",
-            Opacity = 0.62,
-            FontSize = 11
-        };
-        Grid.SetRow(overlayDetail, 1);
-        overlayPanel.Children.Add(overlayTitle);
-        overlayPanel.Children.Add(overlayDetail);
-        TrackHeadersPanel.Children.Add(overlayPanel);
-
-        var cameraPanel = new Grid
-        {
-            Height = TrackHeight,
-            Padding = new Thickness(12, 7, 10, 6),
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-            BorderThickness = new Thickness(0, 0, 0, 1)
-        };
-        cameraPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        cameraPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var cameraTitle = new TextBlock
-        {
-            Text = "Camera",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis
-        };
-        var cameraDetail = new TextBlock
-        {
-            Text = $"{_cameraKeyframes.Count} keyframes",
-            Opacity = 0.62,
-            FontSize = 11
-        };
-        Grid.SetRow(cameraDetail, 1);
-        cameraPanel.Children.Add(cameraTitle);
-        cameraPanel.Children.Add(cameraDetail);
-        TrackHeadersPanel.Children.Add(cameraPanel);
+      return;
     }
 
-    private void RenderRuler()
+    CancelPostAlignment();
+    _pageCancellation?.Cancel();
+    _pageCancellation?.Dispose();
+    _pageCancellation = new CancellationTokenSource();
+    CancellationToken cancellationToken = _pageCancellation.Token;
+
+    SetBusy(true);
+    StopPlayback();
+    CancelPreview();
+    await RemoveAllVst3WorkersAsync();
+    ResetAiEditProposal();
+    SourceAssetComboBox.ItemsSource = null;
+    SourceAssetComboBox.SelectedItem = null;
+    SelectSource(string.Empty);
+    PageInfoBar.IsOpen = false;
+    StatusText.Text = "Loading timeline...";
+
+    try
     {
-        RulerCanvas.Children.Clear();
-        RulerCanvas.Width = SurfaceWidth;
-        double labelStep = ResolveRulerStep();
-        foreach (double seconds in TimelineViewport.RulerTicks(
-            _durationSeconds, _pixelsPerSecond, TimelineScroll.HorizontalOffset,
-            TimelineScroll.ViewportWidth, labelStep))
-        {
-            double x = seconds * _pixelsPerSecond;
-            var line = new Line
-            {
-                X1 = x,
-                X2 = x,
-                Y1 = 27,
-                Y2 = 36,
-                Stroke = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-                StrokeThickness = 1
-            };
-            var label = new TextBlock
-            {
-                Text = FormatRulerTime(seconds),
-                FontSize = 10,
-                Opacity = 0.68
-            };
-            Canvas.SetLeft(label, x + 4);
-            Canvas.SetTop(label, 5);
-            RulerCanvas.Children.Add(line);
-            RulerCanvas.Children.Add(label);
-        }
+      Task<ProjectResponse> projectTask = App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+      Task<EditorState> timelineTask = App.Services.ApiClient.GetEditorStateAsync(projectId, cancellationToken);
+      Task<JsonElement> recoveryTask = App.Services.ApiClient.GetRecoveryAsync(projectId, cancellationToken);
+      await Task.WhenAll(projectTask, timelineTask, recoveryTask);
 
-        if (_canonicalProject is null)
-        {
-            return;
-        }
+      _project = projectTask.Result.Project;
+      _loadedProjectId = projectId;
+      _loadedVariantIndex = App.Services.Session.SelectedVariantIndex;
+      ApplyEditorState(timelineTask.Result);
+      _recoveryDocument = JsonNode.Parse(recoveryTask.Result.GetRawText()) as JsonObject;
+      _lanes = TimelineProjection.Project(_timelineDocument);
+      _canonicalProject = ProjectTimelineContracts.FromTimeline(_project, _timelineDocument);
+      _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
+      _durationSeconds = ResolveDuration(_project, _lanes);
+      RestoreViewState(projectId);
+      _selectedCameraKeyframeIdentity = null;
+      _isDirty = false;
 
-        foreach (TimelineMarker marker in _canonicalProject.Markers)
-        {
-            double x = _canonicalProject.Timebase.ToSeconds(marker.Position) * _pixelsPerSecond;
-            var flag = new TextBlock
-            {
-                Text = "\u25bc",
-                Tag = marker.Id,
-                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
-                FontSize = 13,
-            };
-            ToolTipService.SetToolTip(flag, marker.Name);
-            Canvas.SetLeft(flag, Math.Max(0, x - 6));
-            Canvas.SetTop(flag, 18);
-            RulerCanvas.Children.Add(flag);
-        }
+      RefreshEditor(updateRawText: true);
+      ApplyRestoredViewport();
+      SyncTransportConfiguration();
+      ApplyLoopToTransport();
+      await ConfigureAudioEngineAsync(cancellationToken);
+      RefreshRecoverySummary();
+      RefreshWorkflowPlanSummary();
+      try
+      {
+        await LoadWorkflowAssetsAsync(cancellationToken);
+      }
+      catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+      {
+        throw;
+      }
+      catch (Exception ex)
+      {
+        CrashLogger.Write($"Timeline workflow assets could not be loaded for project '{projectId}'.", ex);
+        ShowAutomationInfo(
+            $"Timeline loaded, but project sources could not be refreshed: {ex.Message}",
+            InfoBarSeverity.Warning);
+      }
+
+      StatusText.Text = "Timeline ready.";
+      await RefreshPreviewAsync(force: false);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+      CrashLogger.Write($"Timeline could not be loaded for project '{projectId}'.", ex);
+      ClearTimeline("The timeline could not be loaded.");
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private static JsonObject ExtractTimeline(JsonElement response)
+  {
+    JsonElement timeline = response;
+    if (response.ValueKind == JsonValueKind.Object &&
+        response.TryGetProperty("timeline", out JsonElement wrappedTimeline))
+    {
+      timeline = wrappedTimeline;
     }
 
-    private double ResolveRulerStep()
-    {
-        ReadOnlySpan<double> candidates = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
-        foreach (double candidate in candidates)
-        {
-            if (candidate * _pixelsPerSecond >= 76)
-            {
-                return candidate;
-            }
-        }
+    return JsonNode.Parse(timeline.GetRawText()) as JsonObject
+        ?? throw new JsonException("The backend returned an invalid timeline document.");
+  }
 
-        return 600;
+  private static double ResolveDuration(
+      ProjectDto? project,
+      IReadOnlyList<TimelineLaneDocument> lanes)
+  {
+    if (project?.DurationSeconds is double projectDuration &&
+        double.IsFinite(projectDuration) &&
+        projectDuration > 0)
+    {
+      return projectDuration;
     }
 
-    private void RenderTimeline()
+    double laneDuration = lanes.Count == 0 ? 0 : lanes.Max(lane => lane.EndSeconds);
+    return laneDuration > 0 ? laneDuration : DefaultDurationSeconds;
+  }
+
+  private void ClearTimeline(string message)
+  {
+    _transportTimer.Stop();
+    App.Services.Transport.Stop();
+    CancelPreview();
+    _loadedProjectId = null;
+    _project = null;
+    _timelineDocument = null;
+    _canonicalProject = null;
+    _configuredAudioGraphKey = null;
+    _ = Interlocked.Increment(ref _audioGraphGeneration);
+    _recoveryDocument = null;
+    _lanes = [];
+    _cameraKeyframes = [];
+    _selectedLaneId = null;
+    _selectedTrackId = null;
+    _selectedCameraKeyframeIdentity = null;
+    _selectedMarkerId = null;
+    _selectedAutomationLaneId = null;
+    _selectedAutomationPointId = null;
+    _selectedTakeId = null;
+    _selectedCompRangeId = null;
+    _selectedCrossfadeId = null;
+    _pendingPostAlignment = null;
+    _pendingPostAlignmentMediaId = null;
+    _pendingPostAlignmentDocument = null;
+    _pendingReconformPlan = null;
+    _pendingReconformDocument = null;
+    _creatingAutomationPoint = false;
+    _creatingCompRange = false;
+    _automationSnapshot = new([]);
+    _selectedSourcePath = string.Empty;
+    _editorHistory = new();
+    _editorRevision = 0;
+    _isDirty = false;
+    _positionSeconds = 0;
+    ResetAiEditProposal();
+    ProjectText.Text = "No active project";
+    DurationSummaryText.Text = message;
+    TimelineTextBox.Text = string.Empty;
+    BackupSummaryText.Text = "No recovery information is available.";
+    StatusText.Text = message;
+    TrackHeadersPanel.Children.Clear();
+    RulerCanvas.Children.Clear();
+    TimelineCanvas.Children.Clear();
+    _cameraKeyframeItems.Clear();
+    CameraKeyframeListView.SelectedItem = null;
+    MarkerComboBox.ItemsSource = null;
+    MarkerComboBox.SelectedItem = null;
+    SelectedClipTitle.Text = "No clip selected";
+    SelectedClipSubtitle.Text = "Select a clip to inspect its timing and media properties.";
+    SelectedMixerTrackTitle.Text = "No track selected";
+    SelectedMixerTrackSubtitle.Text = "Select a track header or a clip to edit its channel.";
+    ProfessionalSelectionText.Text = "Select a native track or clip to begin.";
+    ProfessionalEditStatusText.Text = "No advanced edit has run.";
+    AutomationLaneListView.ItemsSource = null;
+    AutomationPointListView.ItemsSource = null;
+    TakeListView.ItemsSource = null;
+    CompRangeListView.ItemsSource = null;
+    CrossfadePartnerComboBox.ItemsSource = null;
+    SetProfessionalEditingEnabled(false, false, false, false);
+    ResetPostProductionEditor(message);
+    PreviewSurface.ShowEmpty(message);
+    PreviewHintText.Text = message;
+    SourceAssetComboBox.ItemsSource = null;
+    SourceAssetComboBox.SelectedItem = null;
+    SelectedSourceText.Text = "No source selected.";
+    RefreshCameraEditor();
+    RefreshWorkflowPlanSummary();
+    UpdateCommandState();
+  }
+
+  private void RefreshEditor(bool updateRawText)
+  {
+    if (_timelineDocument is null)
     {
-        TimelineCanvas.Children.Clear();
-        TimelineCanvas.Width = SurfaceWidth;
-        TimelineCanvas.Height = VisualTrackCount * TrackHeight;
-        _selectedClipBorder = null;
-        TimelineVisibleRange visible = TimelineVisibleRange.Create(
-            TimelineScroll.HorizontalOffset, TimelineScroll.VerticalOffset,
-            TimelineScroll.ViewportWidth, TimelineScroll.ViewportHeight, _pixelsPerSecond, TrackHeight);
-
-        for (int trackIndex = visible.FirstTrack; trackIndex < Math.Min(VisualTrackCount, visible.LastTrack + 1); trackIndex++)
-        {
-            var separator = new Line
-            {
-                X1 = 0,
-                X2 = SurfaceWidth,
-                Y1 = (trackIndex + 1) * TrackHeight,
-                Y2 = (trackIndex + 1) * TrackHeight,
-                Stroke = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                StrokeThickness = 1
-            };
-            TimelineCanvas.Children.Add(separator);
-        }
-
-        if (_lanes.Count == 0 && _cameraKeyframes.Count == 0)
-        {
-            var empty = new TextBlock
-            {
-                Text = "This timeline has no clips, overlays, or camera keyframes. Use the inspector commands to add one at the playhead.",
-                Opacity = 0.65,
-                FontSize = 13
-            };
-            Canvas.SetLeft(empty, 24);
-            Canvas.SetTop(empty, 20);
-            TimelineCanvas.Children.Add(empty);
-        }
-
-        foreach (TimelineLaneDocument lane in TimelineProjection.OrderLanes(_lanes.Where(lane =>
-                     visible.Contains(lane.StartSeconds, lane.EndSeconds, lane.IsLayer ? OverlayVisualTrackIndex : lane.TrackIndex))))
-        {
-            Border border = CreateClipVisual(lane);
-            TimelineCanvas.Children.Add(border);
-            if (lane.StableId == _selectedLaneId)
-            {
-                _selectedClipBorder = border;
-            }
-        }
-
-        foreach (TimelineCameraKeyframeDocument keyframe in _cameraKeyframes.Where(keyframe =>
-                     visible.Contains(keyframe.TimeSeconds, keyframe.TimeSeconds, CameraVisualTrackIndex)))
-        {
-            TimelineCanvas.Children.Add(CreateCameraKeyframeVisual(keyframe));
-        }
-
-        _playheadLine = new Line
-        {
-            X1 = _positionSeconds * _pixelsPerSecond,
-            X2 = _positionSeconds * _pixelsPerSecond,
-            Y1 = 0,
-            Y2 = TimelineCanvas.Height,
-            Stroke = new SolidColorBrush(Colors.White),
-            StrokeThickness = 2,
-            IsHitTestVisible = false
-        };
-        TimelineCanvas.Children.Add(_playheadLine);
+      return;
     }
 
-    private Button CreateCameraKeyframeVisual(TimelineCameraKeyframeDocument keyframe)
+    InvalidatePostPreviews();
+
+    _lanes = TimelineProjection.Project(_timelineDocument);
+    _canonicalProject = _project is null ? null : ProjectTimelineContracts.FromTimeline(_project, _timelineDocument);
+    _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
+    _durationSeconds = Math.Max(
+        TimelineProjection.MinimumDurationSeconds,
+        ResolveDuration(_project, _lanes));
+    _positionSeconds = Math.Clamp(_positionSeconds, 0, _durationSeconds);
+
+    if (_selectedLaneId is not null &&
+        !_lanes.Any(lane => lane.StableId == _selectedLaneId))
     {
-        bool isSelected = keyframe.StableId == _selectedCameraKeyframeIdentity;
-        var marker = new Button
-        {
-            Tag = keyframe.StableId,
-            Content = "\u25C6",
-            Width = 28,
-            Height = TrackHeight - 12,
-            Padding = new Thickness(0),
-            Opacity = isSelected ? 1 : 0.78,
-            BorderThickness = new Thickness(isSelected ? 3 : 1),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        AutomationProperties.SetAutomationId(marker, $"Timeline.CameraKeyframe.{keyframe.StableId}");
-        AutomationProperties.SetName(marker, $"Camera keyframe at {FormatClock(keyframe.TimeSeconds)}");
-        ToolTipService.SetToolTip(marker, $"Camera keyframe · {FormatClock(keyframe.TimeSeconds)}");
-        Canvas.SetLeft(
-            marker,
-            Math.Clamp(
-                (keyframe.TimeSeconds * _pixelsPerSecond) - (marker.Width / 2),
-                0,
-                Math.Max(0, SurfaceWidth - marker.Width)));
-        Canvas.SetTop(marker, (CameraVisualTrackIndex * TrackHeight) + 6);
-        marker.Click += CameraKeyframeMarker_Click;
-        return marker;
+      _selectedLaneId = null;
+    }
+    if (_selectedCameraKeyframeIdentity is not null &&
+        !_cameraKeyframes.Any(
+            keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity))
+    {
+      _selectedCameraKeyframeIdentity = null;
+    }
+    if (_selectedMarkerId is not null &&
+        _canonicalProject?.Markers.All(marker => marker.Id != _selectedMarkerId) != false)
+    {
+      _selectedMarkerId = null;
+    }
+    if (_selectedTrackId is not null &&
+        _canonicalProject?.Tracks.All(track => track.Id != _selectedTrackId) != false)
+    {
+      _selectedTrackId = null;
+    }
+    if (_selectedTrackId is null && SelectedLane is { IsLayer: false } selectedLane)
+    {
+      _selectedTrackId = _canonicalProject?.Tracks.ElementAtOrDefault(selectedLane.TrackIndex)?.Id;
+    }
+    _selectedTrackId ??= _canonicalProject?.Tracks.FirstOrDefault()?.Id;
+
+    ProjectText.Text = _project?.Name ?? _loadedProjectId ?? "Timeline";
+    int clipCount = _lanes.Count(lane => !lane.IsLayer);
+    int overlayCount = _lanes.Count(lane => lane.IsLayer);
+    DurationSummaryText.Text =
+        $"{FormatClock(_durationSeconds)}  •  {clipCount} clips  •  {overlayCount} overlays  •  {TrackCount} tracks";
+    PositionSlider.Maximum = _durationSeconds;
+    CameraTimeNumberBox.Maximum = _durationSeconds;
+    LoopInNumberBox.Maximum = _durationSeconds;
+    LoopOutNumberBox.Maximum = _durationSeconds;
+    if (!double.IsFinite(LoopOutNumberBox.Value) ||
+        LoopOutNumberBox.Value <= 0 ||
+        LoopOutNumberBox.Value > _durationSeconds)
+    {
+      LoopOutNumberBox.Value = _durationSeconds;
     }
 
-    private Border CreateClipVisual(TimelineLaneDocument lane)
+    if (updateRawText)
     {
-        bool isSelected = lane.StableId == _selectedLaneId;
-        var border = new Border
-        {
-            Tag = lane.StableId,
-            Width = Math.Max(8, (lane.EndSeconds - lane.StartSeconds) * _pixelsPerSecond),
-            Height = TrackHeight - (ClipVerticalInset * 2),
-            Background = ResolveClipBrush(lane.Type, isSelected),
-            BorderBrush = isSelected
-                ? new SolidColorBrush(Colors.White)
-                : new SolidColorBrush(Color.FromArgb(150, 255, 255, 255)),
-            BorderThickness = new Thickness(isSelected ? 2 : 1),
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(8, 4, 8, 4)
-        };
-        AutomationProperties.SetAutomationId(border, $"Timeline.Lane.{lane.StableId}");
-        AutomationProperties.SetName(
-            border,
-            $"{(lane.IsLayer ? "Overlay" : "Clip")} {lane.Name}, {FormatClock(lane.StartSeconds)} to {FormatClock(lane.EndSeconds)}");
-        border.Child = new StackPanel
-        {
-            Spacing = 1,
-            Children =
+      TimelineTextBox.Text = _timelineDocument.ToJsonString(new JsonSerializerOptions
+      {
+        WriteIndented = true
+      });
+    }
+
+    RenderTrackHeaders();
+    RenderRuler();
+    RenderTimeline();
+    PopulateInspector();
+    RefreshMixerEditor();
+    RefreshProfessionalEditingEditor();
+    RefreshPostProductionEditor();
+    RefreshMarkers();
+    RefreshCameraEditor();
+    UpdateTransportUi();
+    UpdateCommandState();
+  }
+
+  private int TrackCount =>
+      Math.Max(
+          1,
+          Math.Max(
+              _canonicalProject?.Tracks.Count ?? 0,
+              _lanes
+              .Where(lane => !lane.IsLayer)
+              .Select(lane => lane.TrackIndex + 1)
+              .DefaultIfEmpty(1)
+              .Max()));
+
+  private int OverlayVisualTrackIndex => TrackCount;
+
+  private int CameraVisualTrackIndex => TrackCount + 1;
+
+  private int VisualTrackCount => TrackCount + 2;
+
+  private double SurfaceWidth =>
+      Math.Max(720, Math.Ceiling(_durationSeconds * _pixelsPerSecond));
+
+  private void RenderTrackHeaders()
+  {
+    TrackHeadersPanel.Children.Clear();
+    JsonObject? timelineDocument = _timelineDocument;
+    for (int trackIndex = 0; trackIndex < TrackCount; trackIndex++)
+    {
+      Track? track = _canonicalProject?.Tracks.ElementAtOrDefault(trackIndex);
+      string? trackId = track?.Id;
+      bool selected = trackId is not null && string.Equals(trackId, _selectedTrackId, StringComparison.Ordinal);
+      Grid panel = new()
+      {
+        Tag = trackId,
+        Height = TrackHeight,
+        Padding = new Thickness(12, 7, 10, 6),
+        BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+        BorderThickness = new Thickness(selected ? 3 : 0, 0, 0, 1),
+        Background = selected
+              ? (Brush)Application.Current.Resources["AccentFillColorTertiaryBrush"]
+              : null
+      };
+      panel.PointerPressed += TrackHeader_PointerPressed;
+      panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+      panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+      panel.ColumnDefinitions.Add(new ColumnDefinition());
+      panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+      TextBlock title = new()
+      {
+        Text = track?.Name ?? $"Track {trackIndex + 1}",
+        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        TextTrimming = TextTrimming.CharacterEllipsis
+      };
+      TextBlock detail = new()
+      {
+        Text = $"{_lanes.Count(lane => !lane.IsLayer && lane.TrackIndex == trackIndex)} clips",
+        Opacity = 0.62,
+        FontSize = 11
+      };
+      Grid.SetRow(detail, 1);
+      Button lockButton = new()
+      {
+        Tag = trackIndex,
+        Content = timelineDocument is not null &&
+                    TimelineProjection.IsTrackLocked(timelineDocument, trackIndex)
+              ? "Unlock"
+              : "Lock",
+        Padding = new Thickness(7, 2, 7, 2),
+        VerticalAlignment = VerticalAlignment.Center
+      };
+      Grid.SetColumn(lockButton, 1);
+      Grid.SetRowSpan(lockButton, 2);
+      lockButton.Click += TrackLockButton_Click;
+      panel.Children.Add(title);
+      panel.Children.Add(detail);
+      panel.Children.Add(lockButton);
+      TrackHeadersPanel.Children.Add(panel);
+    }
+
+    Grid overlayPanel = new()
+    {
+      Height = TrackHeight,
+      Padding = new Thickness(12, 7, 10, 6),
+      BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+      BorderThickness = new Thickness(0, 0, 0, 1)
+    };
+    overlayPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+    overlayPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+    TextBlock overlayTitle = new()
+    {
+      Text = "Overlays",
+      FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+      TextTrimming = TextTrimming.CharacterEllipsis
+    };
+    TextBlock overlayDetail = new()
+    {
+      Text = $"{_lanes.Count(lane => lane.IsLayer)} layers",
+      Opacity = 0.62,
+      FontSize = 11
+    };
+    Grid.SetRow(overlayDetail, 1);
+    overlayPanel.Children.Add(overlayTitle);
+    overlayPanel.Children.Add(overlayDetail);
+    TrackHeadersPanel.Children.Add(overlayPanel);
+
+    Grid cameraPanel = new()
+    {
+      Height = TrackHeight,
+      Padding = new Thickness(12, 7, 10, 6),
+      BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+      BorderThickness = new Thickness(0, 0, 0, 1)
+    };
+    cameraPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+    cameraPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+    TextBlock cameraTitle = new()
+    {
+      Text = "Camera",
+      FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+      TextTrimming = TextTrimming.CharacterEllipsis
+    };
+    TextBlock cameraDetail = new()
+    {
+      Text = $"{_cameraKeyframes.Count} keyframes",
+      Opacity = 0.62,
+      FontSize = 11
+    };
+    Grid.SetRow(cameraDetail, 1);
+    cameraPanel.Children.Add(cameraTitle);
+    cameraPanel.Children.Add(cameraDetail);
+    TrackHeadersPanel.Children.Add(cameraPanel);
+  }
+
+  private void RenderRuler()
+  {
+    RulerCanvas.Children.Clear();
+    RulerCanvas.Width = SurfaceWidth;
+    double labelStep = ResolveRulerStep();
+    foreach (double seconds in TimelineViewport.RulerTicks(
+        _durationSeconds, _pixelsPerSecond, TimelineScroll.HorizontalOffset,
+        TimelineScroll.ViewportWidth, labelStep))
+    {
+      double x = seconds * _pixelsPerSecond;
+      Line line = new()
+      {
+        X1 = x,
+        X2 = x,
+        Y1 = 27,
+        Y2 = 36,
+        Stroke = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+        StrokeThickness = 1
+      };
+      TextBlock label = new()
+      {
+        Text = FormatRulerTime(seconds),
+        FontSize = 10,
+        Opacity = 0.68
+      };
+      Canvas.SetLeft(label, x + 4);
+      Canvas.SetTop(label, 5);
+      RulerCanvas.Children.Add(line);
+      RulerCanvas.Children.Add(label);
+    }
+
+    if (_canonicalProject is null)
+    {
+      return;
+    }
+
+    foreach (TimelineMarker marker in _canonicalProject.Markers)
+    {
+      double x = _canonicalProject.Timebase.ToSeconds(marker.Position) * _pixelsPerSecond;
+      TextBlock flag = new()
+      {
+        Text = "\u25bc",
+        Tag = marker.Id,
+        Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+        FontSize = 13,
+      };
+      ToolTipService.SetToolTip(flag, marker.Name);
+      Canvas.SetLeft(flag, Math.Max(0, x - 6));
+      Canvas.SetTop(flag, 18);
+      RulerCanvas.Children.Add(flag);
+    }
+  }
+
+  private double ResolveRulerStep()
+  {
+    ReadOnlySpan<double> candidates = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+    foreach (double candidate in candidates)
+    {
+      if (candidate * _pixelsPerSecond >= 76)
+      {
+        return candidate;
+      }
+    }
+
+    return 600;
+  }
+
+  private void RenderTimeline()
+  {
+    TimelineCanvas.Children.Clear();
+    TimelineCanvas.Width = SurfaceWidth;
+    TimelineCanvas.Height = VisualTrackCount * TrackHeight;
+    _selectedClipBorder = null;
+    TimelineVisibleRange visible = TimelineVisibleRange.Create(
+        TimelineScroll.HorizontalOffset, TimelineScroll.VerticalOffset,
+        TimelineScroll.ViewportWidth, TimelineScroll.ViewportHeight, _pixelsPerSecond, TrackHeight);
+
+    for (int trackIndex = visible.FirstTrack; trackIndex < Math.Min(VisualTrackCount, visible.LastTrack + 1); trackIndex++)
+    {
+      Line separator = new()
+      {
+        X1 = 0,
+        X2 = SurfaceWidth,
+        Y1 = (trackIndex + 1) * TrackHeight,
+        Y2 = (trackIndex + 1) * TrackHeight,
+        Stroke = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+        StrokeThickness = 1
+      };
+      TimelineCanvas.Children.Add(separator);
+    }
+
+    if (_lanes.Count == 0 && _cameraKeyframes.Count == 0)
+    {
+      TextBlock empty = new()
+      {
+        Text = "This timeline has no clips, overlays, or camera keyframes. Use the inspector commands to add one at the playhead.",
+        Opacity = 0.65,
+        FontSize = 13
+      };
+      Canvas.SetLeft(empty, 24);
+      Canvas.SetTop(empty, 20);
+      TimelineCanvas.Children.Add(empty);
+    }
+
+    foreach (TimelineLaneDocument lane in TimelineProjection.OrderLanes(_lanes.Where(lane =>
+                 visible.Contains(lane.StartSeconds, lane.EndSeconds, lane.IsLayer ? OverlayVisualTrackIndex : lane.TrackIndex))))
+    {
+      Border border = CreateClipVisual(lane);
+      TimelineCanvas.Children.Add(border);
+      if (lane.StableId == _selectedLaneId)
+      {
+        _selectedClipBorder = border;
+      }
+    }
+
+    foreach (TimelineCameraKeyframeDocument keyframe in _cameraKeyframes.Where(keyframe =>
+                 visible.Contains(keyframe.TimeSeconds, keyframe.TimeSeconds, CameraVisualTrackIndex)))
+    {
+      TimelineCanvas.Children.Add(CreateCameraKeyframeVisual(keyframe));
+    }
+
+    _playheadLine = new Line
+    {
+      X1 = _positionSeconds * _pixelsPerSecond,
+      X2 = _positionSeconds * _pixelsPerSecond,
+      Y1 = 0,
+      Y2 = TimelineCanvas.Height,
+      Stroke = new SolidColorBrush(Colors.White),
+      StrokeThickness = 2,
+      IsHitTestVisible = false
+    };
+    TimelineCanvas.Children.Add(_playheadLine);
+  }
+
+  private Button CreateCameraKeyframeVisual(TimelineCameraKeyframeDocument keyframe)
+  {
+    bool isSelected = keyframe.StableId == _selectedCameraKeyframeIdentity;
+    Button marker = new()
+    {
+      Tag = keyframe.StableId,
+      Content = "\u25C6",
+      Width = 28,
+      Height = TrackHeight - 12,
+      Padding = new Thickness(0),
+      Opacity = isSelected ? 1 : 0.78,
+      BorderThickness = new Thickness(isSelected ? 3 : 1),
+      HorizontalContentAlignment = HorizontalAlignment.Center,
+      VerticalContentAlignment = VerticalAlignment.Center
+    };
+    AutomationProperties.SetAutomationId(marker, $"Timeline.CameraKeyframe.{keyframe.StableId}");
+    AutomationProperties.SetName(marker, $"Camera keyframe at {FormatClock(keyframe.TimeSeconds)}");
+    ToolTipService.SetToolTip(marker, $"Camera keyframe · {FormatClock(keyframe.TimeSeconds)}");
+    Canvas.SetLeft(
+        marker,
+        Math.Clamp(
+            (keyframe.TimeSeconds * _pixelsPerSecond) - (marker.Width / 2),
+            0,
+            Math.Max(0, SurfaceWidth - marker.Width)));
+    Canvas.SetTop(marker, (CameraVisualTrackIndex * TrackHeight) + 6);
+    marker.Click += CameraKeyframeMarker_Click;
+    return marker;
+  }
+
+  private Border CreateClipVisual(TimelineLaneDocument lane)
+  {
+    bool isSelected = lane.StableId == _selectedLaneId;
+    Border border = new()
+    {
+      Tag = lane.StableId,
+      Width = Math.Max(8, (lane.EndSeconds - lane.StartSeconds) * _pixelsPerSecond),
+      Height = TrackHeight - (ClipVerticalInset * 2),
+      Background = ResolveClipBrush(lane.Type, isSelected),
+      BorderBrush = isSelected
+            ? new SolidColorBrush(Colors.White)
+            : new SolidColorBrush(Color.FromArgb(150, 255, 255, 255)),
+      BorderThickness = new Thickness(isSelected ? 2 : 1),
+      CornerRadius = new CornerRadius(5),
+      Padding = new Thickness(8, 4, 8, 4)
+    };
+    AutomationProperties.SetAutomationId(border, $"Timeline.Lane.{lane.StableId}");
+    AutomationProperties.SetName(
+        border,
+        $"{(lane.IsLayer ? "Overlay" : "Clip")} {lane.Name}, {FormatClock(lane.StartSeconds)} to {FormatClock(lane.EndSeconds)}");
+    border.Child = new StackPanel
+    {
+      Spacing = 1,
+      Children =
             {
                 new TextBlock
                 {
@@ -885,4027 +912,4580 @@ public sealed partial class TimelinePage : Page
                     TextTrimming = TextTrimming.CharacterEllipsis
                 }
             }
-        };
-        Canvas.SetLeft(border, lane.StartSeconds * _pixelsPerSecond);
-        Canvas.SetTop(
-            border,
-            ((lane.IsLayer ? OverlayVisualTrackIndex : lane.TrackIndex) * TrackHeight) + ClipVerticalInset);
-        border.PointerPressed += Clip_PointerPressed;
-        border.PointerMoved += Clip_PointerMoved;
-        border.PointerReleased += Clip_PointerReleased;
-        border.PointerCanceled += Clip_PointerCanceled;
-        border.ContextFlyout = CreateClipContextFlyout(lane);
-        return border;
-    }
+    };
+    Canvas.SetLeft(border, lane.StartSeconds * _pixelsPerSecond);
+    Canvas.SetTop(
+        border,
+        ((lane.IsLayer ? OverlayVisualTrackIndex : lane.TrackIndex) * TrackHeight) + ClipVerticalInset);
+    border.PointerPressed += Clip_PointerPressed;
+    border.PointerMoved += Clip_PointerMoved;
+    border.PointerReleased += Clip_PointerReleased;
+    border.PointerCanceled += Clip_PointerCanceled;
+    border.ContextFlyout = CreateClipContextFlyout(lane);
+    return border;
+  }
 
-    private MenuFlyout CreateClipContextFlyout(TimelineLaneDocument lane)
+  private MenuFlyout CreateClipContextFlyout(TimelineLaneDocument lane)
+  {
+    bool editable = !IsLaneLocked(lane);
+    MenuFlyout flyout = new();
+    flyout.Items.Add(CreateClipMenuItem("Move to playhead", "move", lane.StableId, editable));
+    flyout.Items.Add(CreateClipMenuItem("Split at playhead", "split", lane.StableId,
+        editable && TimelineProjection.CanSplitAt(lane, _positionSeconds)));
+    flyout.Items.Add(CreateClipMenuItem("Duplicate at playhead", "duplicate", lane.StableId, editable));
+    flyout.Items.Add(new MenuFlyoutSeparator());
+    flyout.Items.Add(CreateClipMenuItem("Delete", "delete", lane.StableId, editable));
+    return flyout;
+  }
+
+  private MenuFlyoutItem CreateClipMenuItem(string text, string action, string stableId, bool enabled)
+  {
+    MenuFlyoutItem item = new()
     {
-        bool editable = !IsLaneLocked(lane);
-        var flyout = new MenuFlyout();
-        flyout.Items.Add(CreateClipMenuItem("Move to playhead", "move", lane.StableId, editable));
-        flyout.Items.Add(CreateClipMenuItem("Split at playhead", "split", lane.StableId,
-            editable && TimelineProjection.CanSplitAt(lane, _positionSeconds)));
-        flyout.Items.Add(CreateClipMenuItem("Duplicate at playhead", "duplicate", lane.StableId, editable));
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(CreateClipMenuItem("Delete", "delete", lane.StableId, editable));
-        return flyout;
-    }
+      Text = text,
+      Tag = new ClipMenuAction(action, stableId),
+      IsEnabled = enabled,
+    };
+    item.Click += ClipMenuItem_Click;
+    return item;
+  }
 
-    private MenuFlyoutItem CreateClipMenuItem(string text, string action, string stableId, bool enabled)
+  private async void ClipMenuItem_Click(object sender, RoutedEventArgs e)
+  {
+    if (sender is not MenuFlyoutItem { Tag: ClipMenuAction command })
     {
-        var item = new MenuFlyoutItem
-        {
-            Text = text,
-            Tag = new ClipMenuAction(action, stableId),
-            IsEnabled = enabled,
-        };
-        item.Click += ClipMenuItem_Click;
-        return item;
+      return;
     }
 
-    private async void ClipMenuItem_Click(object sender, RoutedEventArgs e)
+    SelectLane(command.StableId);
+    switch (command.Action)
     {
-        if (sender is not MenuFlyoutItem { Tag: ClipMenuAction command })
-        {
-            return;
-        }
-
-        SelectLane(command.StableId);
-        switch (command.Action)
-        {
-            case "move":
-                await MoveSelectedToPlayheadAsync();
-                break;
-            case "split":
-                await SplitSelectedAtPlayheadAsync();
-                break;
-            case "duplicate":
-                await DuplicateSelectedAsync();
-                break;
-            case "delete":
-                await DeleteSelectedAsync();
-                break;
-        }
+      case "move":
+        await MoveSelectedToPlayheadAsync();
+        break;
+      case "split":
+        await SplitSelectedAtPlayheadAsync();
+        break;
+      case "duplicate":
+        await DuplicateSelectedAsync();
+        break;
+      case "delete":
+        await DeleteSelectedAsync();
+        break;
     }
+  }
 
-    private static Brush ResolveClipBrush(string type, bool selected)
+  private static Brush ResolveClipBrush(string type, bool selected)
+  {
+    Color color = type.Contains("audio", StringComparison.OrdinalIgnoreCase)
+        ? Color.FromArgb(255, 21, 128, 111)
+        : type.Contains("image", StringComparison.OrdinalIgnoreCase)
+            ? Color.FromArgb(255, 117, 76, 153)
+            : Color.FromArgb(255, 22, 100, 166);
+    if (selected)
     {
-        Color color = type.Contains("audio", StringComparison.OrdinalIgnoreCase)
-            ? Color.FromArgb(255, 21, 128, 111)
-            : type.Contains("image", StringComparison.OrdinalIgnoreCase)
-                ? Color.FromArgb(255, 117, 76, 153)
-                : Color.FromArgb(255, 22, 100, 166);
-        if (selected)
-        {
-            color = Color.FromArgb(
-                color.A,
-                (byte)Math.Min(255, color.R + 25),
-                (byte)Math.Min(255, color.G + 25),
-                (byte)Math.Min(255, color.B + 25));
-        }
-
-        return new SolidColorBrush(color);
+      color = Color.FromArgb(
+          color.A,
+          (byte)Math.Min(255, color.R + 25),
+          (byte)Math.Min(255, color.G + 25),
+          (byte)Math.Min(255, color.B + 25));
     }
 
-    private void SelectLane(string? stableId)
+    return new SolidColorBrush(color);
+  }
+
+  private void SelectLane(string? stableId)
+  {
+    _selectedLaneId = stableId;
+    _selectedCameraKeyframeIdentity = null;
+    TimelineLaneDocument? selectedLane = SelectedLane;
+    if (selectedLane is { IsLayer: false })
     {
-        _selectedLaneId = stableId;
-        _selectedCameraKeyframeIdentity = null;
-        TimelineLaneDocument? selectedLane = SelectedLane;
-        if (selectedLane is { IsLayer: false })
-        {
-            _selectedTrackId = _canonicalProject?.Tracks.ElementAtOrDefault(selectedLane.TrackIndex)?.Id;
-        }
-        PersistViewState();
-        if (stableId is not null)
-        {
-            InspectorPivot.SelectedIndex = 0;
-        }
-
-        RenderTrackHeaders();
-        RenderTimeline();
-        PopulateInspector();
-        RefreshMixerEditor();
-        RefreshProfessionalEditingEditor();
-        RefreshCameraEditor();
-        UpdateCommandState();
+      _selectedTrackId = _canonicalProject?.Tracks.ElementAtOrDefault(selectedLane.TrackIndex)?.Id;
     }
-
-    private void SelectCameraKeyframe(string? stableId)
+    PersistViewState();
+    if (stableId is not null)
     {
-        _selectedCameraKeyframeIdentity = stableId;
-        _selectedLaneId = null;
-        if (stableId is not null)
-        {
-            InspectorPivot.SelectedIndex = 6;
-        }
-
-        RenderTimeline();
-        PopulateInspector();
-        RefreshCameraEditor();
-        UpdateCommandState();
+      InspectorPivot.SelectedIndex = 0;
     }
 
-    private void CameraKeyframeMarker_Click(object sender, RoutedEventArgs e)
+    RenderTrackHeaders();
+    RenderTimeline();
+    PopulateInspector();
+    RefreshMixerEditor();
+    RefreshProfessionalEditingEditor();
+    RefreshCameraEditor();
+    UpdateCommandState();
+  }
+
+  private void SelectCameraKeyframe(string? stableId)
+  {
+    _selectedCameraKeyframeIdentity = stableId;
+    _selectedLaneId = null;
+    if (stableId is not null)
     {
-        if (sender is Button { Tag: string stableId })
-        {
-            SelectCameraKeyframe(stableId);
-        }
+      InspectorPivot.SelectedIndex = 6;
     }
 
-    private TimelineLaneDocument? SelectedLane =>
-        _selectedLaneId is null
-            ? null
-            : _lanes.FirstOrDefault(lane => lane.StableId == _selectedLaneId);
+    RenderTimeline();
+    PopulateInspector();
+    RefreshCameraEditor();
+    UpdateCommandState();
+  }
 
-    private TimelineCameraKeyframeDocument? SelectedCameraKeyframe =>
-        _selectedCameraKeyframeIdentity is null
-            ? null
-            : _cameraKeyframes.FirstOrDefault(
-                keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity);
-
-    private Track? SelectedMixerTrack =>
-        _selectedTrackId is null
-            ? null
-            : _canonicalProject?.Tracks.FirstOrDefault(track => track.Id == _selectedTrackId);
-
-    private TimelinePointerTool LoadPointerTool()
+  private void CameraKeyframeMarker_Click(object sender, RoutedEventArgs e)
+  {
+    if (sender is Button { Tag: string stableId })
     {
-        string? persisted = _settings?.Values[PointerToolSettingKey] as string;
-        return string.Equals(persisted, "blade", StringComparison.OrdinalIgnoreCase)
-            ? TimelinePointerTool.Blade
-            : TimelinePointerTool.Select;
+      SelectCameraKeyframe(stableId);
     }
+  }
 
-    private void PersistPointerTool()
+  private TimelineLaneDocument? SelectedLane =>
+      _selectedLaneId is null
+          ? null
+          : _lanes.FirstOrDefault(lane => lane.StableId == _selectedLaneId);
+
+  private TimelineCameraKeyframeDocument? SelectedCameraKeyframe =>
+      _selectedCameraKeyframeIdentity is null
+          ? null
+          : _cameraKeyframes.FirstOrDefault(
+              keyframe => keyframe.StableId == _selectedCameraKeyframeIdentity);
+
+  private Track? SelectedMixerTrack =>
+      _selectedTrackId is null
+          ? null
+          : _canonicalProject?.Tracks.FirstOrDefault(track => track.Id == _selectedTrackId);
+
+  private TimelinePointerTool LoadPointerTool()
+  {
+    string? persisted = _settings?.Values[PointerToolSettingKey] as string;
+    return string.Equals(persisted, "blade", StringComparison.OrdinalIgnoreCase)
+        ? TimelinePointerTool.Blade
+        : TimelinePointerTool.Select;
+  }
+
+  private void PersistPointerTool()
+  {
+    if (_settings is null)
     {
-        if (_settings is null)
-        {
-            return;
-        }
-
-        _settings.Values[PointerToolSettingKey] = _pointerTool == TimelinePointerTool.Blade
-            ? "blade"
-            : "select";
+      return;
     }
 
-    private void ApplyPointerToolUi()
+    _settings.Values[PointerToolSettingKey] = _pointerTool == TimelinePointerTool.Blade
+        ? "blade"
+        : "select";
+  }
+
+  private void ApplyPointerToolUi()
+  {
+    if (_updatingPointerTool)
     {
-        if (_updatingPointerTool)
-        {
-            return;
-        }
-
-        _updatingPointerTool = true;
-        try
-        {
-            SelectToolButton.IsChecked = _pointerTool == TimelinePointerTool.Select;
-            BladeToolButton.IsChecked = _pointerTool == TimelinePointerTool.Blade;
-        }
-        finally
-        {
-            _updatingPointerTool = false;
-        }
+      return;
     }
 
-    private void SetPointerTool(TimelinePointerTool tool)
+    _updatingPointerTool = true;
+    try
     {
-        _pointerTool = tool;
-        ApplyPointerToolUi();
-        PersistPointerTool();
+      SelectToolButton.IsChecked = _pointerTool == TimelinePointerTool.Select;
+      BladeToolButton.IsChecked = _pointerTool == TimelinePointerTool.Blade;
     }
-
-    private void PopulateInspector()
+    finally
     {
-        TimelineLaneDocument? lane = SelectedLane;
-        bool enabled = lane is not null;
-        bool videoAdjustmentsEnabled = lane is not null && IsVisualLane(lane);
-        SelectedClipTitle.Text = lane?.Name ?? "No lane selected";
-        ExactSampleTextBox.Text = lane?.Source["start_sample"]?.GetValue<string>() ?? string.Empty;
-        SelectedClipSubtitle.Text = lane is null
-            ? "Select a clip or overlay to inspect its timing and media properties."
-            : lane.IsLayer
-                ? $"{lane.Type} overlay • Layers"
-                : $"{lane.Type} clip • Track {lane.TrackIndex + 1}";
-
-        LaneNameTextBox.IsEnabled = enabled;
-        LaneTypeTextBox.IsEnabled = enabled;
-        StartNumberBox.IsEnabled = enabled;
-        EndNumberBox.IsEnabled = enabled;
-        SourcePathTextBox.IsEnabled = enabled;
-        SourceInNumberBox.IsEnabled = enabled;
-        SourceOutNumberBox.IsEnabled = enabled;
-        SpeedNumberBox.IsEnabled = enabled;
-        TrackNumberBox.IsEnabled = enabled && lane is not null && !lane.IsLayer;
-        VolumeNumberBox.IsEnabled = enabled;
-        MutedToggle.IsEnabled = enabled;
-        FadeInNumberBox.IsEnabled = enabled;
-        FadeOutNumberBox.IsEnabled = enabled;
-        VideoAdjustmentsExpander.IsEnabled = videoAdjustmentsEnabled;
-
-        LaneNameTextBox.Text = lane?.Name ?? string.Empty;
-        LaneTypeTextBox.Text = lane?.Type ?? string.Empty;
-        StartNumberBox.Value = lane?.StartSeconds ?? double.NaN;
-        EndNumberBox.Value = lane?.EndSeconds ?? double.NaN;
-        SourcePathTextBox.Text = lane?.SourcePath ?? string.Empty;
-        SourceInNumberBox.Value = lane?.SourceInSeconds ?? double.NaN;
-        SourceOutNumberBox.Value = lane?.SourceOutSeconds ?? double.NaN;
-        SpeedNumberBox.Value = lane?.Speed ?? double.NaN;
-        TrackNumberBox.Value = lane is null || lane.IsLayer
-            ? double.NaN
-            : lane.TrackIndex + 1;
-        VolumeNumberBox.Value = lane?.Volume ?? double.NaN;
-        MutedToggle.IsOn = lane?.Muted ?? false;
-        FadeInNumberBox.Value = lane?.FadeInSeconds ?? double.NaN;
-        FadeOutNumberBox.Value = lane?.FadeOutSeconds ?? double.NaN;
-        SelectComboByTag(FitModeComboBox, lane?.FitMode ?? "contain");
-        SelectComboByTag(RotationComboBox, (lane?.RotationDegrees ?? 0).ToString(CultureInfo.InvariantCulture));
-        OpacityNumberBox.Value = lane?.Opacity ?? 1;
-        BrightnessNumberBox.Value = lane?.Brightness ?? 0;
-        ContrastNumberBox.Value = lane?.Contrast ?? 1;
-        SaturationNumberBox.Value = lane?.Saturation ?? 1;
-        FlipHorizontalToggle.IsOn = lane?.FlipHorizontal ?? false;
-        SelectComboByTag(VideoLookComboBox, "neutral");
-        VideoAdjustmentHintText.Text = videoAdjustmentsEnabled
-            ? "These nondestructive adjustments are saved with the clip and applied to the edited master."
-            : "Video adjustments are available for video clips and source-backed visual overlays.";
-        TrackInspectorHintText.Text = lane?.IsLayer == true
-            ? "Overlays remain in the Layers row; timing and media edits are still available."
-            : "Track clips can move between numbered tracks.";
-        ApplyInspectorButton.Content = lane?.IsLayer == true
-            ? "Apply overlay changes"
-            : "Apply clip changes";
-        DeleteClipButton.Content = lane?.IsLayer == true
-            ? "Delete selected overlay"
-            : "Delete selected clip";
+      _updatingPointerTool = false;
     }
+  }
 
-    private void RefreshMixerEditor()
+  private void SetPointerTool(TimelinePointerTool tool)
+  {
+    _pointerTool = tool;
+    ApplyPointerToolUi();
+    PersistPointerTool();
+  }
+
+  private void PopulateInspector()
+  {
+    TimelineLaneDocument? lane = SelectedLane;
+    bool enabled = lane is not null;
+    bool videoAdjustmentsEnabled = lane is not null && IsVisualLane(lane);
+    SelectedClipTitle.Text = lane?.Name ?? "No lane selected";
+    ExactSampleTextBox.Text = lane?.Source["start_sample"]?.GetValue<string>() ?? string.Empty;
+    SelectedClipSubtitle.Text = lane is null
+        ? "Select a clip or overlay to inspect its timing and media properties."
+        : lane.IsLayer
+            ? $"{lane.Type} overlay • Layers"
+            : $"{lane.Type} clip • Track {lane.TrackIndex + 1}";
+
+    LaneNameTextBox.IsEnabled = enabled;
+    LaneTypeTextBox.IsEnabled = enabled;
+    StartNumberBox.IsEnabled = enabled;
+    EndNumberBox.IsEnabled = enabled;
+    SourcePathTextBox.IsEnabled = enabled;
+    SourceInNumberBox.IsEnabled = enabled;
+    SourceOutNumberBox.IsEnabled = enabled;
+    SpeedNumberBox.IsEnabled = enabled;
+    TrackNumberBox.IsEnabled = enabled && lane is not null && !lane.IsLayer;
+    VolumeNumberBox.IsEnabled = enabled;
+    MutedToggle.IsEnabled = enabled;
+    FadeInNumberBox.IsEnabled = enabled;
+    FadeOutNumberBox.IsEnabled = enabled;
+    VideoAdjustmentsExpander.IsEnabled = videoAdjustmentsEnabled;
+
+    LaneNameTextBox.Text = lane?.Name ?? string.Empty;
+    LaneTypeTextBox.Text = lane?.Type ?? string.Empty;
+    StartNumberBox.Value = lane?.StartSeconds ?? double.NaN;
+    EndNumberBox.Value = lane?.EndSeconds ?? double.NaN;
+    SourcePathTextBox.Text = lane?.SourcePath ?? string.Empty;
+    SourceInNumberBox.Value = lane?.SourceInSeconds ?? double.NaN;
+    SourceOutNumberBox.Value = lane?.SourceOutSeconds ?? double.NaN;
+    SpeedNumberBox.Value = lane?.Speed ?? double.NaN;
+    TrackNumberBox.Value = lane is null || lane.IsLayer
+        ? double.NaN
+        : lane.TrackIndex + 1;
+    VolumeNumberBox.Value = lane?.Volume ?? double.NaN;
+    MutedToggle.IsOn = lane?.Muted ?? false;
+    FadeInNumberBox.Value = lane?.FadeInSeconds ?? double.NaN;
+    FadeOutNumberBox.Value = lane?.FadeOutSeconds ?? double.NaN;
+    SelectComboByTag(FitModeComboBox, lane?.FitMode ?? "contain");
+    SelectComboByTag(RotationComboBox, (lane?.RotationDegrees ?? 0).ToString(CultureInfo.InvariantCulture));
+    OpacityNumberBox.Value = lane?.Opacity ?? 1;
+    BrightnessNumberBox.Value = lane?.Brightness ?? 0;
+    ContrastNumberBox.Value = lane?.Contrast ?? 1;
+    SaturationNumberBox.Value = lane?.Saturation ?? 1;
+    FlipHorizontalToggle.IsOn = lane?.FlipHorizontal ?? false;
+    SelectComboByTag(VideoLookComboBox, "neutral");
+    VideoAdjustmentHintText.Text = videoAdjustmentsEnabled
+        ? "These nondestructive adjustments are saved with the clip and applied to the edited master."
+        : "Video adjustments are available for video clips and source-backed visual overlays.";
+    TrackInspectorHintText.Text = lane?.IsLayer == true
+        ? "Overlays remain in the Layers row; timing and media edits are still available."
+        : "Track clips can move between numbered tracks.";
+    ApplyInspectorButton.Content = lane?.IsLayer == true
+        ? "Apply overlay changes"
+        : "Apply clip changes";
+    DeleteClipButton.Content = lane?.IsLayer == true
+        ? "Delete selected overlay"
+        : "Delete selected clip";
+  }
+
+  private void RefreshMixerEditor()
+  {
+    Track? track = SelectedMixerTrack;
+    bool isAudioTrack = track is not null && IsAudioTrack(track);
+    TimelineTrackMixerState? state = track is null ? null : TimelineMixerProjection.Project(track);
+    bool canEdit = isAudioTrack && !_isBusy;
+    MixerDocument? document = _timelineDocument is null || _canonicalProject is null
+        ? null
+        : MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    MixerChannelDocument? selectedChannel = document?.Channels.FirstOrDefault(channel => channel.Id == track?.Id);
+    string masterId = document?.Channels.SingleOrDefault(channel => channel.Kind == MixerChannelKind.Master)?.Id
+        ?? TimelineMixerProjection.MasterOutputId;
+
+    SelectedMixerTrackTitle.Text = track?.Name ?? "No track selected";
+    SelectedMixerTrackSubtitle.Text = track is null
+        ? "Select a track header or a clip to edit its channel."
+        : isAudioTrack
+            ? $"Audio channel • Track {track.Order + 1}"
+            : $"{track.Type} track • Mixer controls apply to audio tracks only.";
+    MixerGainNumberBox.Value = selectedChannel?.Gain ?? state?.Gain ?? double.NaN;
+    MixerPanNumberBox.Value = selectedChannel?.Pan ?? state?.Pan ?? double.NaN;
+    MixerMuteToggle.IsOn = selectedChannel?.Muted ?? state?.Muted ?? false;
+    MixerSoloToggle.IsOn = selectedChannel?.Solo ?? state?.Solo ?? false;
+    MixerRecordArmToggle.IsOn = selectedChannel?.RecordArmed ?? state?.RecordArmed ?? false;
+    MixerInputMonitoringToggle.IsOn = selectedChannel?.InputMonitoring ?? state?.InputMonitoring ?? false;
+    MixerOutputComboBox.Items.Clear();
+    if (document is not null)
     {
-        Track? track = SelectedMixerTrack;
-        bool isAudioTrack = track is not null && IsAudioTrack(track);
-        TimelineTrackMixerState? state = track is null ? null : TimelineMixerProjection.Project(track);
-        bool canEdit = isAudioTrack && !_isBusy;
-        MixerDocument? document = _timelineDocument is null || _canonicalProject is null
-            ? null
-            : MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        MixerChannelDocument? selectedChannel = document?.Channels.FirstOrDefault(channel => channel.Id == track?.Id);
-        string masterId = document?.Channels.SingleOrDefault(channel => channel.Kind == MixerChannelKind.Master)?.Id
-            ?? TimelineMixerProjection.MasterOutputId;
-
-        SelectedMixerTrackTitle.Text = track?.Name ?? "No track selected";
-        SelectedMixerTrackSubtitle.Text = track is null
-            ? "Select a track header or a clip to edit its channel."
-            : isAudioTrack
-                ? $"Audio channel • Track {track.Order + 1}"
-                : $"{track.Type} track • Mixer controls apply to audio tracks only.";
-        MixerGainNumberBox.Value = selectedChannel?.Gain ?? state?.Gain ?? double.NaN;
-        MixerPanNumberBox.Value = selectedChannel?.Pan ?? state?.Pan ?? double.NaN;
-        MixerMuteToggle.IsOn = selectedChannel?.Muted ?? state?.Muted ?? false;
-        MixerSoloToggle.IsOn = selectedChannel?.Solo ?? state?.Solo ?? false;
-        MixerRecordArmToggle.IsOn = selectedChannel?.RecordArmed ?? state?.RecordArmed ?? false;
-        MixerInputMonitoringToggle.IsOn = selectedChannel?.InputMonitoring ?? state?.InputMonitoring ?? false;
-        MixerOutputComboBox.Items.Clear();
-        if (document is not null)
-        {
-            foreach (MixerChannelDocument destination in document.Channels.Where(channel => channel.Kind is MixerChannelKind.Group or MixerChannelKind.Master))
-                MixerOutputComboBox.Items.Add(new ComboBoxItem { Content = destination.Name, Tag = destination.Id });
-        }
-        string outputId = selectedChannel?.OutputId ?? masterId;
-        SelectComboByTag(MixerOutputComboBox, outputId);
-        MixerOutputHintText.Text = string.Equals(outputId, masterId, StringComparison.OrdinalIgnoreCase)
-            ? "Windows AudioGraph file playback is direct to master; decoded track quantum buffers are not exposed to the Core mixer."
-            : $"Persisted route '{outputId}' is modeled by Core but not active in Windows AudioGraph playback.";
-        MixerStatusText.Text = isAudioTrack
-            ? "Gain, pan, mute, solo, arm, monitor, and output are persisted. Live buses, sends, PDC, automation, and processed meters remain unavailable until decoded track buffers can enter the Core callback adapter."
-            : "Select an audio track to edit channel state.";
-        if (document is null)
-        {
-            MixerSurfaceText.Text = "Load a project to inspect the mixer.";
-            MixerInsertSendText.Text = "No channel selected.";
-            RefreshVst3InsertEditor(null, false);
-            MixerPdcText.Text = "PDC: unavailable";
-        }
-        else
-        {
-            MixerGraphPlan plan = MixerGraphBuilder.Build(MixerDocumentCodec.ToMixerChannels(document));
-            MixerSurfaceText.Text = string.Join("\n", document.Channels.Select(channel =>
-                $"{channel.Kind} · {channel.Name} · {(channel.Muted ? "MUTE" : channel.Solo ? "SOLO" : "active")} · → {channel.OutputId ?? "device"}"));
-            MixerInsertSendText.Text = selectedChannel is null
-                ? "Select an audio channel to inspect its slots."
-                : $"Inserts execute in listed order. Sends: {(selectedChannel.Sends.Length == 0 ? "None" : string.Join(", ", selectedChannel.Sends.Select(send => $"{send.Tap} → {send.DestinationId} @ {send.Gain:0.##}")))}";
-            RefreshVst3InsertEditor(selectedChannel, canEdit);
-            MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Preallocated delay buffers execute in live AudioGraph playback.";
-        }
-
-        MixerGainNumberBox.IsEnabled = canEdit;
-        MixerPanNumberBox.IsEnabled = canEdit;
-        MixerOutputComboBox.IsEnabled = canEdit;
-        MixerMuteToggle.IsEnabled = canEdit;
-        MixerSoloToggle.IsEnabled = canEdit;
-        MixerRecordArmToggle.IsEnabled = canEdit;
-        MixerInputMonitoringToggle.IsEnabled = canEdit;
-        ApplyMixerButton.IsEnabled = canEdit;
+      foreach (MixerChannelDocument destination in document.Channels.Where(channel => channel.Kind is MixerChannelKind.Group or MixerChannelKind.Master))
+      {
+        MixerOutputComboBox.Items.Add(new ComboBoxItem { Content = destination.Name, Tag = destination.Id });
+      }
+    }
+    string outputId = selectedChannel?.OutputId ?? masterId;
+    SelectComboByTag(MixerOutputComboBox, outputId);
+    MixerOutputHintText.Text = string.Equals(outputId, masterId, StringComparison.OrdinalIgnoreCase)
+        ? "Windows AudioGraph file playback is direct to master; decoded track quantum buffers are not exposed to the Core mixer."
+        : $"Persisted route '{outputId}' is modeled by Core but not active in Windows AudioGraph playback.";
+    MixerStatusText.Text = isAudioTrack
+        ? "Gain, pan, mute, solo, arm, monitor, and output are persisted. Live buses, sends, PDC, automation, and processed meters remain unavailable until decoded track buffers can enter the Core callback adapter."
+        : "Select an audio track to edit channel state.";
+    if (document is null)
+    {
+      MixerSurfaceText.Text = "Load a project to inspect the mixer.";
+      MixerInsertSendText.Text = "No channel selected.";
+      RefreshVst3InsertEditor(null, false);
+      MixerPdcText.Text = "PDC: unavailable";
+    }
+    else
+    {
+      MixerGraphPlan plan = MixerGraphBuilder.Build(MixerDocumentCodec.ToMixerChannels(document));
+      MixerSurfaceText.Text = string.Join("\n", document.Channels.Select(channel =>
+          $"{channel.Kind} · {channel.Name} · {(channel.Muted ? "MUTE" : channel.Solo ? "SOLO" : "active")} · → {channel.OutputId ?? "device"}"));
+      MixerInsertSendText.Text = selectedChannel is null
+          ? "Select an audio channel to inspect its slots."
+          : $"Inserts execute in listed order. Sends: {(selectedChannel.Sends.Length == 0 ? "None" : string.Join(", ", selectedChannel.Sends.Select(send => $"{send.Tap} → {send.DestinationId} @ {send.Gain:0.##}")))}";
+      RefreshVst3InsertEditor(selectedChannel, canEdit);
+      MixerPdcText.Text = $"PDC plan: {plan.TotalLatencySamples} samples total · {plan.Routes.Count(route => route.DelaySamples > 0)} compensated route(s). Preallocated delay buffers execute in live AudioGraph playback.";
     }
 
-    private TimelineEvent? SelectedNativeClip =>
-            SelectedLane is { IsLayer: false } lane && SelectedMixerTrack is { } track
-                ? track.Events.FirstOrDefault(clip => clip.Id == lane.Source["id"]?.GetValue<string>())
-                : null;
+    MixerGainNumberBox.IsEnabled = canEdit;
+    MixerPanNumberBox.IsEnabled = canEdit;
+    MixerOutputComboBox.IsEnabled = canEdit;
+    MixerMuteToggle.IsEnabled = canEdit;
+    MixerSoloToggle.IsEnabled = canEdit;
+    MixerRecordArmToggle.IsEnabled = canEdit;
+    MixerInputMonitoringToggle.IsEnabled = canEdit;
+    ApplyMixerButton.IsEnabled = canEdit;
+  }
 
-        private void RefreshProfessionalEditingEditor()
+  private TimelineEvent? SelectedNativeClip =>
+          SelectedLane is { IsLayer: false } lane && SelectedMixerTrack is { } track
+              ? track.Events.FirstOrDefault(clip => clip.Id == lane.Source["id"]?.GetValue<string>())
+              : null;
+
+  private void RefreshProfessionalEditingEditor()
+  {
+    CanonicalProject? project = _canonicalProject;
+    Track? track = SelectedMixerTrack;
+    TimelineEvent? clip = SelectedNativeClip;
+    ProfessionalSelectionText.Text = track is null
+        ? "Select a native track or clip to begin."
+        : clip is null ? $"Track: {track.Name}" : $"Track: {track.Name}  •  Clip: {clip.Name}";
+
+    if (project is null)
+    {
+      SetProfessionalEditingEnabled(false, false, false, false);
+      return;
+    }
+
+    ProfessionalEditingDocument editing;
+    try
+    {
+      editing = ProfessionalEditingContracts.Read(project.Timeline);
+      ProfessionalEditingContracts.ValidateAgainstProject(project, editing);
+      _automationSnapshot = AudioAutomationSnapshot.Build(project);
+    }
+    catch (InvalidDataException exception)
+    {
+      SetProfessionalEditingEnabled(false, false, false, false);
+      ShowInfo(exception.Message, InfoBarSeverity.Error);
+      return;
+    }
+
+    _suppressProfessionalSelectionChange = true;
+    try
+    {
+      List<ProfessionalListItem> lanes = editing.AutomationLanes
+          .Where(lane => lane.TrackId == track?.Id)
+          .Select(lane => new ProfessionalListItem(lane.Id, lane.Target, $"{lane.Mode} • {lane.Minimum:g} to {lane.Maximum:g} • {lane.Points.Length} points"))
+          .ToList();
+      if (_selectedAutomationLaneId is null || lanes.All(item => item.Id != _selectedAutomationLaneId))
+      {
+        _selectedAutomationLaneId = lanes.FirstOrDefault()?.Id;
+      }
+
+      AutomationLaneListView.ItemsSource = lanes;
+      AutomationLaneListView.SelectedItem = lanes.FirstOrDefault(item => item.Id == _selectedAutomationLaneId);
+
+      AutomationLane? selectedLane = editing.AutomationLanes.FirstOrDefault(lane => lane.Id == _selectedAutomationLaneId);
+      if (selectedLane is not null)
+      {
+        AutomationTargetTextBox.Text = selectedLane.Target;
+        AutomationMinimumNumberBox.Value = selectedLane.Minimum;
+        AutomationMaximumNumberBox.Value = selectedLane.Maximum;
+        SelectComboByTag(AutomationModeComboBox, selectedLane.Mode.ToString().ToLowerInvariant());
+      }
+      List<ProfessionalListItem> points = selectedLane?.Points
+          .Select(point => new ProfessionalListItem(point.Id, $"{point.Sample}: {point.Value:g} ({point.Curve})"))
+          .ToList() ?? [];
+      if (!_creatingAutomationPoint && (_selectedAutomationPointId is null || points.All(item => item.Id != _selectedAutomationPointId)))
+      {
+        _selectedAutomationPointId = points.FirstOrDefault()?.Id;
+      }
+
+      AutomationPointListView.ItemsSource = points;
+      AutomationPointListView.SelectedItem = points.FirstOrDefault(item => item.Id == _selectedAutomationPointId);
+      AutomationPoint? selectedPoint = selectedLane?.Points.FirstOrDefault(point => point.Id == _selectedAutomationPointId);
+      if (selectedPoint is not null)
+      {
+        AutomationPointSampleTextBox.Text = selectedPoint.Sample.ToString(CultureInfo.InvariantCulture);
+        AutomationPointValueNumberBox.Value = selectedPoint.Value;
+        AutomationTensionNumberBox.Value = selectedPoint.Tension;
+        SelectComboByTag(AutomationCurveComboBox, selectedPoint.Curve.ToString().ToLowerInvariant());
+      }
+
+      ClipEditingDescriptor? descriptor = editing.Clips.FirstOrDefault(item => item.ClipId == clip?.Id);
+      ProfessionalFadeInTextBox.Text = (descriptor?.Fades?.InSamples ?? 0).ToString(CultureInfo.InvariantCulture);
+      ProfessionalFadeOutTextBox.Text = (descriptor?.Fades?.OutSamples ?? 0).ToString(CultureInfo.InvariantCulture);
+      SelectComboByTag(FadeCurveComboBox, FadeCurveTag(descriptor?.Fades?.Curve ?? FadeCurve.EqualPower));
+      PlaybackRateNumberBox.Value = descriptor?.Process?.PlaybackRate ?? 1;
+      StretchRatioNumberBox.Value = descriptor?.Process?.StretchRatio ?? 1;
+      SelectComboByTag(ProcessAlgorithmComboBox, descriptor?.Process?.Algorithm == ProcessAlgorithm.PhaseVocoder ? "phase_vocoder" : "resample");
+
+      List<ProfessionalListItem> assets = project.MediaAssets.Select(asset => new ProfessionalListItem(asset.Id, System.IO.Path.GetFileName(asset.Path), asset.Kind)).ToList();
+      TakeMediaAssetComboBox.ItemsSource = assets;
+      TakeMediaAssetComboBox.SelectedIndex = assets.Count > 0 ? Math.Max(0, TakeMediaAssetComboBox.SelectedIndex) : -1;
+      List<ProfessionalListItem> takes = editing.Takes.Where(take => take.ClipId == clip?.Id)
+          .Select(take => new ProfessionalListItem(take.Id, $"{take.Id} • {take.MediaAssetId}", take.Id == descriptor?.ActiveTakeId ? "Active" : string.Empty)).ToList();
+      if (_selectedTakeId is null || takes.All(item => item.Id != _selectedTakeId))
+      {
+        _selectedTakeId = takes.FirstOrDefault(item => item.Id == descriptor?.ActiveTakeId)?.Id ?? takes.FirstOrDefault()?.Id;
+      }
+
+      TakeListView.ItemsSource = takes;
+      TakeListView.SelectedItem = takes.FirstOrDefault(item => item.Id == _selectedTakeId);
+      List<ProfessionalListItem> comps = editing.CompRanges.Where(comp => comp.ClipId == clip?.Id)
+          .Select(comp => new ProfessionalListItem(comp.Id, $"[{comp.StartSample}, {comp.EndSample}) • {comp.TakeId}")).ToList();
+      if (!_creatingCompRange && (_selectedCompRangeId is null || comps.All(item => item.Id != _selectedCompRangeId)))
+      {
+        _selectedCompRangeId = comps.FirstOrDefault()?.Id;
+      }
+
+      CompRangeListView.ItemsSource = comps;
+      CompRangeListView.SelectedItem = comps.FirstOrDefault(item => item.Id == _selectedCompRangeId);
+      CompRange? selectedComp = editing.CompRanges.FirstOrDefault(comp => comp.Id == _selectedCompRangeId);
+      if (selectedComp is not null)
+      {
+        CompStartTextBox.Text = selectedComp.StartSample.ToString(CultureInfo.InvariantCulture);
+        CompEndTextBox.Text = selectedComp.EndSample.ToString(CultureInfo.InvariantCulture);
+        _selectedTakeId = selectedComp.TakeId;
+        TakeListView.SelectedItem = takes.FirstOrDefault(item => item.Id == _selectedTakeId);
+      }
+
+      List<ProfessionalListItem> partners = track is null || clip is null ? [] : track.Events
+          .Where(item => item.Id != clip.Id && item.Start.Samples < clip.End.Samples && item.End.Samples > clip.Start.Samples)
+          .Select(item => new ProfessionalListItem(item.Id, item.Name, $"[{Math.Max(item.Start.Samples, clip.Start.Samples)}, {Math.Min(item.End.Samples, clip.End.Samples)})"))
+          .ToList();
+      CrossfadePartnerComboBox.ItemsSource = partners;
+      CrossfadePartnerComboBox.SelectedIndex = partners.Count > 0 ? 0 : -1;
+      RefreshCrossfadeFields(editing, track, clip);
+
+      bool editableTrack = track is { Locked: false };
+      bool editableClip = editableTrack && clip is not null && clip.Data["locked"]?.GetValue<bool>() != true;
+      SetProfessionalEditingEnabled(editableTrack, selectedLane is not null, selectedPoint is not null, editableClip);
+      SelectTakeButton.IsEnabled = editableClip && _selectedTakeId is not null;
+      SetCompRangeButton.IsEnabled = editableClip && _selectedTakeId is not null;
+      AddTakeButton.IsEnabled = editableClip && assets.Count > 0;
+      ApplyCrossfadeButton.IsEnabled = editableClip && partners.Count > 0;
+    }
+    finally
+    {
+      _suppressProfessionalSelectionChange = false;
+    }
+  }
+
+  private void SetProfessionalEditingEnabled(bool track, bool lane, bool point, bool clip)
+  {
+    CreateAutomationLaneButton.IsEnabled = track;
+    ApplyAutomationModeButton.IsEnabled = track && lane;
+    DeleteAutomationLaneButton.IsEnabled = track && lane;
+    UpsertAutomationPointButton.IsEnabled = track && lane;
+    NewAutomationPointButton.IsEnabled = track && lane;
+    DeleteAutomationPointButton.IsEnabled = track && lane && point;
+    ApplyFadesButton.IsEnabled = clip;
+    ApplyProcessButton.IsEnabled = clip;
+    AddTakeButton.IsEnabled = clip;
+    SelectTakeButton.IsEnabled = clip;
+    SetCompRangeButton.IsEnabled = clip;
+    NewCompRangeButton.IsEnabled = clip;
+    NudgeButton.IsEnabled = clip;
+    SlipButton.IsEnabled = clip;
+    SlideButton.IsEnabled = clip;
+    ApplyRangeEditButton.IsEnabled = track;
+    ApplyCrossfadeButton.IsEnabled = false;
+  }
+
+  private void RefreshCrossfadeFields(ProfessionalEditingDocument editing, Track? track, TimelineEvent? clip)
+  {
+    if (track is null || clip is null || CrossfadePartnerComboBox.SelectedItem is not ProfessionalListItem partner)
+    {
+      return;
+    }
+
+    TimelineEvent other = track.Events.First(item => item.Id == partner.Id);
+    Crossfade? crossfade = editing.Crossfades.FirstOrDefault(item => item.TrackId == track.Id &&
+        ((item.LeftClipId == clip.Id && item.RightClipId == other.Id) || (item.LeftClipId == other.Id && item.RightClipId == clip.Id)));
+    _selectedCrossfadeId = crossfade?.Id;
+    CrossfadeStartTextBox.Text = (crossfade?.StartSample ?? Math.Max(clip.Start.Samples, other.Start.Samples)).ToString(CultureInfo.InvariantCulture);
+    CrossfadeEndTextBox.Text = (crossfade?.EndSample ?? Math.Min(clip.End.Samples, other.End.Samples)).ToString(CultureInfo.InvariantCulture);
+    SelectComboByTag(CrossfadeCurveComboBox, FadeCurveTag(crossfade?.Curve ?? FadeCurve.EqualPower));
+  }
+
+  private void AutomationLaneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_suppressProfessionalSelectionChange)
+    {
+      return;
+    }
+
+    _selectedAutomationLaneId = (AutomationLaneListView.SelectedItem as ProfessionalListItem)?.Id;
+    _selectedAutomationPointId = null;
+    _creatingAutomationPoint = false;
+    RefreshProfessionalEditingEditor();
+  }
+
+  private void AutomationPointListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_suppressProfessionalSelectionChange)
+    {
+      return;
+    }
+
+    _selectedAutomationPointId = (AutomationPointListView.SelectedItem as ProfessionalListItem)?.Id;
+    if (_selectedAutomationPointId is not null)
+    {
+      _creatingAutomationPoint = false;
+    }
+
+    RefreshProfessionalEditingEditor();
+  }
+
+  private void TakeListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (!_suppressProfessionalSelectionChange)
+    {
+      _selectedTakeId = (TakeListView.SelectedItem as ProfessionalListItem)?.Id;
+    }
+  }
+
+  private void CompRangeListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_suppressProfessionalSelectionChange)
+    {
+      return;
+    }
+
+    _selectedCompRangeId = (CompRangeListView.SelectedItem as ProfessionalListItem)?.Id;
+    if (_selectedCompRangeId is not null)
+    {
+      _creatingCompRange = false;
+    }
+
+    RefreshProfessionalEditingEditor();
+  }
+
+  private void CrossfadePartnerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_suppressProfessionalSelectionChange || _canonicalProject is null)
+    {
+      return;
+    }
+
+    RefreshCrossfadeFields(ProfessionalEditingContracts.Read(_canonicalProject.Timeline), SelectedMixerTrack, SelectedNativeClip);
+    ApplyCrossfadeButton.IsEnabled = SelectedNativeClip is not null && CrossfadePartnerComboBox.SelectedItem is ProfessionalListItem;
+  }
+  private static bool IsAudioTrack(Track track)
+  {
+    return string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
+      track.Events.Any(timelineEvent => string.Equals(timelineEvent.Type, "audio", StringComparison.OrdinalIgnoreCase));
+  }
+
+  private void TrackHeader_PointerPressed(object sender, PointerRoutedEventArgs e)
+  {
+    if (sender is not Grid { Tag: string trackId } header ||
+        IsInteractiveHeaderSource(e.OriginalSource as DependencyObject, header))
+    {
+      return;
+    }
+
+    _selectedTrackId = trackId;
+    PersistViewState();
+    InspectorPivot.SelectedIndex = 1;
+    RenderTrackHeaders();
+    RefreshMixerEditor();
+    RefreshProfessionalEditingEditor();
+    UpdateCommandState();
+  }
+
+  private static bool IsInteractiveHeaderSource(DependencyObject? source, DependencyObject header)
+  {
+    for (DependencyObject? current = source; current is not null && current != header; current = VisualTreeHelper.GetParent(current))
+    {
+      if (current is ButtonBase)
+      {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private void RefreshVst3InsertEditor(MixerChannelDocument? channel, bool canEdit)
+  {
+    Vst3Catalog catalog = new Vst3CatalogStore().Load();
+    Vst3CatalogComboBox.ItemsSource = catalog.Cache.SelectMany(entry => entry.Plugins.Select(plugin =>
+        new Vst3CatalogItem(plugin.Name, plugin.PluginId, entry.Fingerprint.ModulePath, entry.Fingerprint.Sha256))).ToArray();
+    Vst3CatalogComboBox.IsEnabled = canEdit && Vst3CatalogComboBox.Items.Count > 0;
+    Vst3InsertListView.ItemsSource = channel?.Inserts.Select(insert => new Vst3InsertItem(
+        insert.Id, insert.PluginId,
+        $"{(insert.Enabled ? insert.Bypassed ? "bypassed" : "enabled" : "disabled")} · {insert.ReportedLatencySamples} samples · {System.IO.Path.GetFileName(insert.ModulePath)}")).ToArray() ?? [];
+    if (_selectedVst3InsertId is null || channel?.Inserts.All(insert => insert.Id != _selectedVst3InsertId) != false)
+    {
+      _selectedVst3InsertId = channel?.Inserts.FirstOrDefault()?.Id;
+    }
+
+    Vst3InsertListView.SelectedItem = (Vst3InsertListView.ItemsSource as Vst3InsertItem[])?.FirstOrDefault(item => item.Id == _selectedVst3InsertId);
+    MixerPluginInstanceDocument? selected = channel?.Inserts.FirstOrDefault(insert => insert.Id == _selectedVst3InsertId);
+    Vst3EnabledToggle.IsOn = selected?.Enabled ?? false;
+    Vst3BypassToggle.IsOn = selected?.Bypassed ?? false;
+    Vst3EnabledToggle.IsEnabled = Vst3BypassToggle.IsEnabled = canEdit && selected is not null;
+    Vst3WorkerStatusText.Text = selected is null ? "No VST3 insert selected." : DescribeVst3Worker(selected);
+    Vst3PresetNameTextBox.Text = selected?.PresetName ?? string.Empty;
+    if (selected is not null && App.Services.Vst3Host.TryGetProcessor(selected.Id, out _) &&
+        _vst3Parameters.TryGetValue(selected.Id, out ImmutableArray<Vst3ParameterDescriptor> parameters))
+    {
+      uint? selectedParameterId = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.Id;
+      Vst3ParameterComboBox.ItemsSource = parameters;
+      Vst3ParameterComboBox.SelectedItem = parameters.FirstOrDefault(parameter => parameter.Id == selectedParameterId) ?? parameters.FirstOrDefault();
+      Vst3ParameterValueBox.Value = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.NormalizedValue ?? double.NaN;
+    }
+    else
+    {
+      Vst3ParameterComboBox.ItemsSource = null;
+      Vst3ParameterValueBox.Value = double.NaN;
+    }
+  }
+
+  private string DescribeVst3Worker(MixerPluginInstanceDocument insert)
+  {
+    return !App.Services.Vst3Host.TryGetProcessor(insert.Id, out IVst3InsertProcessor? processor) || processor is null
+          ? $"Worker not started · module fingerprint {insert.ModuleSha256 ?? "unavailable"}."
+          : $"Worker {processor.Health} · latency {processor.ReportedLatencySamples} samples · {processor.Diagnostic ?? "no diagnostic"}";
+  }
+
+  private async Task CommitVst3ChannelAsync(MixerChannelDocument updatedChannel, string reason)
+  {
+    JsonObject before = CloneDocument(_timelineDocument!);
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument!, _canonicalProject!);
+    MixerDocument updated = document with { Channels = document.Channels.Replace(document.Channels.Single(channel => channel.Id == updatedChannel.Id), updatedChannel) };
+    await CommitDocumentAsync(before, MixerDocumentCodec.Write(_timelineDocument!, updated), reason, _selectedLaneId, _selectedCameraKeyframeIdentity);
+  }
+
+  private async void AddVst3Insert_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || Vst3CatalogComboBox.SelectedItem is not Vst3CatalogItem plugin)
+    {
+      return;
+    }
+
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+    string id = $"vst3-{Guid.NewGuid():N}";
+    _selectedVst3InsertId = id;
+    await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Add(new(id, plugin.PluginId, true, false, 0, null, null, [], plugin.ModulePath, plugin.ModuleSha256)) }, $"VST3 insert {plugin.Label} added");
+  }
+
+  private async void RemoveVst3Insert_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null)
+    {
+      return;
+    }
+
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+    string instanceId = _selectedVst3InsertId;
+    await App.Services.Vst3Host.RemoveInstanceAsync(instanceId);
+    _ = _vst3Parameters.Remove(instanceId);
+    _ = _activeVst3InstanceIds.Remove(instanceId);
+    _selectedVst3InsertId = null;
+    await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.RemoveAll(insert => insert.Id == instanceId) }, "VST3 insert removed");
+  }
+
+  private void Vst3InsertListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    _selectedVst3InsertId = (Vst3InsertListView.SelectedItem as Vst3InsertItem)?.Id;
+    RefreshMixerEditor();
+  }
+
+  private void MoveVst3InsertUp_Click(object sender, RoutedEventArgs e)
+  {
+    _ = MoveVst3InsertAsync(-1);
+  }
+
+  private void MoveVst3InsertDown_Click(object sender, RoutedEventArgs e)
+  {
+    _ = MoveVst3InsertAsync(1);
+  }
+
+  private async Task MoveVst3InsertAsync(int offset)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null)
+    {
+      return;
+    }
+
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+    int index = -1;
+    for (int candidate = 0; candidate < channel.Inserts.Length; candidate++)
+    {
+      if (channel.Inserts[candidate].Id == _selectedVst3InsertId) { index = candidate; break; }
+    }
+
+    int destination = index + offset;
+    if (index < 0 || destination < 0 || destination >= channel.Inserts.Length)
+    {
+      return;
+    }
+
+    MixerPluginInstanceDocument moving = channel.Inserts[index];
+    ImmutableArray<MixerPluginInstanceDocument> reordered = channel.Inserts.RemoveAt(index).Insert(destination, moving);
+    await CommitVst3ChannelAsync(channel with { Inserts = reordered }, "VST3 insert reordered");
+  }
+
+  private async void ApplyVst3InsertSwitches_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null)
+    {
+      return;
+    }
+
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+    MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
+    await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with { Enabled = Vst3EnabledToggle.IsOn, Bypassed = Vst3BypassToggle.IsOn }) }, "VST3 insert switches updated");
+  }
+
+  private async void StartVst3Worker_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null)
+    {
+      return;
+    }
+
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+    MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
+    if (string.IsNullOrWhiteSpace(insert.ModulePath) || string.IsNullOrWhiteSpace(insert.ModuleSha256)) { ShowInfo("The insert has no persisted module identity.", InfoBarSeverity.Warning); return; }
+    try
+    {
+      Vst3ModuleFingerprint fingerprint = await Vst3ModuleFingerprinting.CreateAsync(insert.ModulePath);
+      if (!string.Equals(fingerprint.Sha256, insert.ModuleSha256, StringComparison.OrdinalIgnoreCase))
+      {
+        ShowInfo("The VST3 module changed after discovery. Rescan it before starting a worker.", InfoBarSeverity.Error);
+        return;
+      }
+      Vst3InstanceStatus status = await App.Services.Vst3Host.CreateInstanceAsync(new(insert.Id, insert.ModulePath, insert.PluginId, 48000, DefaultAudioBufferFrames));
+      if (!status.Active) { ShowInfo(status.Diagnostic ?? "VST3 worker did not become active.", InfoBarSeverity.Warning); return; }
+      _ = _activeVst3InstanceIds.Add(insert.Id);
+      if (!string.IsNullOrWhiteSpace(insert.StateBase64))
+      {
+        status = await App.Services.Vst3Host.SetStateAsync(insert.Id, Convert.FromBase64String(insert.StateBase64));
+      }
+
+      _vst3Parameters[insert.Id] = status.Parameters;
+      Vst3ParameterComboBox.ItemsSource = status.Parameters;
+      Vst3ParameterComboBox.SelectedIndex = status.Parameters.Length > 0 ? 0 : -1;
+      Vst3ParameterValueBox.Value = status.Parameters.FirstOrDefault()?.NormalizedValue ?? double.NaN;
+      await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with { ReportedLatencySamples = status.ReportedLatencySamples }) }, "VST3 worker activated");
+    }
+    catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+  }
+
+  private void Vst3ParameterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    Vst3ParameterValueBox.Value = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.NormalizedValue ?? double.NaN;
+  }
+
+  private async void ApplyVst3Parameter_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedVst3InsertId is null || Vst3ParameterComboBox.SelectedItem is not Vst3ParameterDescriptor parameter || !TryReadFinite(Vst3ParameterValueBox, out double value))
+    {
+      return;
+    }
+
+    try { _ = await App.Services.Vst3Host.SetParameterAsync(_selectedVst3InsertId, parameter.Id, Math.Clamp(value, 0, 1)); RefreshMixerEditor(); }
+    catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+  }
+
+  private async void CaptureVst3State_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null)
+    {
+      return;
+    }
+
+    try
+    {
+      ReadOnlyMemory<byte> state = await App.Services.Vst3Host.GetStateAsync(_selectedVst3InsertId);
+      MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+      MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
+      MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
+      await CommitVst3ChannelAsync(channel with
+      {
+        Inserts = channel.Inserts.Replace(insert, insert with
         {
-            CanonicalProject? project = _canonicalProject;
-            Track? track = SelectedMixerTrack;
-            TimelineEvent? clip = SelectedNativeClip;
-            ProfessionalSelectionText.Text = track is null
-                ? "Select a native track or clip to begin."
-                : clip is null ? $"Track: {track.Name}" : $"Track: {track.Name}  •  Clip: {clip.Name}";
+          StateBase64 = Convert.ToBase64String(state.Span),
+          PresetName = string.IsNullOrWhiteSpace(Vst3PresetNameTextBox.Text) ? null : Vst3PresetNameTextBox.Text.Trim()
+        })
+      }, "VST3 state captured");
+    }
+    catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+  }
 
-            if (project is null)
+  private async Task CaptureActiveVst3StatesAsync(CancellationToken cancellationToken)
+  {
+    if (_timelineDocument is null || _canonicalProject is null || _activeVst3InstanceIds.Count == 0)
+    {
+      return;
+    }
+
+    MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
+    HashSet<string> activeInDocument = document.Channels.SelectMany(channel => channel.Inserts)
+        .Select(insert => insert.Id).ToHashSet(StringComparer.Ordinal);
+    foreach (string stale in _activeVst3InstanceIds.Where(id => !activeInDocument.Contains(id)).ToArray())
+    {
+      await App.Services.Vst3Host.RemoveInstanceAsync(stale, cancellationToken);
+      _ = _activeVst3InstanceIds.Remove(stale);
+      _ = _vst3Parameters.Remove(stale);
+    }
+
+    ImmutableArray<MixerChannelDocument>.Builder channels = document.Channels.ToBuilder();
+    bool changed = false;
+    for (int channelIndex = 0; channelIndex < channels.Count; channelIndex++)
+    {
+      MixerChannelDocument channel = channels[channelIndex];
+      ImmutableArray<MixerPluginInstanceDocument>.Builder inserts = channel.Inserts.ToBuilder();
+      for (int insertIndex = 0; insertIndex < inserts.Count; insertIndex++)
+      {
+        MixerPluginInstanceDocument insert = inserts[insertIndex];
+        if (!_activeVst3InstanceIds.Contains(insert.Id))
+        {
+          continue;
+        }
+
+        ReadOnlyMemory<byte> state = await App.Services.Vst3Host.GetStateAsync(insert.Id, cancellationToken);
+        inserts[insertIndex] = insert with { StateBase64 = Convert.ToBase64String(state.Span) };
+        changed = true;
+      }
+      if (changed)
+      {
+        channels[channelIndex] = channel with { Inserts = inserts.ToImmutable() };
+      }
+    }
+    if (!changed)
+    {
+      return;
+    }
+
+    _timelineDocument = MixerDocumentCodec.Write(_timelineDocument, document with { Channels = channels.ToImmutable() });
+    _isDirty = true;
+    RefreshEditor(updateRawText: true);
+  }
+
+  private async Task RemoveAllVst3WorkersAsync()
+  {
+    foreach (string instanceId in _activeVst3InstanceIds.ToArray())
+    {
+      try { await App.Services.Vst3Host.RemoveInstanceAsync(instanceId); }
+      catch (Exception ex) { CrashLogger.Write($"VST3 worker '{instanceId}' could not be removed.", ex); }
+      _ = _activeVst3InstanceIds.Remove(instanceId);
+      _ = _vst3Parameters.Remove(instanceId);
+    }
+  }
+
+  private async void ApplyMixer_Click(object sender, RoutedEventArgs e)
+  {
+    StudioCommandResult result = await ApplyMixerAsync();
+    if (!result.Executed && !string.IsNullOrWhiteSpace(result.Message))
+    {
+      ShowInfo(result.Message, InfoBarSeverity.Warning);
+    }
+  }
+
+  private async Task<StudioCommandResult> ApplyMixerAsync()
+  {
+    if (_timelineDocument is null || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
+    {
+      return new(false, "Select an audio track before applying mixer changes.");
+    }
+    if (!TryReadFinite(MixerGainNumberBox, out double gain) ||
+        !TryReadFinite(MixerPanNumberBox, out double pan))
+    {
+      return new(false, "Enter finite gain and pan values.");
+    }
+
+    TimelineTrackMixerState current = TimelineMixerProjection.Project(track);
+    TimelineTrackMixerState updatedState = current with
+    {
+      Gain = checked((float)gain),
+      Pan = checked((float)pan),
+      Muted = MixerMuteToggle.IsOn,
+      Solo = MixerSoloToggle.IsOn,
+      RecordArmed = MixerRecordArmToggle.IsOn,
+      InputMonitoring = MixerInputMonitoringToggle.IsOn,
+      OutputId = GetSelectedTag(MixerOutputComboBox) ?? TimelineMixerProjection.MasterOutputId
+    };
+
+    try
+    {
+      JsonObject before = CloneDocument(_timelineDocument);
+      MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject!);
+      JsonObject versioned = MixerDocumentCodec.Write(_timelineDocument, document);
+      JsonObject updated = TimelineMixerProjection.UpdateTrack(versioned, track.Id, updatedState);
+      await CommitDocumentAsync(
+          before,
+          updated,
+          $"timeline mixer updated for {track.Name}",
+          _selectedLaneId,
+          _selectedCameraKeyframeIdentity);
+      return new(true);
+    }
+    catch (Exception ex) when (ex is ArgumentException or InvalidDataException or KeyNotFoundException or OverflowException)
+    {
+      ShowInfo(ex.Message, InfoBarSeverity.Warning);
+      return new(false, ex.Message);
+    }
+  }
+
+  private void RefreshCameraEditor()
+  {
+    _suppressCameraSelectionChange = true;
+    try
+    {
+      _cameraKeyframeItems.Clear();
+      for (int index = 0; index < _cameraKeyframes.Count; index++)
+      {
+        TimelineCameraKeyframeDocument cameraKeyframe = _cameraKeyframes[index];
+        _cameraKeyframeItems.Add(new CameraKeyframeListItem
+        {
+          StableId = cameraKeyframe.StableId,
+          Summary = $"Keyframe {index + 1}",
+          Detail = BuildCameraKeyframeDetail(cameraKeyframe)
+        });
+      }
+
+      CameraKeyframeListView.SelectedItem = _cameraKeyframeItems.FirstOrDefault(
+          item => item.StableId == _selectedCameraKeyframeIdentity);
+
+      TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
+      bool hasSelection = keyframe is not null;
+      SetCameraEditorEnabled(hasSelection);
+      CameraSelectionHintText.Text = hasSelection
+          ? $"Editing {FormatClock(keyframe!.TimeSeconds)}"
+          : _cameraKeyframes.Count == 0
+              ? "No camera keyframes. Add one at the playhead."
+              : "Select a keyframe to edit camera values.";
+      if (keyframe is null)
+      {
+        CameraTimeNumberBox.Value = double.NaN;
+        CameraTranslationXNumberBox.Value = double.NaN;
+        CameraTranslationYNumberBox.Value = double.NaN;
+        CameraTranslationZNumberBox.Value = double.NaN;
+        CameraRotationXNumberBox.Value = double.NaN;
+        CameraRotationYNumberBox.Value = double.NaN;
+        CameraRotationZNumberBox.Value = double.NaN;
+        CameraZoomNumberBox.Value = double.NaN;
+        CameraFovNumberBox.Value = double.NaN;
+        return;
+      }
+
+      CameraTimeNumberBox.Value = keyframe.TimeSeconds;
+      CameraTranslationXNumberBox.Value = keyframe.TranslationX ?? double.NaN;
+      CameraTranslationYNumberBox.Value = keyframe.TranslationY ?? double.NaN;
+      CameraTranslationZNumberBox.Value = keyframe.TranslationZ ?? double.NaN;
+      CameraRotationXNumberBox.Value = keyframe.RotationX ?? double.NaN;
+      CameraRotationYNumberBox.Value = keyframe.RotationY ?? double.NaN;
+      CameraRotationZNumberBox.Value = keyframe.RotationZ ?? double.NaN;
+      CameraZoomNumberBox.Value = keyframe.Zoom ?? double.NaN;
+      CameraFovNumberBox.Value = keyframe.Fov ?? double.NaN;
+    }
+    finally
+    {
+      _suppressCameraSelectionChange = false;
+    }
+  }
+
+  private static string BuildCameraKeyframeDetail(TimelineCameraKeyframeDocument keyframe)
+  {
+    List<string> fields = [FormatClock(keyframe.TimeSeconds)];
+    if (keyframe.Zoom is { } zoom)
+    {
+      fields.Add($"zoom {zoom:0.###}");
+    }
+
+    if (keyframe.Fov is { } fov)
+    {
+      fields.Add($"fov {fov:0.###}");
+    }
+
+    return string.Join("  •  ", fields);
+  }
+
+  private void SetCameraEditorEnabled(bool isEnabled)
+  {
+    CameraTimeNumberBox.IsEnabled = isEnabled;
+    CameraTranslationXNumberBox.IsEnabled = isEnabled;
+    CameraTranslationYNumberBox.IsEnabled = isEnabled;
+    CameraTranslationZNumberBox.IsEnabled = isEnabled;
+    CameraRotationXNumberBox.IsEnabled = isEnabled;
+    CameraRotationYNumberBox.IsEnabled = isEnabled;
+    CameraRotationZNumberBox.IsEnabled = isEnabled;
+    CameraZoomNumberBox.IsEnabled = isEnabled;
+    CameraFovNumberBox.IsEnabled = isEnabled;
+    ApplyCameraButton.IsEnabled = isEnabled;
+    MoveCameraButton.IsEnabled = isEnabled;
+    QuantizeCameraButton.IsEnabled = isEnabled && CanQuantizeToCurrentGrid();
+    DuplicateCameraButton.IsEnabled = isEnabled;
+    DeleteCameraButton.IsEnabled = isEnabled;
+  }
+
+  private void CameraKeyframeListView_SelectionChanged(
+      object sender,
+      SelectionChangedEventArgs e)
+  {
+    if (_suppressCameraSelectionChange)
+    {
+      return;
+    }
+
+    SelectCameraKeyframe(
+        (CameraKeyframeListView.SelectedItem as CameraKeyframeListItem)?.StableId);
+  }
+
+  private async void AddCameraKeyframe_Click(object sender, RoutedEventArgs e)
+  {
+    await AddCameraKeyframeAtPlayheadAsync();
+  }
+
+  private async void ApplyCameraKeyframe_Click(object sender, RoutedEventArgs e)
+  {
+    await ApplyCameraKeyframeEditorAsync();
+  }
+
+  private async void MoveCameraToPlayhead_Click(object sender, RoutedEventArgs e)
+  {
+    await MoveSelectedCameraToPlayheadAsync();
+  }
+
+  private async void QuantizeCamera_Click(object sender, RoutedEventArgs e)
+  {
+    await QuantizeSelectedCameraKeyframeAsync();
+  }
+
+  private async void DuplicateCameraKeyframe_Click(object sender, RoutedEventArgs e)
+  {
+    await DuplicateSelectedCameraKeyframeAsync();
+  }
+
+  private async void DeleteCameraKeyframe_Click(object sender, RoutedEventArgs e)
+  {
+    await DeleteSelectedCameraKeyframeAsync();
+  }
+
+  private async Task AddCameraKeyframeAtPlayheadAsync()
+  {
+    if (_timelineDocument is null)
+    {
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    double? durationSeconds = TimelineCameraProjection.GetDurationSeconds(_timelineDocument);
+    TimelineCameraKeyframeDocument created = TimelineCameraProjection.CreateAt(
+        SnapTime(_positionSeconds),
+        durationSeconds);
+    List<TimelineCameraKeyframeDocument> updated = _cameraKeyframes.ToList();
+    updated.Add(created);
+    await CommitCameraKeyframesAsync(
+        before,
+        updated,
+        "camera keyframe added",
+        created.StableId);
+  }
+
+  private async Task ApplyCameraKeyframeEditorAsync()
+  {
+    TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
+    if (_timelineDocument is null || keyframe is null)
+    {
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    double? durationSeconds = TimelineCameraProjection.GetDurationSeconds(_timelineDocument);
+    if (double.IsFinite(CameraTimeNumberBox.Value))
+    {
+      keyframe.MoveTo(CameraTimeNumberBox.Value, durationSeconds);
+    }
+
+    if (double.IsFinite(CameraTranslationXNumberBox.Value))
+    {
+      keyframe.TranslationX = CameraTranslationXNumberBox.Value;
+    }
+
+    if (double.IsFinite(CameraTranslationYNumberBox.Value))
+    {
+      keyframe.TranslationY = CameraTranslationYNumberBox.Value;
+    }
+
+    if (double.IsFinite(CameraTranslationZNumberBox.Value))
+    {
+      keyframe.TranslationZ = CameraTranslationZNumberBox.Value;
+    }
+
+    if (double.IsFinite(CameraRotationXNumberBox.Value))
+    {
+      keyframe.RotationX = CameraRotationXNumberBox.Value;
+    }
+
+    if (double.IsFinite(CameraRotationYNumberBox.Value))
+    {
+      keyframe.RotationY = CameraRotationYNumberBox.Value;
+    }
+
+    if (double.IsFinite(CameraRotationZNumberBox.Value))
+    {
+      keyframe.RotationZ = CameraRotationZNumberBox.Value;
+    }
+
+    if (double.IsFinite(CameraZoomNumberBox.Value))
+    {
+      keyframe.Zoom = Math.Max(0.001, CameraZoomNumberBox.Value);
+    }
+
+    if (double.IsFinite(CameraFovNumberBox.Value))
+    {
+      keyframe.Fov = Math.Max(0.001, CameraFovNumberBox.Value);
+    }
+
+    await CommitCameraKeyframesAsync(
+        before,
+        _cameraKeyframes,
+        "camera keyframe edited",
+        keyframe.StableId);
+  }
+
+  private async Task MoveSelectedCameraToPlayheadAsync()
+  {
+    TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
+    if (_timelineDocument is null || keyframe is null)
+    {
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    keyframe.MoveTo(
+        _positionSeconds,
+        TimelineCameraProjection.GetDurationSeconds(_timelineDocument));
+    await CommitCameraKeyframesAsync(
+        before,
+        _cameraKeyframes,
+        "camera keyframe moved to playhead",
+        keyframe.StableId);
+  }
+
+  private async Task QuantizeSelectedCameraKeyframeAsync()
+  {
+    TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
+    if (_timelineDocument is null || keyframe is null)
+    {
+      return;
+    }
+
+    if (!TryGetSnapGridSeconds(out double gridSeconds))
+    {
+      ShowInfo(
+          "Choose a snap grid before quantizing a camera keyframe.",
+          InfoBarSeverity.Warning);
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    keyframe.Quantize(
+        gridSeconds,
+        TimelineCameraProjection.GetDurationSeconds(_timelineDocument));
+    await CommitCameraKeyframesAsync(
+        before,
+        _cameraKeyframes,
+        "camera keyframe quantized",
+        keyframe.StableId);
+  }
+
+  private async Task DuplicateSelectedCameraKeyframeAsync()
+  {
+    TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
+    if (_timelineDocument is null || keyframe is null)
+    {
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    double? durationSeconds = TimelineCameraProjection.GetDurationSeconds(_timelineDocument);
+    TimelineCameraKeyframeDocument duplicate = TimelineCameraProjection.Duplicate(
+        keyframe,
+        durationSeconds);
+    duplicate.MoveTo(SnapTime(_positionSeconds), durationSeconds);
+    List<TimelineCameraKeyframeDocument> updated = _cameraKeyframes.ToList();
+    updated.Add(duplicate);
+    await CommitCameraKeyframesAsync(
+        before,
+        updated,
+        "camera keyframe duplicated",
+        duplicate.StableId);
+  }
+
+  private async Task DeleteSelectedCameraKeyframeAsync()
+  {
+    TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
+    if (_timelineDocument is null || keyframe is null)
+    {
+      return;
+    }
+
+    if (!await ConfirmAsync(
+            "Delete camera keyframe?",
+            $"Delete the camera keyframe at {keyframe.TimeSeconds:0.###} seconds?",
+            "Delete"))
+    {
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    List<TimelineCameraKeyframeDocument> updated = _cameraKeyframes
+        .Where(candidate => candidate.StableId != keyframe.StableId)
+        .ToList();
+    await CommitCameraKeyframesAsync(
+        before,
+        updated,
+        "camera keyframe deleted",
+        selectionId: null);
+  }
+
+  private async void Clip_PointerPressed(object sender, PointerRoutedEventArgs e)
+  {
+    if (sender is not Border border ||
+        border.Tag is not string stableId ||
+        _timelineDocument is null)
+    {
+      return;
+    }
+
+    TimelineLaneDocument? lane = _lanes.FirstOrDefault(item => item.StableId == stableId);
+    if (lane is null)
+    {
+      return;
+    }
+
+    Microsoft.UI.Input.PointerPoint pointerPoint = e.GetCurrentPoint(border);
+    if (!pointerPoint.Properties.IsLeftButtonPressed)
+    {
+      SelectLane(stableId);
+      return;
+    }
+
+    if (IsLaneLocked(lane))
+    {
+      SelectLane(stableId);
+      ShowInfo("Unlock this track before editing its clips.", InfoBarSeverity.Warning);
+      return;
+    }
+
+    SelectLane(stableId);
+    if (_pointerTool == TimelinePointerTool.Blade)
+    {
+      double splitSeconds = Math.Clamp(
+          SnapTime(e.GetCurrentPoint(TimelineCanvas).Position.X / _pixelsPerSecond),
+          lane.StartSeconds,
+          lane.EndSeconds);
+      SetPosition(splitSeconds, requestPreview: false);
+      e.Handled = true;
+      try
+      {
+        await SplitLaneAtAsync(lane, splitSeconds);
+      }
+      catch (ArgumentOutOfRangeException ex)
+      {
+        ShowInfo(ex.Message, InfoBarSeverity.Warning);
+      }
+
+      return;
+    }
+
+    PointerPoint localPoint = e.GetCurrentPoint(border);
+    _dragMode = localPoint.Position.X <= 8
+        ? DragMode.TrimStart
+        : localPoint.Position.X >= border.ActualWidth - 8
+            ? DragMode.TrimEnd
+            : DragMode.Move;
+    _dragOriginalLane = lane;
+    _dragProvisionalLane = lane;
+    _dragBeforeSnapshot = CloneDocument(_timelineDocument);
+    _dragBorder = border;
+    _dragPointerId = e.Pointer.PointerId;
+    _dragStartPoint = e.GetCurrentPoint(TimelineCanvas).Position;
+    _ = border.CapturePointer(e.Pointer);
+    e.Handled = true;
+    await RefreshPreviewAsync(force: false);
+  }
+
+  private void Clip_PointerMoved(object sender, PointerRoutedEventArgs e)
+  {
+    if (_dragBorder is null ||
+        _dragOriginalLane is null ||
+        e.Pointer.PointerId != _dragPointerId)
+    {
+      return;
+    }
+
+    Point current = e.GetCurrentPoint(TimelineCanvas).Position;
+    double deltaSeconds = (current.X - _dragStartPoint.X) / _pixelsPerSecond;
+    TimelineLaneDocument candidate;
+    try
+    {
+      switch (_dragMode)
+      {
+        case DragMode.TrimStart:
+          candidate = TimelineProjection.Trim(
+              _dragOriginalLane,
+              SnapTime(_dragOriginalLane.StartSeconds + deltaSeconds),
+              _dragOriginalLane.EndSeconds,
+              _durationSeconds);
+          break;
+        case DragMode.TrimEnd:
+          candidate = TimelineProjection.Trim(
+              _dragOriginalLane,
+              _dragOriginalLane.StartSeconds,
+              SnapTime(_dragOriginalLane.EndSeconds + deltaSeconds),
+              _durationSeconds);
+          break;
+        default:
+          candidate = TimelineProjection.Move(
+              _dragOriginalLane,
+              SnapTime(_dragOriginalLane.StartSeconds + deltaSeconds),
+              _durationSeconds);
+          if (!_dragOriginalLane.IsLayer)
+          {
+            int trackIndex = Math.Clamp(
+                (int)Math.Floor(current.Y / TrackHeight),
+                0,
+                Math.Max(0, TrackCount - 1));
+            JsonObject? timelineDocument = _timelineDocument;
+            if (timelineDocument is null ||
+                TimelineProjection.IsTrackLocked(timelineDocument, trackIndex))
             {
-                SetProfessionalEditingEnabled(false, false, false, false);
-                return;
+              return;
             }
-
-            ProfessionalEditingDocument editing;
-            try
-            {
-                editing = ProfessionalEditingContracts.Read(project.Timeline);
-                ProfessionalEditingContracts.ValidateAgainstProject(project, editing);
-                _automationSnapshot = AudioAutomationSnapshot.Build(project);
-            }
-            catch (InvalidDataException exception)
-            {
-                SetProfessionalEditingEnabled(false, false, false, false);
-                ShowInfo(exception.Message, InfoBarSeverity.Error);
-                return;
-            }
-
-            _suppressProfessionalSelectionChange = true;
-            try
-            {
-                List<ProfessionalListItem> lanes = editing.AutomationLanes
-                    .Where(lane => lane.TrackId == track?.Id)
-                    .Select(lane => new ProfessionalListItem(lane.Id, lane.Target, $"{lane.Mode} • {lane.Minimum:g} to {lane.Maximum:g} • {lane.Points.Length} points"))
-                    .ToList();
-                if (_selectedAutomationLaneId is null || lanes.All(item => item.Id != _selectedAutomationLaneId))
-                    _selectedAutomationLaneId = lanes.FirstOrDefault()?.Id;
-                AutomationLaneListView.ItemsSource = lanes;
-                AutomationLaneListView.SelectedItem = lanes.FirstOrDefault(item => item.Id == _selectedAutomationLaneId);
-
-                AutomationLane? selectedLane = editing.AutomationLanes.FirstOrDefault(lane => lane.Id == _selectedAutomationLaneId);
-                if (selectedLane is not null)
-                {
-                    AutomationTargetTextBox.Text = selectedLane.Target;
-                    AutomationMinimumNumberBox.Value = selectedLane.Minimum;
-                    AutomationMaximumNumberBox.Value = selectedLane.Maximum;
-                    SelectComboByTag(AutomationModeComboBox, selectedLane.Mode.ToString().ToLowerInvariant());
-                }
-                List<ProfessionalListItem> points = selectedLane?.Points
-                    .Select(point => new ProfessionalListItem(point.Id, $"{point.Sample}: {point.Value:g} ({point.Curve})"))
-                    .ToList() ?? [];
-                if (!_creatingAutomationPoint && (_selectedAutomationPointId is null || points.All(item => item.Id != _selectedAutomationPointId)))
-                    _selectedAutomationPointId = points.FirstOrDefault()?.Id;
-                AutomationPointListView.ItemsSource = points;
-                AutomationPointListView.SelectedItem = points.FirstOrDefault(item => item.Id == _selectedAutomationPointId);
-                AutomationPoint? selectedPoint = selectedLane?.Points.FirstOrDefault(point => point.Id == _selectedAutomationPointId);
-                if (selectedPoint is not null)
-                {
-                    AutomationPointSampleTextBox.Text = selectedPoint.Sample.ToString(CultureInfo.InvariantCulture);
-                    AutomationPointValueNumberBox.Value = selectedPoint.Value;
-                    AutomationTensionNumberBox.Value = selectedPoint.Tension;
-                    SelectComboByTag(AutomationCurveComboBox, selectedPoint.Curve.ToString().ToLowerInvariant());
-                }
-
-                ClipEditingDescriptor? descriptor = editing.Clips.FirstOrDefault(item => item.ClipId == clip?.Id);
-                ProfessionalFadeInTextBox.Text = (descriptor?.Fades?.InSamples ?? 0).ToString(CultureInfo.InvariantCulture);
-                ProfessionalFadeOutTextBox.Text = (descriptor?.Fades?.OutSamples ?? 0).ToString(CultureInfo.InvariantCulture);
-                SelectComboByTag(FadeCurveComboBox, FadeCurveTag(descriptor?.Fades?.Curve ?? FadeCurve.EqualPower));
-                PlaybackRateNumberBox.Value = descriptor?.Process?.PlaybackRate ?? 1;
-                StretchRatioNumberBox.Value = descriptor?.Process?.StretchRatio ?? 1;
-                SelectComboByTag(ProcessAlgorithmComboBox, descriptor?.Process?.Algorithm == ProcessAlgorithm.PhaseVocoder ? "phase_vocoder" : "resample");
-
-                List<ProfessionalListItem> assets = project.MediaAssets.Select(asset => new ProfessionalListItem(asset.Id, System.IO.Path.GetFileName(asset.Path), asset.Kind)).ToList();
-                TakeMediaAssetComboBox.ItemsSource = assets;
-                TakeMediaAssetComboBox.SelectedIndex = assets.Count > 0 ? Math.Max(0, TakeMediaAssetComboBox.SelectedIndex) : -1;
-                List<ProfessionalListItem> takes = editing.Takes.Where(take => take.ClipId == clip?.Id)
-                    .Select(take => new ProfessionalListItem(take.Id, $"{take.Id} • {take.MediaAssetId}", take.Id == descriptor?.ActiveTakeId ? "Active" : string.Empty)).ToList();
-                if (_selectedTakeId is null || takes.All(item => item.Id != _selectedTakeId))
-                    _selectedTakeId = takes.FirstOrDefault(item => item.Id == descriptor?.ActiveTakeId)?.Id ?? takes.FirstOrDefault()?.Id;
-                TakeListView.ItemsSource = takes;
-                TakeListView.SelectedItem = takes.FirstOrDefault(item => item.Id == _selectedTakeId);
-                List<ProfessionalListItem> comps = editing.CompRanges.Where(comp => comp.ClipId == clip?.Id)
-                    .Select(comp => new ProfessionalListItem(comp.Id, $"[{comp.StartSample}, {comp.EndSample}) • {comp.TakeId}")).ToList();
-                if (!_creatingCompRange && (_selectedCompRangeId is null || comps.All(item => item.Id != _selectedCompRangeId)))
-                    _selectedCompRangeId = comps.FirstOrDefault()?.Id;
-                CompRangeListView.ItemsSource = comps;
-                CompRangeListView.SelectedItem = comps.FirstOrDefault(item => item.Id == _selectedCompRangeId);
-                CompRange? selectedComp = editing.CompRanges.FirstOrDefault(comp => comp.Id == _selectedCompRangeId);
-                if (selectedComp is not null)
-                {
-                    CompStartTextBox.Text = selectedComp.StartSample.ToString(CultureInfo.InvariantCulture);
-                    CompEndTextBox.Text = selectedComp.EndSample.ToString(CultureInfo.InvariantCulture);
-                    _selectedTakeId = selectedComp.TakeId;
-                    TakeListView.SelectedItem = takes.FirstOrDefault(item => item.Id == _selectedTakeId);
-                }
-
-                List<ProfessionalListItem> partners = track is null || clip is null ? [] : track.Events
-                    .Where(item => item.Id != clip.Id && item.Start.Samples < clip.End.Samples && item.End.Samples > clip.Start.Samples)
-                    .Select(item => new ProfessionalListItem(item.Id, item.Name, $"[{Math.Max(item.Start.Samples, clip.Start.Samples)}, {Math.Min(item.End.Samples, clip.End.Samples)})"))
-                    .ToList();
-                CrossfadePartnerComboBox.ItemsSource = partners;
-                CrossfadePartnerComboBox.SelectedIndex = partners.Count > 0 ? 0 : -1;
-                RefreshCrossfadeFields(editing, track, clip);
-
-                bool editableTrack = track is { Locked: false };
-                bool editableClip = editableTrack && clip is not null && clip.Data["locked"]?.GetValue<bool>() != true;
-                SetProfessionalEditingEnabled(editableTrack, selectedLane is not null, selectedPoint is not null, editableClip);
-                SelectTakeButton.IsEnabled = editableClip && _selectedTakeId is not null;
-                SetCompRangeButton.IsEnabled = editableClip && _selectedTakeId is not null;
-                AddTakeButton.IsEnabled = editableClip && assets.Count > 0;
-                ApplyCrossfadeButton.IsEnabled = editableClip && partners.Count > 0;
-            }
-            finally
-            {
-                _suppressProfessionalSelectionChange = false;
-            }
-        }
-
-        private void SetProfessionalEditingEnabled(bool track, bool lane, bool point, bool clip)
-        {
-            CreateAutomationLaneButton.IsEnabled = track;
-            ApplyAutomationModeButton.IsEnabled = track && lane;
-            DeleteAutomationLaneButton.IsEnabled = track && lane;
-            UpsertAutomationPointButton.IsEnabled = track && lane;
-            NewAutomationPointButton.IsEnabled = track && lane;
-            DeleteAutomationPointButton.IsEnabled = track && lane && point;
-            ApplyFadesButton.IsEnabled = clip;
-            ApplyProcessButton.IsEnabled = clip;
-            AddTakeButton.IsEnabled = clip;
-            SelectTakeButton.IsEnabled = clip;
-            SetCompRangeButton.IsEnabled = clip;
-            NewCompRangeButton.IsEnabled = clip;
-            NudgeButton.IsEnabled = clip;
-            SlipButton.IsEnabled = clip;
-            SlideButton.IsEnabled = clip;
-            ApplyRangeEditButton.IsEnabled = track;
-            ApplyCrossfadeButton.IsEnabled = false;
-        }
-
-        private void RefreshCrossfadeFields(ProfessionalEditingDocument editing, Track? track, TimelineEvent? clip)
-        {
-            if (track is null || clip is null || CrossfadePartnerComboBox.SelectedItem is not ProfessionalListItem partner) return;
-            TimelineEvent other = track.Events.First(item => item.Id == partner.Id);
-            Crossfade? crossfade = editing.Crossfades.FirstOrDefault(item => item.TrackId == track.Id &&
-                ((item.LeftClipId == clip.Id && item.RightClipId == other.Id) || (item.LeftClipId == other.Id && item.RightClipId == clip.Id)));
-            _selectedCrossfadeId = crossfade?.Id;
-            CrossfadeStartTextBox.Text = (crossfade?.StartSample ?? Math.Max(clip.Start.Samples, other.Start.Samples)).ToString(CultureInfo.InvariantCulture);
-            CrossfadeEndTextBox.Text = (crossfade?.EndSample ?? Math.Min(clip.End.Samples, other.End.Samples)).ToString(CultureInfo.InvariantCulture);
-            SelectComboByTag(CrossfadeCurveComboBox, FadeCurveTag(crossfade?.Curve ?? FadeCurve.EqualPower));
-        }
-
-        private void AutomationLaneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressProfessionalSelectionChange) return;
-            _selectedAutomationLaneId = (AutomationLaneListView.SelectedItem as ProfessionalListItem)?.Id;
-            _selectedAutomationPointId = null;
-            _creatingAutomationPoint = false;
-            RefreshProfessionalEditingEditor();
-        }
-
-        private void AutomationPointListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressProfessionalSelectionChange) return;
-            _selectedAutomationPointId = (AutomationPointListView.SelectedItem as ProfessionalListItem)?.Id;
-            if (_selectedAutomationPointId is not null) _creatingAutomationPoint = false;
-            RefreshProfessionalEditingEditor();
-        }
-
-        private void TakeListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (!_suppressProfessionalSelectionChange)
-                _selectedTakeId = (TakeListView.SelectedItem as ProfessionalListItem)?.Id;
-        }
-
-        private void CompRangeListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressProfessionalSelectionChange) return;
-            _selectedCompRangeId = (CompRangeListView.SelectedItem as ProfessionalListItem)?.Id;
-            if (_selectedCompRangeId is not null) _creatingCompRange = false;
-            RefreshProfessionalEditingEditor();
-        }
-
-        private void CrossfadePartnerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressProfessionalSelectionChange || _canonicalProject is null) return;
-            RefreshCrossfadeFields(ProfessionalEditingContracts.Read(_canonicalProject.Timeline), SelectedMixerTrack, SelectedNativeClip);
-            ApplyCrossfadeButton.IsEnabled = SelectedNativeClip is not null && CrossfadePartnerComboBox.SelectedItem is ProfessionalListItem;
-        }
-    private static bool IsAudioTrack(Track track) =>
-        string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
-        track.Events.Any(timelineEvent => string.Equals(timelineEvent.Type, "audio", StringComparison.OrdinalIgnoreCase));
-
-    private void TrackHeader_PointerPressed(object sender, PointerRoutedEventArgs e)
+            candidate = TimelineProjection.ReassignTrack(candidate, trackIndex);
+          }
+          break;
+      }
+    }
+    catch (ArgumentOutOfRangeException)
     {
-        if (sender is not Grid { Tag: string trackId } header ||
-            IsInteractiveHeaderSource(e.OriginalSource as DependencyObject, header))
-        {
-            return;
-        }
-
-        _selectedTrackId = trackId;
-        PersistViewState();
-        InspectorPivot.SelectedIndex = 1;
-        RenderTrackHeaders();
-        RefreshMixerEditor();
-        RefreshProfessionalEditingEditor();
-        UpdateCommandState();
+      return;
     }
 
-    private static bool IsInteractiveHeaderSource(DependencyObject? source, DependencyObject header)
-    {
-        for (DependencyObject? current = source; current is not null && current != header; current = VisualTreeHelper.GetParent(current))
-        {
-            if (current is ButtonBase)
-            {
-                return true;
-            }
-        }
+    _dragProvisionalLane = candidate;
+    Canvas.SetLeft(_dragBorder, candidate.StartSeconds * _pixelsPerSecond);
+    Canvas.SetTop(
+        _dragBorder,
+        ((candidate.IsLayer ? OverlayVisualTrackIndex : candidate.TrackIndex) * TrackHeight) +
+        ClipVerticalInset);
+    _dragBorder.Width = Math.Max(
+        8,
+        (candidate.EndSeconds - candidate.StartSeconds) * _pixelsPerSecond);
+    e.Handled = true;
+  }
 
-        return false;
+  private async void Clip_PointerReleased(object sender, PointerRoutedEventArgs e)
+  {
+    if (_dragBorder is null ||
+        _dragOriginalLane is null ||
+        _dragProvisionalLane is null ||
+        _dragBeforeSnapshot is null ||
+        e.Pointer.PointerId != _dragPointerId)
+    {
+      return;
     }
 
-    private void RefreshVst3InsertEditor(MixerChannelDocument? channel, bool canEdit)
+    Border border = _dragBorder;
+    TimelineLaneDocument original = _dragOriginalLane;
+    TimelineLaneDocument provisional = _dragProvisionalLane;
+    JsonObject before = _dragBeforeSnapshot;
+    DragMode dragMode = _dragMode;
+    ResetDragState();
+    border.ReleasePointerCapture(e.Pointer);
+
+    if (LaneGeometryEquals(original, provisional))
     {
-        Vst3Catalog catalog = new Vst3CatalogStore().Load();
-        Vst3CatalogComboBox.ItemsSource = catalog.Cache.SelectMany(entry => entry.Plugins.Select(plugin =>
-            new Vst3CatalogItem(plugin.Name, plugin.PluginId, entry.Fingerprint.ModulePath, entry.Fingerprint.Sha256))).ToArray();
-        Vst3CatalogComboBox.IsEnabled = canEdit && Vst3CatalogComboBox.Items.Count > 0;
-        Vst3InsertListView.ItemsSource = channel?.Inserts.Select(insert => new Vst3InsertItem(
-            insert.Id, insert.PluginId,
-            $"{(insert.Enabled ? insert.Bypassed ? "bypassed" : "enabled" : "disabled")} · {insert.ReportedLatencySamples} samples · {System.IO.Path.GetFileName(insert.ModulePath)}")).ToArray() ?? [];
-        if (_selectedVst3InsertId is null || channel?.Inserts.All(insert => insert.Id != _selectedVst3InsertId) != false)
-            _selectedVst3InsertId = channel?.Inserts.FirstOrDefault()?.Id;
-        Vst3InsertListView.SelectedItem = (Vst3InsertListView.ItemsSource as Vst3InsertItem[])?.FirstOrDefault(item => item.Id == _selectedVst3InsertId);
-        MixerPluginInstanceDocument? selected = channel?.Inserts.FirstOrDefault(insert => insert.Id == _selectedVst3InsertId);
-        Vst3EnabledToggle.IsOn = selected?.Enabled ?? false;
-        Vst3BypassToggle.IsOn = selected?.Bypassed ?? false;
-        Vst3EnabledToggle.IsEnabled = Vst3BypassToggle.IsEnabled = canEdit && selected is not null;
-        Vst3WorkerStatusText.Text = selected is null ? "No VST3 insert selected." : DescribeVst3Worker(selected);
-        Vst3PresetNameTextBox.Text = selected?.PresetName ?? string.Empty;
-        if (selected is not null && App.Services.Vst3Host.TryGetProcessor(selected.Id, out _) &&
-            _vst3Parameters.TryGetValue(selected.Id, out ImmutableArray<Vst3ParameterDescriptor> parameters))
-        {
-            uint? selectedParameterId = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.Id;
-            Vst3ParameterComboBox.ItemsSource = parameters;
-            Vst3ParameterComboBox.SelectedItem = parameters.FirstOrDefault(parameter => parameter.Id == selectedParameterId) ?? parameters.FirstOrDefault();
-            Vst3ParameterValueBox.Value = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.NormalizedValue ?? double.NaN;
-        }
-        else
-        {
-            Vst3ParameterComboBox.ItemsSource = null;
-            Vst3ParameterValueBox.Value = double.NaN;
-        }
+      RenderTimeline();
+      return;
     }
 
-    private string DescribeVst3Worker(MixerPluginInstanceDocument insert)
+    if (!original.IsLayer && !_rippleEnabled && original.TrackIndex == provisional.TrackIndex)
     {
-        if (!App.Services.Vst3Host.TryGetProcessor(insert.Id, out IVst3InsertProcessor? processor) || processor is null)
-            return $"Worker not started · module fingerprint {insert.ModuleSha256 ?? "unavailable"}.";
-        return $"Worker {processor.Health} · latency {processor.ReportedLatencySamples} samples · {processor.Diagnostic ?? "no diagnostic"}";
-    }
-
-    private async Task CommitVst3ChannelAsync(MixerChannelDocument updatedChannel, string reason)
-    {
-        JsonObject before = CloneDocument(_timelineDocument!);
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument!, _canonicalProject!);
-        MixerDocument updated = document with { Channels = document.Channels.Replace(document.Channels.Single(channel => channel.Id == updatedChannel.Id), updatedChannel) };
-        await CommitDocumentAsync(before, MixerDocumentCodec.Write(_timelineDocument!, updated), reason, _selectedLaneId, _selectedCameraKeyframeIdentity);
-    }
-
-    private async void AddVst3Insert_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || Vst3CatalogComboBox.SelectedItem is not Vst3CatalogItem plugin) return;
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
-        string id = $"vst3-{Guid.NewGuid():N}";
-        _selectedVst3InsertId = id;
-        await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Add(new(id, plugin.PluginId, true, false, 0, null, null, [], plugin.ModulePath, plugin.ModuleSha256)) }, $"VST3 insert {plugin.Label} added");
-    }
-
-    private async void RemoveVst3Insert_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
-        string instanceId = _selectedVst3InsertId;
-        await App.Services.Vst3Host.RemoveInstanceAsync(instanceId);
-        _vst3Parameters.Remove(instanceId);
-        _activeVst3InstanceIds.Remove(instanceId);
-        _selectedVst3InsertId = null;
-        await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.RemoveAll(insert => insert.Id == instanceId) }, "VST3 insert removed");
-    }
-
-    private void Vst3InsertListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        _selectedVst3InsertId = (Vst3InsertListView.SelectedItem as Vst3InsertItem)?.Id;
-        RefreshMixerEditor();
-    }
-
-    private void MoveVst3InsertUp_Click(object sender, RoutedEventArgs e) => _ = MoveVst3InsertAsync(-1);
-    private void MoveVst3InsertDown_Click(object sender, RoutedEventArgs e) => _ = MoveVst3InsertAsync(1);
-
-    private async Task MoveVst3InsertAsync(int offset)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
-        int index = -1;
-        for (int candidate = 0; candidate < channel.Inserts.Length; candidate++)
-            if (channel.Inserts[candidate].Id == _selectedVst3InsertId) { index = candidate; break; }
-        int destination = index + offset;
-        if (index < 0 || destination < 0 || destination >= channel.Inserts.Length) return;
-        MixerPluginInstanceDocument moving = channel.Inserts[index];
-        ImmutableArray<MixerPluginInstanceDocument> reordered = channel.Inserts.RemoveAt(index).Insert(destination, moving);
-        await CommitVst3ChannelAsync(channel with { Inserts = reordered }, "VST3 insert reordered");
-    }
-
-    private async void ApplyVst3InsertSwitches_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
-        MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
-        await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with { Enabled = Vst3EnabledToggle.IsOn, Bypassed = Vst3BypassToggle.IsOn }) }, "VST3 insert switches updated");
-    }
-
-    private async void StartVst3Worker_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
-        MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
-        if (string.IsNullOrWhiteSpace(insert.ModulePath) || string.IsNullOrWhiteSpace(insert.ModuleSha256)) { ShowInfo("The insert has no persisted module identity.", InfoBarSeverity.Warning); return; }
-        try
+      string kind = dragMode == DragMode.Move ? "move" : "trim";
+      double editSeconds = dragMode == DragMode.TrimEnd
+          ? provisional.EndSeconds
+          : provisional.StartSeconds;
+      if (TryCreateNativeEventOperation(original, kind, SnapSample(editSeconds), out JsonObject operation))
+      {
+        if (dragMode != DragMode.Move)
         {
-            Vst3ModuleFingerprint fingerprint = await Vst3ModuleFingerprinting.CreateAsync(insert.ModulePath);
-            if (!string.Equals(fingerprint.Sha256, insert.ModuleSha256, StringComparison.OrdinalIgnoreCase))
-            {
-                ShowInfo("The VST3 module changed after discovery. Rescan it before starting a worker.", InfoBarSeverity.Error);
-                return;
-            }
-            Vst3InstanceStatus status = await App.Services.Vst3Host.CreateInstanceAsync(new(insert.Id, insert.ModulePath, insert.PluginId, 48000, DefaultAudioBufferFrames));
-            if (!status.Active) { ShowInfo(status.Diagnostic ?? "VST3 worker did not become active.", InfoBarSeverity.Warning); return; }
-            _activeVst3InstanceIds.Add(insert.Id);
-            if (!string.IsNullOrWhiteSpace(insert.StateBase64))
-                status = await App.Services.Vst3Host.SetStateAsync(insert.Id, Convert.FromBase64String(insert.StateBase64));
-            _vst3Parameters[insert.Id] = status.Parameters;
-            Vst3ParameterComboBox.ItemsSource = status.Parameters;
-            Vst3ParameterComboBox.SelectedIndex = status.Parameters.Length > 0 ? 0 : -1;
-            Vst3ParameterValueBox.Value = status.Parameters.FirstOrDefault()?.NormalizedValue ?? double.NaN;
-            await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with { ReportedLatencySamples = status.ReportedLatencySamples }) }, "VST3 worker activated");
+          operation["edge"] = dragMode == DragMode.TrimStart ? "start" : "end";
         }
-        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
-    }
-
-    private void Vst3ParameterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        Vst3ParameterValueBox.Value = (Vst3ParameterComboBox.SelectedItem as Vst3ParameterDescriptor)?.NormalizedValue ?? double.NaN;
-    }
-
-    private async void ApplyVst3Parameter_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedVst3InsertId is null || Vst3ParameterComboBox.SelectedItem is not Vst3ParameterDescriptor parameter || !TryReadFinite(Vst3ParameterValueBox, out double value)) return;
-        try { await App.Services.Vst3Host.SetParameterAsync(_selectedVst3InsertId, parameter.Id, Math.Clamp(value, 0, 1)); RefreshMixerEditor(); }
-        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
-    }
-
-    private async void CaptureVst3State_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || SelectedMixerTrack is not Track track || _selectedVst3InsertId is null) return;
-        try
-        {
-            ReadOnlyMemory<byte> state = await App.Services.Vst3Host.GetStateAsync(_selectedVst3InsertId);
-            MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-            MixerChannelDocument channel = document.Channels.Single(item => item.Id == track.Id);
-            MixerPluginInstanceDocument insert = channel.Inserts.Single(item => item.Id == _selectedVst3InsertId);
-            await CommitVst3ChannelAsync(channel with { Inserts = channel.Inserts.Replace(insert, insert with
-            {
-                StateBase64 = Convert.ToBase64String(state.Span),
-                PresetName = string.IsNullOrWhiteSpace(Vst3PresetNameTextBox.Text) ? null : Vst3PresetNameTextBox.Text.Trim()
-            }) }, "VST3 state captured");
-        }
-        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
-    }
-
-    private async Task CaptureActiveVst3StatesAsync(CancellationToken cancellationToken)
-    {
-        if (_timelineDocument is null || _canonicalProject is null || _activeVst3InstanceIds.Count == 0) return;
-        MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject);
-        var activeInDocument = document.Channels.SelectMany(channel => channel.Inserts)
-            .Select(insert => insert.Id).ToHashSet(StringComparer.Ordinal);
-        foreach (string stale in _activeVst3InstanceIds.Where(id => !activeInDocument.Contains(id)).ToArray())
-        {
-            await App.Services.Vst3Host.RemoveInstanceAsync(stale, cancellationToken);
-            _activeVst3InstanceIds.Remove(stale);
-            _vst3Parameters.Remove(stale);
-        }
-
-        ImmutableArray<MixerChannelDocument>.Builder channels = document.Channels.ToBuilder();
-        bool changed = false;
-        for (int channelIndex = 0; channelIndex < channels.Count; channelIndex++)
-        {
-            MixerChannelDocument channel = channels[channelIndex];
-            ImmutableArray<MixerPluginInstanceDocument>.Builder inserts = channel.Inserts.ToBuilder();
-            for (int insertIndex = 0; insertIndex < inserts.Count; insertIndex++)
-            {
-                MixerPluginInstanceDocument insert = inserts[insertIndex];
-                if (!_activeVst3InstanceIds.Contains(insert.Id)) continue;
-                ReadOnlyMemory<byte> state = await App.Services.Vst3Host.GetStateAsync(insert.Id, cancellationToken);
-                inserts[insertIndex] = insert with { StateBase64 = Convert.ToBase64String(state.Span) };
-                changed = true;
-            }
-            if (changed) channels[channelIndex] = channel with { Inserts = inserts.ToImmutable() };
-        }
-        if (!changed) return;
-        _timelineDocument = MixerDocumentCodec.Write(_timelineDocument, document with { Channels = channels.ToImmutable() });
-        _isDirty = true;
-        RefreshEditor(updateRawText: true);
-    }
-
-    private async Task RemoveAllVst3WorkersAsync()
-    {
-        foreach (string instanceId in _activeVst3InstanceIds.ToArray())
-        {
-            try { await App.Services.Vst3Host.RemoveInstanceAsync(instanceId); }
-            catch (Exception ex) { CrashLogger.Write($"VST3 worker '{instanceId}' could not be removed.", ex); }
-            _activeVst3InstanceIds.Remove(instanceId);
-            _vst3Parameters.Remove(instanceId);
-        }
-    }
-
-    private async void ApplyMixer_Click(object sender, RoutedEventArgs e)
-    {
-        StudioCommandResult result = await ApplyMixerAsync();
-        if (!result.Executed && !string.IsNullOrWhiteSpace(result.Message))
-            ShowInfo(result.Message, InfoBarSeverity.Warning);
-    }
-
-    private async Task<StudioCommandResult> ApplyMixerAsync()
-    {
-        if (_timelineDocument is null || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
-        {
-            return new(false, "Select an audio track before applying mixer changes.");
-        }
-        if (!TryReadFinite(MixerGainNumberBox, out double gain) ||
-            !TryReadFinite(MixerPanNumberBox, out double pan))
-        {
-            return new(false, "Enter finite gain and pan values.");
-        }
-
-        TimelineTrackMixerState current = TimelineMixerProjection.Project(track);
-        var updatedState = current with
-        {
-            Gain = checked((float)gain),
-            Pan = checked((float)pan),
-            Muted = MixerMuteToggle.IsOn,
-            Solo = MixerSoloToggle.IsOn,
-            RecordArmed = MixerRecordArmToggle.IsOn,
-            InputMonitoring = MixerInputMonitoringToggle.IsOn,
-            OutputId = GetSelectedTag(MixerOutputComboBox) ?? TimelineMixerProjection.MasterOutputId
-        };
-
-        try
-        {
-            JsonObject before = CloneDocument(_timelineDocument);
-            MixerDocument document = MixerDocumentCodec.ReadOrMigrate(_timelineDocument, _canonicalProject!);
-            JsonObject versioned = MixerDocumentCodec.Write(_timelineDocument, document);
-            JsonObject updated = TimelineMixerProjection.UpdateTrack(versioned, track.Id, updatedState);
-            await CommitDocumentAsync(
-                before,
-                updated,
-                $"timeline mixer updated for {track.Name}",
-                _selectedLaneId,
-                _selectedCameraKeyframeIdentity);
-            return new(true);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidDataException or KeyNotFoundException or OverflowException)
-        {
-            ShowInfo(ex.Message, InfoBarSeverity.Warning);
-            return new(false, ex.Message);
-        }
-    }
-
-    private void RefreshCameraEditor()
-    {
-        _suppressCameraSelectionChange = true;
-        try
-        {
-            _cameraKeyframeItems.Clear();
-            for (int index = 0; index < _cameraKeyframes.Count; index++)
-            {
-                TimelineCameraKeyframeDocument cameraKeyframe = _cameraKeyframes[index];
-                _cameraKeyframeItems.Add(new CameraKeyframeListItem
-                {
-                    StableId = cameraKeyframe.StableId,
-                    Summary = $"Keyframe {index + 1}",
-                    Detail = BuildCameraKeyframeDetail(cameraKeyframe)
-                });
-            }
-
-            CameraKeyframeListView.SelectedItem = _cameraKeyframeItems.FirstOrDefault(
-                item => item.StableId == _selectedCameraKeyframeIdentity);
-
-            TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
-            bool hasSelection = keyframe is not null;
-            SetCameraEditorEnabled(hasSelection);
-            CameraSelectionHintText.Text = hasSelection
-                ? $"Editing {FormatClock(keyframe!.TimeSeconds)}"
-                : _cameraKeyframes.Count == 0
-                    ? "No camera keyframes. Add one at the playhead."
-                    : "Select a keyframe to edit camera values.";
-            if (keyframe is null)
-            {
-                CameraTimeNumberBox.Value = double.NaN;
-                CameraTranslationXNumberBox.Value = double.NaN;
-                CameraTranslationYNumberBox.Value = double.NaN;
-                CameraTranslationZNumberBox.Value = double.NaN;
-                CameraRotationXNumberBox.Value = double.NaN;
-                CameraRotationYNumberBox.Value = double.NaN;
-                CameraRotationZNumberBox.Value = double.NaN;
-                CameraZoomNumberBox.Value = double.NaN;
-                CameraFovNumberBox.Value = double.NaN;
-                return;
-            }
-
-            CameraTimeNumberBox.Value = keyframe.TimeSeconds;
-            CameraTranslationXNumberBox.Value = keyframe.TranslationX ?? double.NaN;
-            CameraTranslationYNumberBox.Value = keyframe.TranslationY ?? double.NaN;
-            CameraTranslationZNumberBox.Value = keyframe.TranslationZ ?? double.NaN;
-            CameraRotationXNumberBox.Value = keyframe.RotationX ?? double.NaN;
-            CameraRotationYNumberBox.Value = keyframe.RotationY ?? double.NaN;
-            CameraRotationZNumberBox.Value = keyframe.RotationZ ?? double.NaN;
-            CameraZoomNumberBox.Value = keyframe.Zoom ?? double.NaN;
-            CameraFovNumberBox.Value = keyframe.Fov ?? double.NaN;
-        }
-        finally
-        {
-            _suppressCameraSelectionChange = false;
-        }
-    }
-
-    private static string BuildCameraKeyframeDetail(TimelineCameraKeyframeDocument keyframe)
-    {
-        var fields = new List<string> { FormatClock(keyframe.TimeSeconds) };
-        if (keyframe.Zoom is { } zoom)
-        {
-            fields.Add($"zoom {zoom:0.###}");
-        }
-
-        if (keyframe.Fov is { } fov)
-        {
-            fields.Add($"fov {fov:0.###}");
-        }
-
-        return string.Join("  •  ", fields);
-    }
-
-    private void SetCameraEditorEnabled(bool isEnabled)
-    {
-        CameraTimeNumberBox.IsEnabled = isEnabled;
-        CameraTranslationXNumberBox.IsEnabled = isEnabled;
-        CameraTranslationYNumberBox.IsEnabled = isEnabled;
-        CameraTranslationZNumberBox.IsEnabled = isEnabled;
-        CameraRotationXNumberBox.IsEnabled = isEnabled;
-        CameraRotationYNumberBox.IsEnabled = isEnabled;
-        CameraRotationZNumberBox.IsEnabled = isEnabled;
-        CameraZoomNumberBox.IsEnabled = isEnabled;
-        CameraFovNumberBox.IsEnabled = isEnabled;
-        ApplyCameraButton.IsEnabled = isEnabled;
-        MoveCameraButton.IsEnabled = isEnabled;
-        QuantizeCameraButton.IsEnabled = isEnabled && CanQuantizeToCurrentGrid();
-        DuplicateCameraButton.IsEnabled = isEnabled;
-        DeleteCameraButton.IsEnabled = isEnabled;
-    }
-
-    private void CameraKeyframeListView_SelectionChanged(
-        object sender,
-        SelectionChangedEventArgs e)
-    {
-        if (_suppressCameraSelectionChange)
-        {
-            return;
-        }
-
-        SelectCameraKeyframe(
-            (CameraKeyframeListView.SelectedItem as CameraKeyframeListItem)?.StableId);
-    }
-
-    private async void AddCameraKeyframe_Click(object sender, RoutedEventArgs e) =>
-        await AddCameraKeyframeAtPlayheadAsync();
-
-    private async void ApplyCameraKeyframe_Click(object sender, RoutedEventArgs e) =>
-        await ApplyCameraKeyframeEditorAsync();
-
-    private async void MoveCameraToPlayhead_Click(object sender, RoutedEventArgs e) =>
-        await MoveSelectedCameraToPlayheadAsync();
-
-    private async void QuantizeCamera_Click(object sender, RoutedEventArgs e) =>
-        await QuantizeSelectedCameraKeyframeAsync();
-
-    private async void DuplicateCameraKeyframe_Click(object sender, RoutedEventArgs e) =>
-        await DuplicateSelectedCameraKeyframeAsync();
-
-    private async void DeleteCameraKeyframe_Click(object sender, RoutedEventArgs e) =>
-        await DeleteSelectedCameraKeyframeAsync();
-
-    private async Task AddCameraKeyframeAtPlayheadAsync()
-    {
-        if (_timelineDocument is null)
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        double? durationSeconds = TimelineCameraProjection.GetDurationSeconds(_timelineDocument);
-        TimelineCameraKeyframeDocument created = TimelineCameraProjection.CreateAt(
-            SnapTime(_positionSeconds),
-            durationSeconds);
-        var updated = _cameraKeyframes.ToList();
-        updated.Add(created);
-        await CommitCameraKeyframesAsync(
-            before,
-            updated,
-            "camera keyframe added",
-            created.StableId);
-    }
-
-    private async Task ApplyCameraKeyframeEditorAsync()
-    {
-        TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
-        if (_timelineDocument is null || keyframe is null)
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        double? durationSeconds = TimelineCameraProjection.GetDurationSeconds(_timelineDocument);
-        if (double.IsFinite(CameraTimeNumberBox.Value))
-        {
-            keyframe.MoveTo(CameraTimeNumberBox.Value, durationSeconds);
-        }
-
-        if (double.IsFinite(CameraTranslationXNumberBox.Value))
-        {
-            keyframe.TranslationX = CameraTranslationXNumberBox.Value;
-        }
-
-        if (double.IsFinite(CameraTranslationYNumberBox.Value))
-        {
-            keyframe.TranslationY = CameraTranslationYNumberBox.Value;
-        }
-
-        if (double.IsFinite(CameraTranslationZNumberBox.Value))
-        {
-            keyframe.TranslationZ = CameraTranslationZNumberBox.Value;
-        }
-
-        if (double.IsFinite(CameraRotationXNumberBox.Value))
-        {
-            keyframe.RotationX = CameraRotationXNumberBox.Value;
-        }
-
-        if (double.IsFinite(CameraRotationYNumberBox.Value))
-        {
-            keyframe.RotationY = CameraRotationYNumberBox.Value;
-        }
-
-        if (double.IsFinite(CameraRotationZNumberBox.Value))
-        {
-            keyframe.RotationZ = CameraRotationZNumberBox.Value;
-        }
-
-        if (double.IsFinite(CameraZoomNumberBox.Value))
-        {
-            keyframe.Zoom = Math.Max(0.001, CameraZoomNumberBox.Value);
-        }
-
-        if (double.IsFinite(CameraFovNumberBox.Value))
-        {
-            keyframe.Fov = Math.Max(0.001, CameraFovNumberBox.Value);
-        }
-
-        await CommitCameraKeyframesAsync(
-            before,
-            _cameraKeyframes,
-            "camera keyframe edited",
-            keyframe.StableId);
-    }
-
-    private async Task MoveSelectedCameraToPlayheadAsync()
-    {
-        TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
-        if (_timelineDocument is null || keyframe is null)
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        keyframe.MoveTo(
-            _positionSeconds,
-            TimelineCameraProjection.GetDurationSeconds(_timelineDocument));
-        await CommitCameraKeyframesAsync(
-            before,
-            _cameraKeyframes,
-            "camera keyframe moved to playhead",
-            keyframe.StableId);
-    }
-
-    private async Task QuantizeSelectedCameraKeyframeAsync()
-    {
-        TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
-        if (_timelineDocument is null || keyframe is null)
-        {
-            return;
-        }
-
-        if (!TryGetSnapGridSeconds(out double gridSeconds))
-        {
-            ShowInfo(
-                "Choose a snap grid before quantizing a camera keyframe.",
-                InfoBarSeverity.Warning);
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        keyframe.Quantize(
-            gridSeconds,
-            TimelineCameraProjection.GetDurationSeconds(_timelineDocument));
-        await CommitCameraKeyframesAsync(
-            before,
-            _cameraKeyframes,
-            "camera keyframe quantized",
-            keyframe.StableId);
-    }
-
-    private async Task DuplicateSelectedCameraKeyframeAsync()
-    {
-        TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
-        if (_timelineDocument is null || keyframe is null)
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        double? durationSeconds = TimelineCameraProjection.GetDurationSeconds(_timelineDocument);
-        TimelineCameraKeyframeDocument duplicate = TimelineCameraProjection.Duplicate(
-            keyframe,
-            durationSeconds);
-        duplicate.MoveTo(SnapTime(_positionSeconds), durationSeconds);
-        var updated = _cameraKeyframes.ToList();
-        updated.Add(duplicate);
-        await CommitCameraKeyframesAsync(
-            before,
-            updated,
-            "camera keyframe duplicated",
-            duplicate.StableId);
-    }
-
-    private async Task DeleteSelectedCameraKeyframeAsync()
-    {
-        TimelineCameraKeyframeDocument? keyframe = SelectedCameraKeyframe;
-        if (_timelineDocument is null || keyframe is null)
-        {
-            return;
-        }
-
-        if (!await ConfirmAsync(
-                "Delete camera keyframe?",
-                $"Delete the camera keyframe at {keyframe.TimeSeconds:0.###} seconds?",
-                "Delete"))
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        var updated = _cameraKeyframes
-            .Where(candidate => candidate.StableId != keyframe.StableId)
-            .ToList();
-        await CommitCameraKeyframesAsync(
-            before,
-            updated,
-            "camera keyframe deleted",
-            selectionId: null);
-    }
-
-    private async void Clip_PointerPressed(object sender, PointerRoutedEventArgs e)
-    {
-        if (sender is not Border border ||
-            border.Tag is not string stableId ||
-            _timelineDocument is null)
-        {
-            return;
-        }
-
-        TimelineLaneDocument? lane = _lanes.FirstOrDefault(item => item.StableId == stableId);
-        if (lane is null)
-        {
-            return;
-        }
-
-        Microsoft.UI.Input.PointerPoint pointerPoint = e.GetCurrentPoint(border);
-        if (!pointerPoint.Properties.IsLeftButtonPressed)
-        {
-            SelectLane(stableId);
-            return;
-        }
-
-        if (IsLaneLocked(lane))
-        {
-            SelectLane(stableId);
-            ShowInfo("Unlock this track before editing its clips.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        SelectLane(stableId);
-        if (_pointerTool == TimelinePointerTool.Blade)
-        {
-            double splitSeconds = Math.Clamp(
-                SnapTime(e.GetCurrentPoint(TimelineCanvas).Position.X / _pixelsPerSecond),
-                lane.StartSeconds,
-                lane.EndSeconds);
-            SetPosition(splitSeconds, requestPreview: false);
-            e.Handled = true;
-            try
-            {
-                await SplitLaneAtAsync(lane, splitSeconds);
-            }
-            catch (ArgumentOutOfRangeException ex)
-            {
-                ShowInfo(ex.Message, InfoBarSeverity.Warning);
-            }
-
-            return;
-        }
-
-        var localPoint = e.GetCurrentPoint(border);
-        _dragMode = localPoint.Position.X <= 8
-            ? DragMode.TrimStart
-            : localPoint.Position.X >= border.ActualWidth - 8
-                ? DragMode.TrimEnd
-                : DragMode.Move;
-        _dragOriginalLane = lane;
-        _dragProvisionalLane = lane;
-        _dragBeforeSnapshot = CloneDocument(_timelineDocument);
-        _dragBorder = border;
-        _dragPointerId = e.Pointer.PointerId;
-        _dragStartPoint = e.GetCurrentPoint(TimelineCanvas).Position;
-        border.CapturePointer(e.Pointer);
+        _ = await ExecuteNativeEditAsync(operation, dragMode == DragMode.Move
+            ? "Move timeline clip"
+            : "Trim timeline clip");
         e.Handled = true;
-        await RefreshPreviewAsync(force: false);
+        return;
+      }
     }
 
-    private void Clip_PointerMoved(object sender, PointerRoutedEventArgs e)
+    ReplaceLaneByStableId(original.StableId, provisional);
+    if (_rippleEnabled && !original.IsLayer && original.TrackIndex == provisional.TrackIndex)
     {
-        if (_dragBorder is null ||
-            _dragOriginalLane is null ||
-            e.Pointer.PointerId != _dragPointerId)
-        {
-            return;
-        }
-
-        Point current = e.GetCurrentPoint(TimelineCanvas).Position;
-        double deltaSeconds = (current.X - _dragStartPoint.X) / _pixelsPerSecond;
-        TimelineLaneDocument candidate;
-        try
-        {
-            switch (_dragMode)
-            {
-                case DragMode.TrimStart:
-                    candidate = TimelineProjection.Trim(
-                        _dragOriginalLane,
-                        SnapTime(_dragOriginalLane.StartSeconds + deltaSeconds),
-                        _dragOriginalLane.EndSeconds,
-                        _durationSeconds);
-                    break;
-                case DragMode.TrimEnd:
-                    candidate = TimelineProjection.Trim(
-                        _dragOriginalLane,
-                        _dragOriginalLane.StartSeconds,
-                        SnapTime(_dragOriginalLane.EndSeconds + deltaSeconds),
-                        _durationSeconds);
-                    break;
-                default:
-                    candidate = TimelineProjection.Move(
-                        _dragOriginalLane,
-                        SnapTime(_dragOriginalLane.StartSeconds + deltaSeconds),
-                        _durationSeconds);
-                    if (!_dragOriginalLane.IsLayer)
-                    {
-                        int trackIndex = Math.Clamp(
-                            (int)Math.Floor(current.Y / TrackHeight),
-                            0,
-                            Math.Max(0, TrackCount - 1));
-                        JsonObject? timelineDocument = _timelineDocument;
-                        if (timelineDocument is null ||
-                            TimelineProjection.IsTrackLocked(timelineDocument, trackIndex))
-                        {
-                            return;
-                        }
-                        candidate = TimelineProjection.ReassignTrack(candidate, trackIndex);
-                    }
-                    break;
-            }
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return;
-        }
-
-        _dragProvisionalLane = candidate;
-        Canvas.SetLeft(_dragBorder, candidate.StartSeconds * _pixelsPerSecond);
-        Canvas.SetTop(
-            _dragBorder,
-            ((candidate.IsLayer ? OverlayVisualTrackIndex : candidate.TrackIndex) * TrackHeight) +
-            ClipVerticalInset);
-        _dragBorder.Width = Math.Max(
-            8,
-            (candidate.EndSeconds - candidate.StartSeconds) * _pixelsPerSecond);
-        e.Handled = true;
+      _lanes = TimelineProjection.RippleAfterEdit(
+          _lanes,
+          original,
+          provisional,
+          _durationSeconds);
     }
+    await CommitLanesAsync(
+        before,
+        provisional.IsLayer ? "timeline overlay edited" : "timeline clip edited",
+        provisional.StableId);
+    e.Handled = true;
+  }
 
-    private async void Clip_PointerReleased(object sender, PointerRoutedEventArgs e)
+  private void Clip_PointerCanceled(object sender, PointerRoutedEventArgs e)
+  {
+    if (_dragBorder is null || e.Pointer.PointerId != _dragPointerId)
     {
-        if (_dragBorder is null ||
-            _dragOriginalLane is null ||
-            _dragProvisionalLane is null ||
-            _dragBeforeSnapshot is null ||
-            e.Pointer.PointerId != _dragPointerId)
-        {
-            return;
-        }
-
-        Border border = _dragBorder;
-        TimelineLaneDocument original = _dragOriginalLane;
-        TimelineLaneDocument provisional = _dragProvisionalLane;
-        JsonObject before = _dragBeforeSnapshot;
-        DragMode dragMode = _dragMode;
-        ResetDragState();
-        border.ReleasePointerCapture(e.Pointer);
-
-        if (LaneGeometryEquals(original, provisional))
-        {
-            RenderTimeline();
-            return;
-        }
-
-        if (!original.IsLayer && !_rippleEnabled && original.TrackIndex == provisional.TrackIndex)
-        {
-            string kind = dragMode == DragMode.Move ? "move" : "trim";
-            double editSeconds = dragMode == DragMode.TrimEnd
-                ? provisional.EndSeconds
-                : provisional.StartSeconds;
-            if (TryCreateNativeEventOperation(original, kind, SnapSample(editSeconds), out JsonObject operation))
-            {
-                if (dragMode != DragMode.Move)
-                {
-                    operation["edge"] = dragMode == DragMode.TrimStart ? "start" : "end";
-                }
-                await ExecuteNativeEditAsync(operation, dragMode == DragMode.Move
-                    ? "Move timeline clip"
-                    : "Trim timeline clip");
-                e.Handled = true;
-                return;
-            }
-        }
-
-        ReplaceLaneByStableId(original.StableId, provisional);
-        if (_rippleEnabled && !original.IsLayer && original.TrackIndex == provisional.TrackIndex)
-        {
-            _lanes = TimelineProjection.RippleAfterEdit(
-                _lanes,
-                original,
-                provisional,
-                _durationSeconds);
-        }
-        await CommitLanesAsync(
-            before,
-            provisional.IsLayer ? "timeline overlay edited" : "timeline clip edited",
-            provisional.StableId);
-        e.Handled = true;
+      return;
     }
 
-    private void Clip_PointerCanceled(object sender, PointerRoutedEventArgs e)
-    {
-        if (_dragBorder is null || e.Pointer.PointerId != _dragPointerId)
-        {
-            return;
-        }
+    ResetDragState();
+    RenderTimeline();
+  }
 
-        ResetDragState();
-        RenderTimeline();
-    }
+  private void ResetDragState()
+  {
+    _dragOriginalLane = null;
+    _dragProvisionalLane = null;
+    _dragBeforeSnapshot = null;
+    _dragBorder = null;
+    _dragPointerId = 0;
+    _dragMode = DragMode.None;
+  }
 
-    private void ResetDragState()
-    {
-        _dragOriginalLane = null;
-        _dragProvisionalLane = null;
-        _dragBeforeSnapshot = null;
-        _dragBorder = null;
-        _dragPointerId = 0;
-        _dragMode = DragMode.None;
-    }
+  private static bool LaneGeometryEquals(
+      TimelineLaneDocument left,
+      TimelineLaneDocument right)
+  {
+    return Math.Abs(left.StartSeconds - right.StartSeconds) < 0.0001 &&
+      Math.Abs(left.EndSeconds - right.EndSeconds) < 0.0001 &&
+      left.TrackIndex == right.TrackIndex;
+  }
 
-    private static bool LaneGeometryEquals(
-        TimelineLaneDocument left,
-        TimelineLaneDocument right) =>
-        Math.Abs(left.StartSeconds - right.StartSeconds) < 0.0001 &&
-        Math.Abs(left.EndSeconds - right.EndSeconds) < 0.0001 &&
-        left.TrackIndex == right.TrackIndex;
+  private bool IsLaneLocked(TimelineLaneDocument? lane)
+  {
+    return lane is { IsLayer: false } &&
+      _timelineDocument is not null &&
+      TimelineProjection.IsTrackLocked(_timelineDocument, lane.TrackIndex);
+  }
 
-    private bool IsLaneLocked(TimelineLaneDocument? lane) =>
-        lane is { IsLayer: false } &&
-        _timelineDocument is not null &&
-        TimelineProjection.IsTrackLocked(_timelineDocument, lane.TrackIndex);
-
-    private void ReplaceLaneByStableId(
+  private void ReplaceLaneByStableId(
         string stableId,
         TimelineLaneDocument replacement)
+  {
+    List<TimelineLaneDocument> updated = _lanes.ToList();
+    int index = updated.FindIndex(lane => lane.StableId == stableId);
+    if (index >= 0)
     {
-        var updated = _lanes.ToList();
-        int index = updated.FindIndex(lane => lane.StableId == stableId);
-        if (index >= 0)
-        {
-            updated[index] = replacement;
-            _lanes = updated;
-        }
+      updated[index] = replacement;
+      _lanes = updated;
+    }
+  }
+
+  private async Task CommitLanesAsync(
+      JsonObject before,
+      string reason,
+      string? selectionId)
+  {
+    if (_timelineDocument is null)
+    {
+      return;
     }
 
-    private async Task CommitLanesAsync(
-        JsonObject before,
-        string reason,
-        string? selectionId)
-    {
-        if (_timelineDocument is null)
-        {
-            return;
-        }
+    _timelineDocument = TimelineProjection.Rebuild(_timelineDocument, _lanes);
+    _selectedLaneId = selectionId;
+    _selectedCameraKeyframeIdentity = null;
+    _isDirty = true;
+    RefreshEditor(updateRawText: true);
+    await AutosaveAsync(reason);
+    await RefreshPreviewAsync(force: false);
+  }
 
-        _timelineDocument = TimelineProjection.Rebuild(_timelineDocument, _lanes);
-        _selectedLaneId = selectionId;
-        _selectedCameraKeyframeIdentity = null;
-        _isDirty = true;
-        RefreshEditor(updateRawText: true);
-        await AutosaveAsync(reason);
-        await RefreshPreviewAsync(force: false);
+  private async Task CommitDocumentAsync(
+      JsonObject before,
+      JsonObject document,
+      string reason,
+      string? selectionId = null,
+      string? cameraSelectionId = null)
+  {
+    _timelineDocument = document;
+    _selectedLaneId = selectionId;
+    _selectedCameraKeyframeIdentity = cameraSelectionId;
+    _isDirty = true;
+    RefreshEditor(updateRawText: true);
+    await AutosaveAsync(reason);
+    await RefreshPreviewAsync(force: false);
+  }
+
+  private Task CommitCameraKeyframesAsync(
+      JsonObject before,
+      IEnumerable<TimelineCameraKeyframeDocument> keyframes,
+      string reason,
+      string? selectionId)
+  {
+    if (_timelineDocument is null)
+    {
+      return Task.CompletedTask;
     }
 
-    private async Task CommitDocumentAsync(
-        JsonObject before,
-        JsonObject document,
-        string reason,
-        string? selectionId = null,
-        string? cameraSelectionId = null)
+    JsonObject rebuilt = TimelineCameraProjection.Rebuild(_timelineDocument, keyframes);
+    return CommitDocumentAsync(
+        before,
+        rebuilt,
+        reason,
+        selectionId: null,
+        cameraSelectionId: selectionId);
+  }
+
+  [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_timelineDocument))]
+  private void ApplyEditorState(EditorState state)
+  {
+    _timelineDocument = JsonNode.Parse(state.Timeline.GetRawText()) as JsonObject
+        ?? throw new InvalidDataException("Backend returned an invalid editor timeline.");
+    _editorHistory = state.History;
+    _editorRevision = state.Revision;
+    _isDirty = false;
+  }
+
+  private static JsonObject CloneDocument(JsonObject source)
+  {
+    return source.DeepClone() as JsonObject
+      ?? throw new InvalidOperationException("Timeline cloning failed.");
+  }
+
+  private static JsonElement ToJsonElement(JsonObject source)
+  {
+    return JsonDocument.Parse(source.ToJsonString()).RootElement.Clone();
+  }
+
+  private async Task AutosaveAsync(string reason)
+  {
+    if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
     {
-        _timelineDocument = document;
-        _selectedLaneId = selectionId;
-        _selectedCameraKeyframeIdentity = cameraSelectionId;
-        _isDirty = true;
-        RefreshEditor(updateRawText: true);
-        await AutosaveAsync(reason);
-        await RefreshPreviewAsync(force: false);
+      return;
     }
 
-    private Task CommitCameraKeyframesAsync(
-        JsonObject before,
-        IEnumerable<TimelineCameraKeyframeDocument> keyframes,
-        string reason,
-        string? selectionId)
+    try
     {
-        if (_timelineDocument is null)
-        {
-            return Task.CompletedTask;
-        }
+      SetBusy(true);
+      await PersistEditorAsync("replace", reason, _pageCancellation?.Token ?? CancellationToken.None);
+      StatusText.Text = "Edit saved with project undo history.";
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      await HandleProjectRevisionConflictAsync(conflict);
+    }
+    catch (Exception ex)
+    {
+      ShowInfo($"Autosave failed: {ex.Message}", InfoBarSeverity.Warning);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
 
-        JsonObject rebuilt = TimelineCameraProjection.Rebuild(_timelineDocument, keyframes);
-        return CommitDocumentAsync(
-            before,
-            rebuilt,
-            reason,
-            selectionId: null,
-            cameraSelectionId: selectionId);
+  private async Task PersistEditorAsync(string action, string label, CancellationToken cancellationToken)
+  {
+    string projectId = _loadedProjectId ?? throw new InvalidOperationException("Load a project first.");
+    if (_timelineDocument is null || _editorRevision < 1)
+    {
+      throw new InvalidOperationException("Reload the editor before editing.");
+    }
+    EditorCommandRequest request = new(Guid.NewGuid().ToString("N"), _editorRevision, action, label,
+        action == "replace" ? ToJsonElement(_timelineDocument) : null);
+    EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
+    if (!string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+    {
+      return;
+    }
+    ApplyEditorState(result);
+    RefreshEditor(updateRawText: true);
+    await RefreshProjectRevisionAsync(projectId, cancellationToken);
+    await ConfigureAudioEngineAsync(cancellationToken);
+  }
+
+  private async void Undo_Click(object sender, RoutedEventArgs e)
+  {
+    await ApplyHistoryAsync("undo");
+  }
+
+  private async void ImportAudio_Click(object sender, RoutedEventArgs e)
+  {
+    if (_isBusy || _isDirty || _canonicalProject is null || _loadedProjectId is not string projectId)
+    {
+      ShowInfo("Load a clean Timeline before importing audio.", InfoBarSeverity.Warning);
+      return;
+    }
+    if (App.MainWindowInstance is null)
+    {
+      ShowInfo("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
+      return;
     }
 
-    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_timelineDocument))]
-    private void ApplyEditorState(EditorState state)
+    FileOpenPicker picker = new()
     {
-        _timelineDocument = JsonNode.Parse(state.Timeline.GetRawText()) as JsonObject
-            ?? throw new InvalidDataException("Backend returned an invalid editor timeline.");
-        _editorHistory = state.History;
-        _editorRevision = state.Revision;
-        _isDirty = false;
+      SuggestedStartLocation = PickerLocationId.MusicLibrary,
+      ViewMode = PickerViewMode.List,
+    };
+    foreach (string extension in new[] { ".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".aif", ".aiff", ".opus" })
+    {
+      picker.FileTypeFilter.Add(extension);
     }
 
-    private static JsonObject CloneDocument(JsonObject source) =>
-        source.DeepClone() as JsonObject
-        ?? throw new InvalidOperationException("Timeline cloning failed.");
-
-    private static JsonElement ToJsonElement(JsonObject source) =>
-        JsonDocument.Parse(source.ToJsonString()).RootElement.Clone();
-
-    private async Task AutosaveAsync(string reason)
+    nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
+    WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
+    StorageFile? file = await picker.PickSingleFileAsync();
+    if (file is null)
     {
-        if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            return;
-        }
-
-        try
-        {
-            SetBusy(true);
-            await PersistEditorAsync("replace", reason, _pageCancellation?.Token ?? CancellationToken.None);
-            StatusText.Text = "Edit saved with project undo history.";
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            await HandleProjectRevisionConflictAsync(conflict);
-        }
-        catch (Exception ex)
-        {
-            ShowInfo($"Autosave failed: {ex.Message}", InfoBarSeverity.Warning);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+      return;
     }
 
-    private async Task PersistEditorAsync(string action, string label, CancellationToken cancellationToken)
+    string startSample = CurrentSampleText();
+    MediaPoolActionResponse imported;
+    CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
+    try
     {
-        string projectId = _loadedProjectId ?? throw new InvalidOperationException("Load a project first.");
-        if (_timelineDocument is null || _editorRevision < 1)
-        {
-            throw new InvalidOperationException("Reload the editor before editing.");
-        }
-        var request = new EditorCommandRequest(Guid.NewGuid().ToString("N"), _editorRevision, action, label,
-            action == "replace" ? ToJsonElement(_timelineDocument) : null);
-        EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
-        {
-            return;
-        }
-        ApplyEditorState(result);
-        RefreshEditor(updateRawText: true);
-        await RefreshProjectRevisionAsync(projectId, cancellationToken);
-        await ConfigureAudioEngineAsync(cancellationToken);
+      SetBusy(true);
+      await using FileStream stream = File.OpenRead(file.Path);
+      imported = await App.Services.ApiClient.ImportMediaAsync(
+          projectId, stream, file.Name, AudioContentType(file.Path), token);
+    }
+    catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+    catch (Exception ex)
+    {
+      ShowInfo(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
+      return;
+    }
+    finally
+    {
+      SetBusy(false);
     }
 
-    private async void Undo_Click(object sender, RoutedEventArgs e) => await ApplyHistoryAsync("undo");
-
-    private async void ImportAudio_Click(object sender, RoutedEventArgs e)
+    await LoadActiveProjectAsync(forceReload: true);
+    if (_canonicalProject is null || projectId != _loadedProjectId)
     {
-        if (_isBusy || _isDirty || _canonicalProject is null || _loadedProjectId is not string projectId)
-        {
-            ShowInfo("Load a clean Timeline before importing audio.", InfoBarSeverity.Warning);
-            return;
-        }
-        if (App.MainWindowInstance is null)
-        {
-            ShowInfo("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
-            return;
-        }
-
-        var picker = new FileOpenPicker
-        {
-            SuggestedStartLocation = PickerLocationId.MusicLibrary,
-            ViewMode = PickerViewMode.List,
-        };
-        foreach (string extension in new[] { ".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".aif", ".aiff", ".opus" })
-            picker.FileTypeFilter.Add(extension);
-        nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
-        StorageFile? file = await picker.PickSingleFileAsync();
-        if (file is null) return;
-
-        string startSample = CurrentSampleText();
-        MediaPoolActionResponse imported;
-        CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
-        try
-        {
-            SetBusy(true);
-            await using FileStream stream = File.OpenRead(file.Path);
-            imported = await App.Services.ApiClient.ImportMediaAsync(
-                projectId, stream, file.Name, AudioContentType(file.Path), token);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
-        catch (Exception ex)
-        {
-            ShowInfo(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
-            return;
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-
-        await LoadActiveProjectAsync(forceReload: true);
-        if (_canonicalProject is null || projectId != _loadedProjectId) return;
-        double durationSeconds = ReadMediaDuration(imported.Asset);
-        long start = ParseSample(startSample, "Import position");
-        long duration = _canonicalProject.Timebase.FromSeconds(durationSeconds).Samples;
-        long end = checked(start + Math.Max(1, duration));
-        Track? audioTrack = SelectedMixerTrack is { Locked: false } selected && IsAudioTrack(selected)
-            ? selected
-            : _canonicalProject.Tracks.FirstOrDefault(track => !track.Locked && IsAudioTrack(track));
-        string trackId = audioTrack?.Id ?? $"audio-{Guid.NewGuid():N}";
-        string clipId = $"audio-clip-{Guid.NewGuid():N}";
-        JsonObject? addTrack = audioTrack is null
-            ? new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio", ["new_id"] = trackId, ["name"] = "Imported Audio" }
-            : null;
-        bool added = await ExecuteNativeEditAsync(new JsonObject
-        {
-            ["kind"] = "add_clip",
-            ["track_id"] = trackId,
-            ["new_id"] = clipId,
-            ["name"] = imported.Asset.DisplayName,
-            ["type"] = "audio",
-            ["start_sample"] = start.ToString(CultureInfo.InvariantCulture),
-            ["end_sample"] = end.ToString(CultureInfo.InvariantCulture),
-            ["media_asset_id"] = imported.Asset.Id,
-        }, $"Import {imported.Asset.DisplayName}", addTrack, $"samples {start}-{end}");
-        if (added)
-            ShowInfo($"{imported.Asset.DisplayName} was imported at the playhead and is ready for playback.", InfoBarSeverity.Success);
+      return;
     }
 
-    private static double ReadMediaDuration(MediaPoolAsset asset)
+    double durationSeconds = ReadMediaDuration(imported.Asset);
+    long start = ParseSample(startSample, "Import position");
+    long duration = _canonicalProject.Timebase.FromSeconds(durationSeconds).Samples;
+    long end = checked(start + Math.Max(1, duration));
+    Track? audioTrack = SelectedMixerTrack is { Locked: false } selected && IsAudioTrack(selected)
+        ? selected
+        : _canonicalProject.Tracks.FirstOrDefault(track => !track.Locked && IsAudioTrack(track));
+    string trackId = audioTrack?.Id ?? $"audio-{Guid.NewGuid():N}";
+    string clipId = $"audio-clip-{Guid.NewGuid():N}";
+    JsonObject? addTrack = audioTrack is null
+        ? new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio", ["new_id"] = trackId, ["name"] = "Imported Audio" }
+        : null;
+    bool added = await ExecuteNativeEditAsync(new JsonObject
     {
-        if (asset.Probe.ValueKind == JsonValueKind.Object &&
+      ["kind"] = "add_clip",
+      ["track_id"] = trackId,
+      ["new_id"] = clipId,
+      ["name"] = imported.Asset.DisplayName,
+      ["type"] = "audio",
+      ["start_sample"] = start.ToString(CultureInfo.InvariantCulture),
+      ["end_sample"] = end.ToString(CultureInfo.InvariantCulture),
+      ["media_asset_id"] = imported.Asset.Id,
+    }, $"Import {imported.Asset.DisplayName}", addTrack, $"samples {start}-{end}");
+    if (added)
+    {
+      ShowInfo($"{imported.Asset.DisplayName} was imported at the playhead and is ready for playback.", InfoBarSeverity.Success);
+    }
+  }
+
+  private static double ReadMediaDuration(MediaPoolAsset asset)
+  {
+    return asset.Probe.ValueKind == JsonValueKind.Object &&
             asset.Probe.TryGetProperty("duration_seconds", out JsonElement value) &&
             ((value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double duration)) ||
              (value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out duration))) &&
-            double.IsFinite(duration) && duration > 0)
-        {
-            return duration;
-        }
-        throw new InvalidDataException("The imported audio duration could not be determined.");
-    }
+            double.IsFinite(duration) && duration > 0
+          ? duration
+          : throw new InvalidDataException("The imported audio duration could not be determined.");
+  }
 
-    private static string AudioContentType(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() switch
+  private static string AudioContentType(string path)
+  {
+    return System.IO.Path.GetExtension(path).ToLowerInvariant() switch
     {
-        ".wav" => "audio/wav",
-        ".mp3" => "audio/mpeg",
-        ".flac" => "audio/flac",
-        ".m4a" => "audio/mp4",
-        ".ogg" or ".opus" => "audio/ogg",
-        ".aac" => "audio/aac",
-        ".aif" or ".aiff" => "audio/aiff",
-        _ => "application/octet-stream",
+      ".wav" => "audio/wav",
+      ".mp3" => "audio/mpeg",
+      ".flac" => "audio/flac",
+      ".m4a" => "audio/mp4",
+      ".ogg" or ".opus" => "audio/ogg",
+      ".aac" => "audio/aac",
+      ".aif" or ".aiff" => "audio/aiff",
+      _ => "application/octet-stream",
     };
+  }
 
-    private async void AddAudioTrack_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio" }, "Add audio track");
+  private async void AddAudioTrack_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio" }, "Add audio track");
+  }
 
-    private async void AddVideoTrack_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "video" }, "Add video track");
+  private async void AddVideoTrack_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "video" }, "Add video track");
+  }
 
-    private async void AddMarker_Click(object sender, RoutedEventArgs e)
+  private async void AddMarker_Click(object sender, RoutedEventArgs e)
+  {
+    string id = $"marker-{Guid.NewGuid():N}";
+    string name = string.IsNullOrWhiteSpace(MarkerNameTextBox.Text) ? "Marker" : MarkerNameTextBox.Text.Trim();
+    _ = await ExecuteNativeEditAsync(new JsonObject
     {
-        string id = $"marker-{Guid.NewGuid():N}";
-        string name = string.IsNullOrWhiteSpace(MarkerNameTextBox.Text) ? "Marker" : MarkerNameTextBox.Text.Trim();
-        await ExecuteNativeEditAsync(new JsonObject
+      ["kind"] = "add_marker",
+      ["new_id"] = id,
+      ["name"] = name,
+      ["position"] = CurrentSampleText(),
+      ["snap"] = "sample",
+    }, "Add timeline marker");
+  }
+
+  private async void MoveMarker_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedMarkerId is null)
+    {
+      return;
+    }
+
+    _ = await ExecuteNativeEditAsync(new JsonObject
+    {
+      ["kind"] = "move_marker",
+      ["marker_id"] = _selectedMarkerId,
+      ["position"] = CurrentSampleText(),
+      ["snap"] = "sample",
+    }, "Move timeline marker");
+  }
+
+  private async void DeleteMarker_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedMarkerId is null)
+    {
+      return;
+    }
+
+    _ = await ExecuteNativeEditAsync(new JsonObject
+    {
+      ["kind"] = "delete_marker",
+      ["marker_id"] = _selectedMarkerId,
+    }, "Delete timeline marker");
+  }
+
+  private void MarkerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_suppressMarkerSelectionChange)
+    {
+      return;
+    }
+
+    _selectedMarkerId = (MarkerComboBox.SelectedItem as TimelineMarker)?.Id;
+    if (MarkerComboBox.SelectedItem is TimelineMarker marker)
+    {
+      MarkerNameTextBox.Text = marker.Name;
+    }
+    UpdateCommandState();
+  }
+
+  private void RefreshMarkers()
+  {
+    _suppressMarkerSelectionChange = true;
+    try
+    {
+      TimelineMarker[] markers = _canonicalProject?.Markers.ToArray() ?? [];
+      MarkerComboBox.ItemsSource = markers;
+      MarkerComboBox.SelectedItem = markers.FirstOrDefault(marker => marker.Id == _selectedMarkerId);
+    }
+    finally
+    {
+      _suppressMarkerSelectionChange = false;
+    }
+  }
+
+  private string CurrentSampleText()
+  {
+    ProjectTimebase timebase = _canonicalProject?.Timebase ?? new ProjectTimebase();
+    return timebase.FromSeconds(_positionSeconds).Samples.ToString(CultureInfo.InvariantCulture);
+  }
+
+  private async void MoveExact_Click(object sender, RoutedEventArgs e)
+  {
+    await EditAtExactSampleAsync("move");
+  }
+
+  private async void SplitExact_Click(object sender, RoutedEventArgs e)
+  {
+    await EditAtExactSampleAsync("split");
+  }
+
+  private async Task EditAtExactSampleAsync(string kind)
+  {
+    if (SelectedLane is not { IsLayer: false } lane || _timelineDocument?["tracks"] is not JsonArray tracks)
+    {
+      return;
+    }
+    if (!long.TryParse(ExactSampleTextBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out long position))
+    {
+      ShowInfo("Enter a nonnegative whole sample position within the 64-bit range.", InfoBarSeverity.Warning);
+      return;
+    }
+    JsonObject operation = new()
+    {
+      ["kind"] = kind,
+      ["track_id"] = tracks[lane.TrackIndex]?["id"]?.GetValue<string>(),
+      ["clip_id"] = lane.Source["id"]?.GetValue<string>(),
+      ["position"] = position.ToString(CultureInfo.InvariantCulture),
+      ["snap"] = "sample"
+    };
+    if (kind == "split")
+    {
+      operation = CreateNativeSplitOperation(operation, position);
+    }
+
+    _ = await ExecuteNativeEditAsync(operation, kind == "move" ? "Move clip to exact sample" : "Split clip at exact sample");
+  }
+
+  private bool TryCreateNativeEventOperation(
+      TimelineLaneDocument lane,
+      string kind,
+      long position,
+      out JsonObject operation)
+  {
+    operation = [];
+    if (lane.IsLayer || _timelineDocument?["tracks"] is not JsonArray tracks ||
+        lane.TrackIndex < 0 || lane.TrackIndex >= tracks.Count ||
+        tracks[lane.TrackIndex] is not JsonObject track ||
+        track["id"]?.GetValue<string>() is not string trackId ||
+        lane.Source["id"]?.GetValue<string>() is not string eventId)
+    {
+      return false;
+    }
+
+    operation = new JsonObject
+    {
+      ["kind"] = kind,
+      ["track_id"] = trackId,
+      ["clip_id"] = eventId,
+      ["position"] = position.ToString(CultureInfo.InvariantCulture),
+      ["snap"] = "sample",
+    };
+    return true;
+  }
+
+  private long SnapSample(double seconds)
+  {
+    ProjectTimebase timebase = _canonicalProject?.Timebase ?? new ProjectTimebase();
+    TimelinePosition position = timebase.FromSeconds(Math.Max(0, seconds));
+    string mode = GetSelectedTag(SnapCombo) ?? "off";
+    TimelineSnapMode snapMode = mode switch
+    {
+      "beat" => TimelineSnapMode.Beat,
+      "half" => TimelineSnapMode.HalfBeat,
+      "quarter" => TimelineSnapMode.QuarterBeat,
+      _ => TimelineSnapMode.Off,
+    };
+    decimal bpm = _project?.Bpm is double value && double.IsFinite(value) && value > 0
+        ? (decimal)value
+        : 120;
+    return ProjectTimelineOperations.Snap(timebase, position, snapMode, bpm).Samples;
+  }
+
+  private async void CreateAutomationLane_Click(object sender, RoutedEventArgs e)
+  {
+    string id = $"automation-{Guid.NewGuid():N}";
+    _ = await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.AddAutomationLane(
+        RequiredProject(), id, RequiredTrack().Id, AutomationTargetTextBox.Text.Trim(),
+        ParseAutomationMode(), ReadFiniteOrDefault(AutomationMinimumNumberBox, 0),
+        ReadFiniteOrDefault(AutomationMaximumNumberBox, 1)), "Create automation lane", "track",
+        () => _selectedAutomationLaneId = id);
+  }
+
+  private async void DeleteAutomationLane_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.DeleteAutomationLane(
+          RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane.")),
+          "Delete automation lane", "track");
+  }
+
+  private async void ApplyAutomationMode_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.SetAutomationMode(
+          RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."), ParseAutomationMode()),
+          "Set automation mode", "track");
+  }
+
+  private async void UpsertAutomationPoint_Click(object sender, RoutedEventArgs e)
+  {
+    string id = _selectedAutomationPointId ?? $"automation-point-{Guid.NewGuid():N}";
+    _ = await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.UpsertAutomationPoint(
+        RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."), id,
+        ParseSample(AutomationPointSampleTextBox.Text, "Automation point sample"),
+        ReadFiniteOrDefault(AutomationPointValueNumberBox, 0), ParseAutomationCurve(),
+        ReadFiniteOrDefault(AutomationTensionNumberBox, 0)),
+        _selectedAutomationPointId is null ? "Add automation point" : "Update automation point",
+        $"sample {AutomationPointSampleTextBox.Text.Trim()}", () =>
         {
-            ["kind"] = "add_marker",
-            ["new_id"] = id,
-            ["name"] = name,
-            ["position"] = CurrentSampleText(),
-            ["snap"] = "sample",
-        }, "Add timeline marker");
-    }
+          _selectedAutomationPointId = id;
+          _creatingAutomationPoint = false;
+        });
+  }
 
-    private async void MoveMarker_Click(object sender, RoutedEventArgs e)
+  private void NewAutomationPoint_Click(object sender, RoutedEventArgs e)
+  {
+    _selectedAutomationPointId = null;
+    _creatingAutomationPoint = true;
+    AutomationPointListView.SelectedItem = null;
+    AutomationPointSampleTextBox.Text = CurrentSampleText();
+    AutomationPointValueNumberBox.Value = 0;
+    AutomationTensionNumberBox.Value = 0;
+    SelectComboByTag(AutomationCurveComboBox, "linear");
+    DeleteAutomationPointButton.IsEnabled = false;
+  }
+
+  private async void DeleteAutomationPoint_Click(object sender, RoutedEventArgs e)
+  {
+    string? pointId = _selectedAutomationPointId;
+    _ = await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.DeleteAutomationPoint(
+        RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."),
+        RequiredId(pointId, "Select an automation point.")), "Delete automation point", "selected sample");
+  }
+
+  private async void ApplyFades_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteProfessionalEditAsync(() =>
     {
-        if (_selectedMarkerId is null) return;
-        await ExecuteNativeEditAsync(new JsonObject
+      (Track track, TimelineEvent clip) = RequiredClip();
+      return ProfessionalEditingOperations.SetFades(RequiredProject(), track.Id, clip.Id,
+              ParseSample(ProfessionalFadeInTextBox.Text, "Fade-in samples"), ParseSample(ProfessionalFadeOutTextBox.Text, "Fade-out samples"),
+              ParseFadeCurve(FadeCurveComboBox));
+    }, "Set clip fades", "selected clip");
+  }
+
+  private async void ApplyProcess_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteProfessionalEditAsync(() =>
+    {
+      (Track track, TimelineEvent clip) = RequiredClip();
+      return ProfessionalEditingOperations.SetProcess(RequiredProject(), track.Id, clip.Id,
+              ReadFiniteOrDefault(PlaybackRateNumberBox, 1), ReadFiniteOrDefault(StretchRatioNumberBox, 1), ParseProcessAlgorithm());
+    }, "Set clip process", "selected clip");
+  }
+
+  private async void AddTake_Click(object sender, RoutedEventArgs e)
+  {
+    string takeId = $"take-{Guid.NewGuid():N}";
+    _ = await ExecuteProfessionalEditAsync(() =>
+    {
+      (Track track, TimelineEvent clip) = RequiredClip();
+      string assetId = (TakeMediaAssetComboBox.SelectedItem as ProfessionalListItem)?.Id
+              ?? throw new InvalidOperationException("Select a project media asset.");
+      int rate = checked((int)ReadWholeNumber(TakeSourceRateNumberBox, "Source sample rate"));
+      long start = ParseSample(TakeSourceStartTextBox.Text, "Source start");
+      SourcePosition? end = string.IsNullOrWhiteSpace(TakeSourceEndTextBox.Text) ? null
+              : new SourcePosition(rate, ParseSample(TakeSourceEndTextBox.Text, "Source end"), "0");
+      return ProfessionalEditingOperations.AddTake(RequiredProject(), track.Id, clip.Id, takeId, assetId,
+              new SourceRange(new SourcePosition(rate, start, "0"), end));
+    }, "Add take", "selected clip", () => _selectedTakeId = takeId);
+  }
+
+  private async void SelectTake_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteProfessionalEditAsync(() =>
+    {
+      (Track track, TimelineEvent clip) = RequiredClip();
+      return ProfessionalEditingOperations.SelectTake(RequiredProject(), track.Id, clip.Id,
+              RequiredId(_selectedTakeId, "Select a take."));
+    }, "Select take", "selected clip");
+  }
+
+  private async void SetCompRange_Click(object sender, RoutedEventArgs e)
+  {
+    string id = _selectedCompRangeId ?? $"comp-{Guid.NewGuid():N}";
+    _ = await ExecuteProfessionalEditAsync(() =>
+    {
+      (Track track, TimelineEvent clip) = RequiredClip();
+      return ProfessionalEditingOperations.SetCompRange(RequiredProject(), track.Id, clip.Id,
+              id, RequiredId(_selectedTakeId, "Select a take."), ParseSample(CompStartTextBox.Text, "Comp start"),
+              ParseSample(CompEndTextBox.Text, "Comp end"));
+    }, "Set comp range",
+        $"range [{CompStartTextBox.Text.Trim()}, {CompEndTextBox.Text.Trim()})", () =>
         {
-            ["kind"] = "move_marker",
-            ["marker_id"] = _selectedMarkerId,
-            ["position"] = CurrentSampleText(),
-            ["snap"] = "sample",
-        }, "Move timeline marker");
-    }
+          _selectedCompRangeId = id;
+          _creatingCompRange = false;
+        });
+  }
 
-    private async void DeleteMarker_Click(object sender, RoutedEventArgs e)
+  private void NewCompRange_Click(object sender, RoutedEventArgs e)
+  {
+    _selectedCompRangeId = null;
+    _creatingCompRange = true;
+    CompRangeListView.SelectedItem = null;
+    string sample = CurrentSampleText();
+    CompStartTextBox.Text = sample;
+    CompEndTextBox.Text = sample;
+  }
+
+  private async void Nudge_Click(object sender, RoutedEventArgs e)
+  {
+    await ExecuteClipDeltaAsync("Nudge clip", ProfessionalEditingOperations.Nudge);
+  }
+
+  private async void Slip_Click(object sender, RoutedEventArgs e)
+  {
+    await ExecuteClipDeltaAsync("Slip clip source", ProfessionalEditingOperations.Slip);
+  }
+
+  private async void Slide_Click(object sender, RoutedEventArgs e)
+  {
+    await ExecuteClipDeltaAsync("Slide clip", ProfessionalEditingOperations.Slide);
+  }
+
+  private async Task ExecuteClipDeltaAsync(string label, Func<CanonicalProject, string, string, long, JsonObject> builder)
+  {
+    _ = await ExecuteProfessionalEditAsync(() =>
     {
-        if (_selectedMarkerId is null) return;
-        await ExecuteNativeEditAsync(new JsonObject
-        {
-            ["kind"] = "delete_marker",
-            ["marker_id"] = _selectedMarkerId,
-        }, "Delete timeline marker");
-    }
+      (Track track, TimelineEvent clip) = RequiredClip();
+      return builder(RequiredProject(), track.Id, clip.Id,
+              ParseSignedSample(EditDeltaTextBox.Text, "Delta samples"));
+    }, label, $"selected clip, delta {EditDeltaTextBox.Text.Trim()}");
+  }
 
-    private void MarkerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  private async void ApplyRangeEdit_Click(object sender, RoutedEventArgs e)
+  {
+    string action = GetSelectedTag(RangeActionComboBox) ?? "delete";
+    _ = await ExecuteProfessionalEditAsync(() =>
     {
-        if (_suppressMarkerSelectionChange) return;
-        _selectedMarkerId = (MarkerComboBox.SelectedItem as TimelineMarker)?.Id;
-        if (MarkerComboBox.SelectedItem is TimelineMarker marker)
-        {
-            MarkerNameTextBox.Text = marker.Name;
-        }
-        UpdateCommandState();
-    }
+      CanonicalProject project = RequiredProject();
+      Track track = RequiredTrack();
+      long start = ParseSample(RangeStartTextBox.Text, "Range start");
+      long end = ParseSample(RangeEndTextBox.Text, "Range end");
+      TimelineEvent[] selected = track.Events.Where(clip => clip.Start.Samples >= start && clip.End.Samples <= end).ToArray();
+      ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
+      string[] clipIds = action == "duplicate" ? selected.Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
+      string[] takeIds = action == "duplicate" ? selected.SelectMany(clip => editing.Takes.Where(take => take.ClipId == clip.Id))
+              .Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
+      string[] compIds = action == "duplicate" ? selected.SelectMany(clip => editing.CompRanges.Where(comp => comp.ClipId == clip.Id))
+              .Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
+      return ProfessionalEditingOperations.RangeEdit(project, track.Id, start, end, action,
+              ParseSignedSample(RangeDeltaTextBox.Text, "Range delta"), clipIds, takeIds, compIds);
+    }, $"{char.ToUpperInvariant(action[0])}{action[1..]} range",
+        $"range [{RangeStartTextBox.Text.Trim()}, {RangeEndTextBox.Text.Trim()}), delta {RangeDeltaTextBox.Text.Trim()}");
+  }
 
-    private void RefreshMarkers()
+  private async void ApplyCrossfade_Click(object sender, RoutedEventArgs e)
+  {
+    _ = await ExecuteProfessionalEditAsync(() =>
     {
-        _suppressMarkerSelectionChange = true;
-        try
-        {
-            TimelineMarker[] markers = _canonicalProject?.Markers.ToArray() ?? [];
-            MarkerComboBox.ItemsSource = markers;
-            MarkerComboBox.SelectedItem = markers.FirstOrDefault(marker => marker.Id == _selectedMarkerId);
-        }
-        finally
-        {
-            _suppressMarkerSelectionChange = false;
-        }
-    }
+      (Track track, TimelineEvent clip) = RequiredClip();
+      string partnerId = (CrossfadePartnerComboBox.SelectedItem as ProfessionalListItem)?.Id
+              ?? throw new InvalidOperationException("Select an overlapping clip.");
+      TimelineEvent partner = track.Events.First(item => item.Id == partnerId);
+      TimelineEvent left = clip.Start.Samples <= partner.Start.Samples ? clip : partner;
+      TimelineEvent right = ReferenceEquals(left, clip) ? partner : clip;
+      return ProfessionalEditingOperations.SetCrossfade(RequiredProject(), track.Id,
+              left.Id, right.Id, ParseSample(CrossfadeStartTextBox.Text, "Crossfade start"),
+              ParseSample(CrossfadeEndTextBox.Text, "Crossfade end"), ParseFadeCurve(CrossfadeCurveComboBox), _selectedCrossfadeId);
+    },
+        "Set crossfade", $"range [{CrossfadeStartTextBox.Text.Trim()}, {CrossfadeEndTextBox.Text.Trim()})");
+  }
 
-    private string CurrentSampleText()
+  private async Task<bool> ExecuteProfessionalEditAsync(
+      Func<JsonObject> operationFactory, string label, string affected, Action? beforeRefresh = null)
+  {
+    try
     {
-        ProjectTimebase timebase = _canonicalProject?.Timebase ?? new ProjectTimebase();
-        return timebase.FromSeconds(_positionSeconds).Samples.ToString(CultureInfo.InvariantCulture);
+      JsonObject operation = operationFactory();
+      return await ExecuteNativeEditAsync(operation, label, affectedSamples: affected, beforeRefresh: beforeRefresh);
     }
-
-    private async void MoveExact_Click(object sender, RoutedEventArgs e) => await EditAtExactSampleAsync("move");
-
-    private async void SplitExact_Click(object sender, RoutedEventArgs e) => await EditAtExactSampleAsync("split");
-
-    private async Task EditAtExactSampleAsync(string kind)
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or InvalidDataException or OverflowException)
     {
-        if (SelectedLane is not { IsLayer: false } lane || _timelineDocument?["tracks"] is not JsonArray tracks)
-        {
-            return;
-        }
-        if (!long.TryParse(ExactSampleTextBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out long position))
-        {
-            ShowInfo("Enter a nonnegative whole sample position within the 64-bit range.", InfoBarSeverity.Warning);
-            return;
-        }
-        JsonObject operation = new()
-        {
-            ["kind"] = kind,
-            ["track_id"] = tracks[lane.TrackIndex]?["id"]?.GetValue<string>(),
-            ["clip_id"] = lane.Source["id"]?.GetValue<string>(),
-            ["position"] = position.ToString(CultureInfo.InvariantCulture),
-            ["snap"] = "sample"
-        };
-        if (kind == "split") operation = CreateNativeSplitOperation(operation, position);
-        await ExecuteNativeEditAsync(operation, kind == "move" ? "Move clip to exact sample" : "Split clip at exact sample");
+      ShowInfo(exception.Message, InfoBarSeverity.Error);
+      return false;
     }
+  }
 
-    private bool TryCreateNativeEventOperation(
-        TimelineLaneDocument lane,
-        string kind,
-        long position,
-        out JsonObject operation)
-    {
-        operation = [];
-        if (lane.IsLayer || _timelineDocument?["tracks"] is not JsonArray tracks ||
-            lane.TrackIndex < 0 || lane.TrackIndex >= tracks.Count ||
-            tracks[lane.TrackIndex] is not JsonObject track ||
-            track["id"]?.GetValue<string>() is not string trackId ||
-            lane.Source["id"]?.GetValue<string>() is not string eventId)
-        {
-            return false;
-        }
+  private CanonicalProject RequiredProject()
+  {
+    return _canonicalProject ?? throw new InvalidOperationException("Load a project first.");
+  }
 
-        operation = new JsonObject
-        {
-            ["kind"] = kind,
-            ["track_id"] = trackId,
-            ["clip_id"] = eventId,
-            ["position"] = position.ToString(CultureInfo.InvariantCulture),
-            ["snap"] = "sample",
-        };
-        return true;
-    }
+  private Track RequiredTrack()
+  {
+    return SelectedMixerTrack ?? throw new InvalidOperationException("Select a native track.");
+  }
 
-    private long SnapSample(double seconds)
-    {
-        ProjectTimebase timebase = _canonicalProject?.Timebase ?? new ProjectTimebase();
-        TimelinePosition position = timebase.FromSeconds(Math.Max(0, seconds));
-        string mode = GetSelectedTag(SnapCombo) ?? "off";
-        TimelineSnapMode snapMode = mode switch
-        {
-            "beat" => TimelineSnapMode.Beat,
-            "half" => TimelineSnapMode.HalfBeat,
-            "quarter" => TimelineSnapMode.QuarterBeat,
-            _ => TimelineSnapMode.Off,
-        };
-        decimal bpm = _project?.Bpm is double value && double.IsFinite(value) && value > 0
-            ? (decimal)value
-            : 120;
-        return ProjectTimelineOperations.Snap(timebase, position, snapMode, bpm).Samples;
-    }
+  private (Track Track, TimelineEvent Clip) RequiredClip()
+  {
+    return (SelectedMixerTrack, SelectedNativeClip) is ({ } track, { } clip) ? (track, clip) : throw new InvalidOperationException("Select a native clip.");
+  }
 
-    private async void CreateAutomationLane_Click(object sender, RoutedEventArgs e)
-    {
-        string id = $"automation-{Guid.NewGuid():N}";
-        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.AddAutomationLane(
-            RequiredProject(), id, RequiredTrack().Id, AutomationTargetTextBox.Text.Trim(),
-            ParseAutomationMode(), ReadFiniteOrDefault(AutomationMinimumNumberBox, 0),
-            ReadFiniteOrDefault(AutomationMaximumNumberBox, 1)), "Create automation lane", "track",
-            () => _selectedAutomationLaneId = id);
-    }
+  private static string RequiredId(string? id, string message)
+  {
+    return !string.IsNullOrWhiteSpace(id) ? id : throw new InvalidOperationException(message);
+  }
 
-    private async void DeleteAutomationLane_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.DeleteAutomationLane(
-            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane.")),
-            "Delete automation lane", "track");
+  private static long ParseSample(string text, string label)
+  {
+    return long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out long value) && value >= 0
+              ? value : throw new InvalidDataException($"{label} must be a nonnegative whole sample.");
+  }
 
-    private async void ApplyAutomationMode_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.SetAutomationMode(
-            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."), ParseAutomationMode()),
-            "Set automation mode", "track");
+  private static long ParseSignedSample(string text, string label)
+  {
+    return long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value)
+              ? value : throw new InvalidDataException($"{label} must be a signed whole sample.");
+  }
 
-    private async void UpsertAutomationPoint_Click(object sender, RoutedEventArgs e)
-    {
-        string id = _selectedAutomationPointId ?? $"automation-point-{Guid.NewGuid():N}";
-        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.UpsertAutomationPoint(
-            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."), id,
-            ParseSample(AutomationPointSampleTextBox.Text, "Automation point sample"),
-            ReadFiniteOrDefault(AutomationPointValueNumberBox, 0), ParseAutomationCurve(),
-            ReadFiniteOrDefault(AutomationTensionNumberBox, 0)),
-            _selectedAutomationPointId is null ? "Add automation point" : "Update automation point",
-            $"sample {AutomationPointSampleTextBox.Text.Trim()}", () =>
-            {
-                _selectedAutomationPointId = id;
-                _creatingAutomationPoint = false;
-            });
-    }
+  private static long ReadWholeNumber(NumberBox box, string label)
+  {
+    return double.IsFinite(box.Value) && box.Value == Math.Truncate(box.Value) ? checked((long)box.Value)
+              : throw new InvalidDataException($"{label} must be a whole number.");
+  }
 
-    private void NewAutomationPoint_Click(object sender, RoutedEventArgs e)
-    {
-        _selectedAutomationPointId = null;
-        _creatingAutomationPoint = true;
-        AutomationPointListView.SelectedItem = null;
-        AutomationPointSampleTextBox.Text = CurrentSampleText();
-        AutomationPointValueNumberBox.Value = 0;
-        AutomationTensionNumberBox.Value = 0;
-        SelectComboByTag(AutomationCurveComboBox, "linear");
-        DeleteAutomationPointButton.IsEnabled = false;
-    }
-
-    private async void DeleteAutomationPoint_Click(object sender, RoutedEventArgs e)
-    {
-        string? pointId = _selectedAutomationPointId;
-        await ExecuteProfessionalEditAsync(() => ProfessionalEditingOperations.DeleteAutomationPoint(
-            RequiredProject(), RequiredId(_selectedAutomationLaneId, "Select an automation lane."),
-            RequiredId(pointId, "Select an automation point.")), "Delete automation point", "selected sample");
-    }
-
-    private async void ApplyFades_Click(object sender, RoutedEventArgs e)
-    {
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            return ProfessionalEditingOperations.SetFades(RequiredProject(), track.Id, clip.Id,
-                ParseSample(ProfessionalFadeInTextBox.Text, "Fade-in samples"), ParseSample(ProfessionalFadeOutTextBox.Text, "Fade-out samples"),
-                ParseFadeCurve(FadeCurveComboBox));
-        }, "Set clip fades", "selected clip");
-    }
-
-    private async void ApplyProcess_Click(object sender, RoutedEventArgs e)
-    {
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            return ProfessionalEditingOperations.SetProcess(RequiredProject(), track.Id, clip.Id,
-                ReadFiniteOrDefault(PlaybackRateNumberBox, 1), ReadFiniteOrDefault(StretchRatioNumberBox, 1), ParseProcessAlgorithm());
-        }, "Set clip process", "selected clip");
-    }
-
-    private async void AddTake_Click(object sender, RoutedEventArgs e)
-    {
-        string takeId = $"take-{Guid.NewGuid():N}";
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            string assetId = (TakeMediaAssetComboBox.SelectedItem as ProfessionalListItem)?.Id
-                ?? throw new InvalidOperationException("Select a project media asset.");
-            int rate = checked((int)ReadWholeNumber(TakeSourceRateNumberBox, "Source sample rate"));
-            long start = ParseSample(TakeSourceStartTextBox.Text, "Source start");
-            SourcePosition? end = string.IsNullOrWhiteSpace(TakeSourceEndTextBox.Text) ? null
-                : new SourcePosition(rate, ParseSample(TakeSourceEndTextBox.Text, "Source end"), "0");
-            return ProfessionalEditingOperations.AddTake(RequiredProject(), track.Id, clip.Id, takeId, assetId,
-                new SourceRange(new SourcePosition(rate, start, "0"), end));
-        }, "Add take", "selected clip", () => _selectedTakeId = takeId);
-    }
-
-    private async void SelectTake_Click(object sender, RoutedEventArgs e)
-    {
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            return ProfessionalEditingOperations.SelectTake(RequiredProject(), track.Id, clip.Id,
-                RequiredId(_selectedTakeId, "Select a take."));
-        }, "Select take", "selected clip");
-    }
-
-    private async void SetCompRange_Click(object sender, RoutedEventArgs e)
-    {
-        string id = _selectedCompRangeId ?? $"comp-{Guid.NewGuid():N}";
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            return ProfessionalEditingOperations.SetCompRange(RequiredProject(), track.Id, clip.Id,
-                id, RequiredId(_selectedTakeId, "Select a take."), ParseSample(CompStartTextBox.Text, "Comp start"),
-                ParseSample(CompEndTextBox.Text, "Comp end"));
-        }, "Set comp range",
-            $"range [{CompStartTextBox.Text.Trim()}, {CompEndTextBox.Text.Trim()})", () =>
-            {
-                _selectedCompRangeId = id;
-                _creatingCompRange = false;
-            });
-    }
-
-    private void NewCompRange_Click(object sender, RoutedEventArgs e)
-    {
-        _selectedCompRangeId = null;
-        _creatingCompRange = true;
-        CompRangeListView.SelectedItem = null;
-        string sample = CurrentSampleText();
-        CompStartTextBox.Text = sample;
-        CompEndTextBox.Text = sample;
-    }
-
-    private async void Nudge_Click(object sender, RoutedEventArgs e) => await ExecuteClipDeltaAsync("Nudge clip", ProfessionalEditingOperations.Nudge);
-    private async void Slip_Click(object sender, RoutedEventArgs e) => await ExecuteClipDeltaAsync("Slip clip source", ProfessionalEditingOperations.Slip);
-    private async void Slide_Click(object sender, RoutedEventArgs e) => await ExecuteClipDeltaAsync("Slide clip", ProfessionalEditingOperations.Slide);
-
-    private async Task ExecuteClipDeltaAsync(string label, Func<CanonicalProject, string, string, long, JsonObject> builder)
-    {
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            return builder(RequiredProject(), track.Id, clip.Id,
-                ParseSignedSample(EditDeltaTextBox.Text, "Delta samples"));
-        }, label, $"selected clip, delta {EditDeltaTextBox.Text.Trim()}");
-    }
-
-    private async void ApplyRangeEdit_Click(object sender, RoutedEventArgs e)
-    {
-        string action = GetSelectedTag(RangeActionComboBox) ?? "delete";
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            CanonicalProject project = RequiredProject();
-            Track track = RequiredTrack();
-            long start = ParseSample(RangeStartTextBox.Text, "Range start");
-            long end = ParseSample(RangeEndTextBox.Text, "Range end");
-            TimelineEvent[] selected = track.Events.Where(clip => clip.Start.Samples >= start && clip.End.Samples <= end).ToArray();
-            ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
-            string[] clipIds = action == "duplicate" ? selected.Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
-            string[] takeIds = action == "duplicate" ? selected.SelectMany(clip => editing.Takes.Where(take => take.ClipId == clip.Id))
-                .Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
-            string[] compIds = action == "duplicate" ? selected.SelectMany(clip => editing.CompRanges.Where(comp => comp.ClipId == clip.Id))
-                .Select(_ => Guid.NewGuid().ToString("N")).ToArray() : [];
-            return ProfessionalEditingOperations.RangeEdit(project, track.Id, start, end, action,
-                ParseSignedSample(RangeDeltaTextBox.Text, "Range delta"), clipIds, takeIds, compIds);
-        }, $"{char.ToUpperInvariant(action[0])}{action[1..]} range",
-            $"range [{RangeStartTextBox.Text.Trim()}, {RangeEndTextBox.Text.Trim()}), delta {RangeDeltaTextBox.Text.Trim()}");
-    }
-
-    private async void ApplyCrossfade_Click(object sender, RoutedEventArgs e)
-    {
-        await ExecuteProfessionalEditAsync(() =>
-        {
-            (Track track, TimelineEvent clip) = RequiredClip();
-            string partnerId = (CrossfadePartnerComboBox.SelectedItem as ProfessionalListItem)?.Id
-                ?? throw new InvalidOperationException("Select an overlapping clip.");
-            TimelineEvent partner = track.Events.First(item => item.Id == partnerId);
-            TimelineEvent left = clip.Start.Samples <= partner.Start.Samples ? clip : partner;
-            TimelineEvent right = ReferenceEquals(left, clip) ? partner : clip;
-            return ProfessionalEditingOperations.SetCrossfade(RequiredProject(), track.Id,
-                left.Id, right.Id, ParseSample(CrossfadeStartTextBox.Text, "Crossfade start"),
-                ParseSample(CrossfadeEndTextBox.Text, "Crossfade end"), ParseFadeCurve(CrossfadeCurveComboBox), _selectedCrossfadeId);
-        },
-            "Set crossfade", $"range [{CrossfadeStartTextBox.Text.Trim()}, {CrossfadeEndTextBox.Text.Trim()})");
-    }
-
-    private async Task<bool> ExecuteProfessionalEditAsync(
-        Func<JsonObject> operationFactory, string label, string affected, Action? beforeRefresh = null)
-    {
-        try
-        {
-            JsonObject operation = operationFactory();
-            return await ExecuteNativeEditAsync(operation, label, affectedSamples: affected, beforeRefresh: beforeRefresh);
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or InvalidDataException or OverflowException)
-        {
-            ShowInfo(exception.Message, InfoBarSeverity.Error);
-            return false;
-        }
-    }
-
-    private CanonicalProject RequiredProject() => _canonicalProject ?? throw new InvalidOperationException("Load a project first.");
-    private Track RequiredTrack() => SelectedMixerTrack ?? throw new InvalidOperationException("Select a native track.");
-    private (Track Track, TimelineEvent Clip) RequiredClip() =>
-        (SelectedMixerTrack, SelectedNativeClip) is ({ } track, { } clip) ? (track, clip) : throw new InvalidOperationException("Select a native clip.");
-    private static string RequiredId(string? id, string message) => !string.IsNullOrWhiteSpace(id) ? id : throw new InvalidOperationException(message);
-    private static long ParseSample(string text, string label) =>
-        long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out long value) && value >= 0
-            ? value : throw new InvalidDataException($"{label} must be a nonnegative whole sample.");
-    private static long ParseSignedSample(string text, string label) =>
-        long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value)
-            ? value : throw new InvalidDataException($"{label} must be a signed whole sample.");
-    private static long ReadWholeNumber(NumberBox box, string label) =>
-        double.IsFinite(box.Value) && box.Value == Math.Truncate(box.Value) ? checked((long)box.Value)
-            : throw new InvalidDataException($"{label} must be a whole number.");
-    private AutomationMode ParseAutomationMode() => GetSelectedTag(AutomationModeComboBox) switch
+  private AutomationMode ParseAutomationMode()
+  {
+    return GetSelectedTag(AutomationModeComboBox) switch
     { "write" => AutomationMode.Write, "touch" => AutomationMode.Touch, _ => AutomationMode.Read };
-    private AutomationCurve ParseAutomationCurve() => GetSelectedTag(AutomationCurveComboBox) switch
-    { "step" => AutomationCurve.Step, "smooth" => AutomationCurve.Smooth, _ => AutomationCurve.Linear };
-    private static FadeCurve ParseFadeCurve(ComboBox box) => GetSelectedTag(box) switch
-    { "linear" => FadeCurve.Linear, "s_curve" => FadeCurve.SCurve, _ => FadeCurve.EqualPower };
-    private ProcessAlgorithm ParseProcessAlgorithm() => GetSelectedTag(ProcessAlgorithmComboBox) == "phase_vocoder"
-        ? ProcessAlgorithm.PhaseVocoder : ProcessAlgorithm.Resample;
-    private static string FadeCurveTag(FadeCurve curve) => curve switch
-    { FadeCurve.Linear => "linear", FadeCurve.SCurve => "s_curve", _ => "equal_power" };
+  }
 
-    private async Task<bool> ExecuteNativeEditAsync(
+  private AutomationCurve ParseAutomationCurve()
+  {
+    return GetSelectedTag(AutomationCurveComboBox) switch
+    { "step" => AutomationCurve.Step, "smooth" => AutomationCurve.Smooth, _ => AutomationCurve.Linear };
+  }
+
+  private static FadeCurve ParseFadeCurve(ComboBox box)
+  {
+    return GetSelectedTag(box) switch
+    { "linear" => FadeCurve.Linear, "s_curve" => FadeCurve.SCurve, _ => FadeCurve.EqualPower };
+  }
+
+  private ProcessAlgorithm ParseProcessAlgorithm()
+  {
+    return GetSelectedTag(ProcessAlgorithmComboBox) == "phase_vocoder"
+          ? ProcessAlgorithm.PhaseVocoder : ProcessAlgorithm.Resample;
+  }
+
+  private static string FadeCurveTag(FadeCurve curve)
+  {
+    return curve switch
+    { FadeCurve.Linear => "linear", FadeCurve.SCurve => "s_curve", _ => "equal_power" };
+  }
+
+  private async Task<bool> ExecuteNativeEditAsync(
         JsonObject operation, string label, JsonObject? precedingOperation = null,
         string? affectedSamples = null, Action? beforeRefresh = null)
+  {
+    if (_isBusy || _isDirty || _editorRevision < 1 || _loadedProjectId is not string projectId)
     {
-        if (_isBusy || _isDirty || _editorRevision < 1 || _loadedProjectId is not string projectId)
-        {
-            return false;
-        }
-        SetBusy(true);
-        CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
-        try
-        {
-            var request = new EditorCommandRequest(Guid.NewGuid().ToString("N"), _editorRevision, "edit", label,
-                Operations: precedingOperation is null ? [ToJsonElement(operation)] : [ToJsonElement(precedingOperation), ToJsonElement(operation)]);
-            EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, token);
-            token.ThrowIfCancellationRequested();
-            if (projectId != _loadedProjectId) return false;
-            ApplyEditorState(result);
-            if (operation["kind"]?.GetValue<string>() == "add_clip")
-            {
-                _selectedLaneId = operation["new_id"]?.GetValue<string>();
-                _selectedCameraKeyframeIdentity = null;
-            }
-            else if (operation["kind"]?.GetValue<string>() is "split" or "duplicate")
-            {
-                _selectedLaneId = operation["new_id"]?.GetValue<string>();
-                _selectedCameraKeyframeIdentity = null;
-            }
-            else if (operation["kind"]?.GetValue<string>() == "add_marker")
-            {
-                _selectedMarkerId = operation["new_id"]?.GetValue<string>();
-            }
-            else if (operation["kind"]?.GetValue<string>() == "delete_marker")
-            {
-                _selectedMarkerId = null;
-            }
-            beforeRefresh?.Invoke();
-            RefreshEditor(updateRawText: true);
-            await RefreshProjectRevisionAsync(projectId, token);
-            await ConfigureAudioEngineAsync(token);
-            await RefreshPreviewAsync(force: false);
-            string status = $"{label} • {affectedSamples ?? "project"} • revision {_editorRevision} • undo {(_editorHistory.CanUndo ? "available" : "unavailable")}";
-            StatusText.Text = status;
-            ProfessionalEditStatusText.Text = status;
-            return true;
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }
-        catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); return false; }
-        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); return false; }
-        finally { SetBusy(false); }
+      return false;
+    }
+    SetBusy(true);
+    CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
+    try
+    {
+      EditorCommandRequest request = new(Guid.NewGuid().ToString("N"), _editorRevision, "edit", label,
+          Operations: precedingOperation is null ? [ToJsonElement(operation)] : [ToJsonElement(precedingOperation), ToJsonElement(operation)]);
+      EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, token);
+      token.ThrowIfCancellationRequested();
+      if (projectId != _loadedProjectId)
+      {
+        return false;
+      }
+
+      ApplyEditorState(result);
+      if (operation["kind"]?.GetValue<string>() == "add_clip")
+      {
+        _selectedLaneId = operation["new_id"]?.GetValue<string>();
+        _selectedCameraKeyframeIdentity = null;
+      }
+      else if (operation["kind"]?.GetValue<string>() is "split" or "duplicate")
+      {
+        _selectedLaneId = operation["new_id"]?.GetValue<string>();
+        _selectedCameraKeyframeIdentity = null;
+      }
+      else if (operation["kind"]?.GetValue<string>() == "add_marker")
+      {
+        _selectedMarkerId = operation["new_id"]?.GetValue<string>();
+      }
+      else if (operation["kind"]?.GetValue<string>() == "delete_marker")
+      {
+        _selectedMarkerId = null;
+      }
+      beforeRefresh?.Invoke();
+      RefreshEditor(updateRawText: true);
+      await RefreshProjectRevisionAsync(projectId, token);
+      await ConfigureAudioEngineAsync(token);
+      await RefreshPreviewAsync(force: false);
+      string status = $"{label} • {affectedSamples ?? "project"} • revision {_editorRevision} • undo {(_editorHistory.CanUndo ? "available" : "unavailable")}";
+      StatusText.Text = status;
+      ProfessionalEditStatusText.Text = status;
+      return true;
+    }
+    catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }
+    catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); return false; }
+    catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); return false; }
+    finally { SetBusy(false); }
+  }
+
+  private async void Redo_Click(object sender, RoutedEventArgs e)
+  {
+    await ApplyHistoryAsync("redo");
+  }
+
+  private async Task ApplyHistoryAsync(string action)
+  {
+    if (_isBusy || _timelineDocument is null || _isDirty ||
+        (action == "undo" ? !_editorHistory.CanUndo : !_editorHistory.CanRedo))
+    {
+      return;
+    }
+    SetBusy(true);
+    try
+    {
+      await PersistEditorAsync(action, action == "undo" ? "Undo" : "Redo", _pageCancellation?.Token ?? CancellationToken.None);
+      await RefreshPreviewAsync(force: false);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true) { }
+    catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); }
+    catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+    finally { SetBusy(false); }
+  }
+
+  private async void SaveTimeline_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      return;
     }
 
-    private async void Redo_Click(object sender, RoutedEventArgs e) => await ApplyHistoryAsync("redo");
-
-    private async Task ApplyHistoryAsync(string action)
+    SetBusy(true);
+    try
     {
-        if (_isBusy || _timelineDocument is null || _isDirty ||
-            (action == "undo" ? !_editorHistory.CanUndo : !_editorHistory.CanRedo))
-        {
-            return;
-        }
-        SetBusy(true);
-        try
-        {
-            await PersistEditorAsync(action, action == "undo" ? "Undo" : "Redo", _pageCancellation?.Token ?? CancellationToken.None);
-            await RefreshPreviewAsync(force: false);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true) { }
-        catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); }
-        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
-        finally { SetBusy(false); }
+      await SaveTimelineDocumentAsync(_pageCancellation?.Token ?? CancellationToken.None);
+      ShowInfo("Timeline changes were saved to the project.", InfoBarSeverity.Success);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      await HandleProjectRevisionConflictAsync(conflict);
+    }
+    catch (Exception ex)
+    {
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private async Task SaveTimelineDocumentAsync(CancellationToken cancellationToken)
+  {
+    if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      throw new InvalidOperationException("Load a project Timeline before saving.");
     }
 
-    private async void SaveTimeline_Click(object sender, RoutedEventArgs e)
+    await CaptureActiveVst3StatesAsync(cancellationToken);
+    if (_isDirty)
     {
-        if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            return;
-        }
+      await PersistEditorAsync("replace", "Save timeline", cancellationToken);
+    }
+    _isDirty = false;
+    StatusText.Text = "Timeline saved.";
+    await RefreshRecoveryAsync();
+  }
 
-        SetBusy(true);
-        try
+  private async void RefreshWorkflow_Click(object sender, RoutedEventArgs e)
+  {
+    RefreshWorkflowPlanSummary();
+    await RunAutomationAsync(
+        "Refreshing project sources...",
+        async token =>
         {
-            await SaveTimelineDocumentAsync(_pageCancellation?.Token ?? CancellationToken.None);
-            ShowInfo("Timeline changes were saved to the project.", InfoBarSeverity.Success);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            await HandleProjectRevisionConflictAsync(conflict);
-        }
-        catch (Exception ex)
-        {
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+          await LoadWorkflowAssetsAsync(token);
+          return $"Loaded {SourceAssetComboBox.Items.Count} project sources.";
+        });
+  }
+
+  private async void AppendPlan_Click(object sender, RoutedEventArgs e)
+  {
+    await ApplyWorkspacePlanAsync(overwrite: false);
+  }
+
+  private async void OverwritePlan_Click(object sender, RoutedEventArgs e)
+  {
+    if (!await ConfirmAsync(
+            "Overwrite Timeline from plan?",
+            $"Replace the current Timeline with Workspace plan variant {_loadedVariantIndex + 1}? " +
+            "The replacement remains undoable until you leave this project.",
+            "Overwrite Timeline"))
+    {
+      return;
     }
 
-    private async Task SaveTimelineDocumentAsync(CancellationToken cancellationToken)
-    {
-        if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            throw new InvalidOperationException("Load a project Timeline before saving.");
-        }
+    await ApplyWorkspacePlanAsync(overwrite: true);
+  }
 
-        await CaptureActiveVst3StatesAsync(cancellationToken);
-        if (_isDirty)
-        {
-            await PersistEditorAsync("replace", "Save timeline", cancellationToken);
-        }
-        _isDirty = false;
-        StatusText.Text = "Timeline saved.";
-        await RefreshRecoveryAsync();
+  private bool _hasAiEditProposal;
+
+  private void ResetAiEditProposal()
+  {
+    _hasAiEditProposal = false;
+    AiEditProposalText.Text = "No AI edit proposal has been generated.";
+  }
+
+  private async void GenerateAiEdit_Click(object sender, RoutedEventArgs e)
+  {
+    string instruction = AiEditInstructionTextBox.Text.Trim();
+    if (string.IsNullOrWhiteSpace(instruction))
+    {
+      ShowAutomationInfo("Describe the edit you want before generating a proposal.", InfoBarSeverity.Warning);
+      _ = AiEditInstructionTextBox.Focus(FocusState.Programmatic);
+      return;
     }
 
-    private async void RefreshWorkflow_Click(object sender, RoutedEventArgs e)
+    if (string.IsNullOrWhiteSpace(_loadedProjectId))
     {
-        RefreshWorkflowPlanSummary();
-        await RunAutomationAsync(
-            "Refreshing project sources...",
-            async token =>
-            {
-                await LoadWorkflowAssetsAsync(token);
-                return $"Loaded {SourceAssetComboBox.Items.Count} project sources.";
-            });
+      ShowAutomationInfo("Load a project before generating an AI edit proposal.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async void AppendPlan_Click(object sender, RoutedEventArgs e) =>
-        await ApplyWorkspacePlanAsync(overwrite: false);
+    int maximumScenes = double.IsFinite(AiEditMaximumScenesNumberBox.Value)
+        ? Math.Clamp((int)AiEditMaximumScenesNumberBox.Value, 1, 64)
+        : 12;
+    _hasAiEditProposal = false;
+    AiEditProposalText.Text = "Generating a proposal...";
+    UpdateCommandState();
 
-    private async void OverwritePlan_Click(object sender, RoutedEventArgs e)
-    {
-        if (!await ConfirmAsync(
-                "Overwrite Timeline from plan?",
-                $"Replace the current Timeline with Workspace plan variant {_loadedVariantIndex + 1}? " +
-                "The replacement remains undoable until you leave this project.",
-                "Overwrite Timeline"))
+    await RunAutomationAsync(
+        "Generating a non-destructive AI edit proposal...",
+        async token =>
         {
-            return;
-        }
+          if (_isDirty)
+          {
+            await SaveTimelineDocumentAsync(token);
+          }
 
-        await ApplyWorkspacePlanAsync(overwrite: true);
+          PlanRequest request = new(
+                  _project?.Name,
+                  instruction,
+                  "timeline edit; preserve source intent; return practical shot timing and editable prompts",
+                  1,
+                  maximumScenes,
+                  StudioPageHelpers.ExpectedRevision(_project));
+          PlanDto plan = await App.Services.ApiClient.GeneratePlanAsync(
+                  _loadedProjectId,
+                  request,
+                  "creative",
+                  token);
+          await RefreshProjectRevisionAsync(_loadedProjectId, token);
+          PlanVariantDto variant = plan.Variants.FirstOrDefault()
+                  ?? throw new InvalidOperationException("The planner returned no editable variants.");
+
+          _loadedVariantIndex = 0;
+          _hasAiEditProposal = true;
+          AiEditProposalText.Text = FormatAiEditProposal(variant);
+          RefreshWorkflowPlanSummary();
+          return $"Proposal ready with {variant.SceneCount} scene{(variant.SceneCount == 1 ? string.Empty : "s")}. Review it before appending or replacing.";
+        });
+  }
+
+  private async void AppendAiEdit_Click(object sender, RoutedEventArgs e)
+  {
+    if (_hasAiEditProposal)
+    {
+      await ApplyWorkspacePlanAsync(overwrite: false);
+    }
+  }
+
+  private async void ReplaceWithAiEdit_Click(object sender, RoutedEventArgs e)
+  {
+    if (!_hasAiEditProposal ||
+        !await ConfirmAsync(
+            "Replace Timeline with AI proposal?",
+            "Replace the current generated Timeline content with the reviewed AI edit proposal? " +
+            "Locked tracks are preserved and the replacement remains undoable until you leave this project.",
+            "Replace Timeline"))
+    {
+      return;
     }
 
-    private bool _hasAiEditProposal;
+    await ApplyWorkspacePlanAsync(overwrite: true);
+  }
 
-    private void ResetAiEditProposal()
+  private static string FormatAiEditProposal(PlanVariantDto variant)
+  {
+    List<string> lines = new()
     {
-        _hasAiEditProposal = false;
-        AiEditProposalText.Text = "No AI edit proposal has been generated.";
-    }
-
-    private async void GenerateAiEdit_Click(object sender, RoutedEventArgs e)
-    {
-        string instruction = AiEditInstructionTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(instruction))
-        {
-            ShowAutomationInfo("Describe the edit you want before generating a proposal.", InfoBarSeverity.Warning);
-            AiEditInstructionTextBox.Focus(FocusState.Programmatic);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            ShowAutomationInfo("Load a project before generating an AI edit proposal.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        int maximumScenes = double.IsFinite(AiEditMaximumScenesNumberBox.Value)
-            ? Math.Clamp((int)AiEditMaximumScenesNumberBox.Value, 1, 64)
-            : 12;
-        _hasAiEditProposal = false;
-        AiEditProposalText.Text = "Generating a proposal...";
-        UpdateCommandState();
-
-        await RunAutomationAsync(
-            "Generating a non-destructive AI edit proposal...",
-            async token =>
-            {
-                if (_isDirty)
-                {
-                    await SaveTimelineDocumentAsync(token);
-                }
-
-                var request = new PlanRequest(
-                    _project?.Name,
-                    instruction,
-                    "timeline edit; preserve source intent; return practical shot timing and editable prompts",
-                    1,
-                    maximumScenes,
-                    StudioPageHelpers.ExpectedRevision(_project));
-                PlanDto plan = await App.Services.ApiClient.GeneratePlanAsync(
-                    _loadedProjectId,
-                    request,
-                    "creative",
-                    token);
-                await RefreshProjectRevisionAsync(_loadedProjectId, token);
-                PlanVariantDto variant = plan.Variants.FirstOrDefault()
-                    ?? throw new InvalidOperationException("The planner returned no editable variants.");
-
-                _loadedVariantIndex = 0;
-                _hasAiEditProposal = true;
-                AiEditProposalText.Text = FormatAiEditProposal(variant);
-                RefreshWorkflowPlanSummary();
-                return $"Proposal ready with {variant.SceneCount} scene{(variant.SceneCount == 1 ? string.Empty : "s")}. Review it before appending or replacing.";
-            });
-    }
-
-    private async void AppendAiEdit_Click(object sender, RoutedEventArgs e)
-    {
-        if (_hasAiEditProposal)
-        {
-            await ApplyWorkspacePlanAsync(overwrite: false);
-        }
-    }
-
-    private async void ReplaceWithAiEdit_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_hasAiEditProposal ||
-            !await ConfirmAsync(
-                "Replace Timeline with AI proposal?",
-                "Replace the current generated Timeline content with the reviewed AI edit proposal? " +
-                "Locked tracks are preserved and the replacement remains undoable until you leave this project.",
-                "Replace Timeline"))
-        {
-            return;
-        }
-
-        await ApplyWorkspacePlanAsync(overwrite: true);
-    }
-
-    private static string FormatAiEditProposal(PlanVariantDto variant)
-    {
-        var lines = new List<string>
-        {
             $"{variant.DisplayName} · {variant.SceneCount} scenes" +
             (variant.DurationSeconds is double duration ? $" · {duration:0.##} s" : string.Empty)
         };
-        if (!string.IsNullOrWhiteSpace(variant.Logline))
-        {
-            lines.Add(variant.Logline!);
-        }
-
-        lines.AddRange(variant.Scenes.Select((scene, index) =>
-            $"{index + 1}. {scene.StartSeconds:0.##}–{scene.EndSeconds:0.##} s · " +
-            (string.IsNullOrWhiteSpace(scene.Prompt) ? "Editable scene" : scene.Prompt)));
-        return string.Join(Environment.NewLine, lines);
+    if (!string.IsNullOrWhiteSpace(variant.Logline))
+    {
+      lines.Add(variant.Logline!);
     }
 
-    private async Task ApplyWorkspacePlanAsync(bool overwrite)
+    lines.AddRange(variant.Scenes.Select((scene, index) =>
+        $"{index + 1}. {scene.StartSeconds:0.##}–{scene.EndSeconds:0.##} s · " +
+        (string.IsNullOrWhiteSpace(scene.Prompt) ? "Editable scene" : scene.Prompt)));
+    return string.Join(Environment.NewLine, lines);
+  }
+
+  private async Task ApplyWorkspacePlanAsync(bool overwrite)
+  {
+    if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
     {
-        if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            ShowAutomationInfo("Load a project Timeline before applying a Workspace plan.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        await RunAutomationAsync(
-            overwrite ? "Replacing Timeline from Workspace plan..." : "Appending Workspace plan...",
-            async token =>
-            {
-                if (!overwrite && _isDirty)
-                {
-                    await SaveTimelineDocumentAsync(token);
-                }
-
-                JsonObject before = CloneDocument(_timelineDocument);
-                ApplyPlanToTimelineResponse response =
-                    await App.Services.ApiClient.ApplyPlanToTimelineAsync(
-                        _loadedProjectId,
-                        _loadedVariantIndex,
-                        overwrite,
-                        StudioPageHelpers.ExpectedRevision(_project),
-                        token);
-                if (!response.Ok)
-                {
-                    throw new InvalidOperationException("The backend did not apply the Workspace plan.");
-                }
-                await RefreshProjectRevisionAsync(_loadedProjectId, token);
-
-                JsonObject result = TimelineProjection.PreserveLockedTracks(
-                    before,
-                    ExtractTimeline(response.Timeline));
-                await CommitDocumentAsync(
-                    before,
-                    result,
-                    overwrite ? "plan overwrite" : "plan append",
-                    _selectedLaneId);
-                SetAutomationResult(result);
-                return $"Workspace plan variant {response.VariantIndex + 1} " +
-                    (overwrite ? "replaced the Timeline." : "was appended to the Timeline.");
-            });
+      ShowAutomationInfo("Load a project Timeline before applying a Workspace plan.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private void SourceAssetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (SourceAssetComboBox.SelectedItem is string sourcePath)
+    await RunAutomationAsync(
+        overwrite ? "Replacing Timeline from Workspace plan..." : "Appending Workspace plan...",
+        async token =>
         {
-            SelectSource(sourcePath);
-        }
+          if (!overwrite && _isDirty)
+          {
+            await SaveTimelineDocumentAsync(token);
+          }
+
+          JsonObject before = CloneDocument(_timelineDocument);
+          ApplyPlanToTimelineResponse response =
+                  await App.Services.ApiClient.ApplyPlanToTimelineAsync(
+                      _loadedProjectId,
+                      _loadedVariantIndex,
+                      overwrite,
+                      StudioPageHelpers.ExpectedRevision(_project),
+                      token);
+          if (!response.Ok)
+          {
+            throw new InvalidOperationException("The backend did not apply the Workspace plan.");
+          }
+          await RefreshProjectRevisionAsync(_loadedProjectId, token);
+
+          JsonObject result = TimelineProjection.PreserveLockedTracks(
+                  before,
+                  ExtractTimeline(response.Timeline));
+          await CommitDocumentAsync(
+                  before,
+                  result,
+                  overwrite ? "plan overwrite" : "plan append",
+                  _selectedLaneId);
+          SetAutomationResult(result);
+          return $"Workspace plan variant {response.VariantIndex + 1} " +
+                  (overwrite ? "replaced the Timeline." : "was appended to the Timeline.");
+        });
+  }
+
+  private void SourceAssetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (SourceAssetComboBox.SelectedItem is string sourcePath)
+    {
+      SelectSource(sourcePath);
+    }
+  }
+
+  private async void BrowseSource_Click(object sender, RoutedEventArgs e)
+  {
+    if (App.MainWindowInstance is null)
+    {
+      ShowAutomationInfo("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
+      return;
     }
 
-    private async void BrowseSource_Click(object sender, RoutedEventArgs e)
+    FileOpenPicker picker = new()
     {
-        if (App.MainWindowInstance is null)
-        {
-            ShowAutomationInfo("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
-            return;
-        }
-
-        var picker = new FileOpenPicker
-        {
-            SuggestedStartLocation = PickerLocationId.VideosLibrary,
-            ViewMode = PickerViewMode.List,
-        };
-        foreach (string extension in new[]
-                 {
+      SuggestedStartLocation = PickerLocationId.VideosLibrary,
+      ViewMode = PickerViewMode.List,
+    };
+    foreach (string extension in new[]
+             {
                      ".mp4", ".mov", ".mkv", ".avi", ".webm",
                      ".wav", ".mp3", ".flac", ".aac", ".m4a", ".ogg",
                      ".png", ".jpg", ".jpeg", ".webp",
                  })
-        {
-            picker.FileTypeFilter.Add(extension);
-        }
-
-        nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
-        StorageFile? file = await picker.PickSingleFileAsync();
-        if (file is not null)
-        {
-            SourceAssetComboBox.SelectedItem = null;
-            SelectSource(file.Path);
-        }
+    {
+      picker.FileTypeFilter.Add(extension);
     }
 
-    private async void AssignSource_Click(object sender, RoutedEventArgs e)
+    nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
+    WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
+    StorageFile? file = await picker.PickSingleFileAsync();
+    if (file is not null)
     {
-        if (!TryGetAutomationContext(requireSelection: true, out JsonObject timeline))
-        {
-            return;
-        }
+      SourceAssetComboBox.SelectedItem = null;
+      SelectSource(file.Path);
+    }
+  }
 
-        await RunAutomationAsync(
-            "Assigning source...",
-            async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                JsonObject before = CloneDocument(_timelineDocument!);
-                TimelineAutomationResult result =
-                    TimelineAutomation.AssignSource(timeline, _selectedLaneId!, _selectedSourcePath);
-                await CommitDocumentAsync(before, result.Timeline, "source assignment", _selectedLaneId);
-                SetAutomationResult(result.Timeline);
-                return result.Summary;
-            });
+  private async void AssignSource_Click(object sender, RoutedEventArgs e)
+  {
+    if (!TryGetAutomationContext(requireSelection: true, out JsonObject timeline))
+    {
+      return;
     }
 
-    private async void AddSourceClip_Click(object sender, RoutedEventArgs e)
+    await RunAutomationAsync(
+        "Assigning source...",
+        async token =>
+        {
+          token.ThrowIfCancellationRequested();
+          JsonObject before = CloneDocument(_timelineDocument!);
+          TimelineAutomationResult result =
+                  TimelineAutomation.AssignSource(timeline, _selectedLaneId!, _selectedSourcePath);
+          await CommitDocumentAsync(before, result.Timeline, "source assignment", _selectedLaneId);
+          SetAutomationResult(result.Timeline);
+          return result.Summary;
+        });
+  }
+
+  private async void AddSourceClip_Click(object sender, RoutedEventArgs e)
+  {
+    if (!TryGetAutomationContext(requireSelection: false, out JsonObject timeline))
     {
-        if (!TryGetAutomationContext(requireSelection: false, out JsonObject timeline))
-        {
-            return;
-        }
-
-        if (!TryReadFinite(NewClipDurationNumberBox, out double duration))
-        {
-            ShowAutomationInfo("Enter a valid source clip duration.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        int trackIndex = Math.Max(0, (int)Math.Round(ReadFiniteOrDefault(TrackNumberBox, 1)) - 1);
-        if (TimelineProjection.IsTrackLocked(timeline, trackIndex))
-        {
-            ShowAutomationInfo($"Track {trackIndex + 1} is locked.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        await RunAutomationAsync(
-            "Adding source clip...",
-            async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                JsonObject before = CloneDocument(_timelineDocument!);
-                TimelineAutomationResult result = TimelineAutomation.AddSourceClip(
-                    timeline,
-                    _selectedSourcePath,
-                    _positionSeconds,
-                    duration,
-                    trackIndex);
-                await CommitDocumentAsync(before, result.Timeline, "source clip insertion", _selectedLaneId);
-                SetAutomationResult(result.Timeline);
-                return result.Summary;
-            });
+      return;
     }
 
-    private async void SequenceTrack_Click(object sender, RoutedEventArgs e)
+    if (!TryReadFinite(NewClipDurationNumberBox, out double duration))
     {
-        if (_timelineDocument is null)
-        {
-            ShowAutomationInfo("Load a Timeline before sequencing a track.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!TryReadFinite(SequenceTrackNumberBox, out double trackNumber) ||
-            !TryReadFinite(SequenceStartNumberBox, out double startSeconds) ||
-            !TryReadFinite(SequenceGapNumberBox, out double gapSeconds))
-        {
-            ShowAutomationInfo("Enter valid sequencing values.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        int trackIndex = Math.Max(0, (int)Math.Round(trackNumber) - 1);
-        if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
-        {
-            ShowAutomationInfo($"Track {trackIndex + 1} is locked.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        await RunAutomationAsync(
-            "Sequencing track...",
-            async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                JsonObject before = CloneDocument(_timelineDocument);
-                TimelineAutomationResult result =
-                    TimelineAutomation.SequenceTrack(_timelineDocument, trackIndex, startSeconds, gapSeconds);
-                await CommitDocumentAsync(before, result.Timeline, "track sequencing", _selectedLaneId);
-                SetAutomationResult(result.Timeline);
-                return result.Summary;
-            });
+      ShowAutomationInfo("Enter a valid source clip duration.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async void ApplyMotion_Click(object sender, RoutedEventArgs e)
+    int trackIndex = Math.Max(0, (int)Math.Round(ReadFiniteOrDefault(TrackNumberBox, 1)) - 1);
+    if (TimelineProjection.IsTrackLocked(timeline, trackIndex))
     {
-        if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            ShowAutomationInfo("Load a project Timeline before applying motion grammar.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!TryReadFinite(MotionStartNumberBox, out double startSeconds) ||
-            !TryReadFinite(MotionEndNumberBox, out double endSeconds) ||
-            endSeconds <= startSeconds)
-        {
-            ShowAutomationInfo("Motion end time must be later than its start time.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        string phrase = GetSelectedTag(MotionPhraseComboBox) ?? "prepare";
-        await RunAutomationAsync(
-            "Applying motion grammar...",
-            async token =>
-            {
-                if (_isDirty)
-                {
-                    await SaveTimelineDocumentAsync(token);
-                }
-
-                JsonObject before = CloneDocument(_timelineDocument);
-                ApplyMotionGrammarResponse response =
-                    await App.Services.ApiClient.ApplyMotionGrammarAsync(
-                        _loadedProjectId,
-                        [new MotionPhraseRequest(phrase, startSeconds, endSeconds)],
-                        OverwriteMotionToggle.IsOn,
-                        StudioPageHelpers.ExpectedRevision(_project),
-                        token);
-                if (!response.Ok)
-                {
-                    throw new InvalidOperationException("The backend did not apply the motion grammar.");
-                }
-                await RefreshProjectRevisionAsync(_loadedProjectId, token);
-
-                JsonObject result = TimelineProjection.PreserveLockedTracks(
-                    before,
-                    ExtractTimeline(response.Timeline));
-                await CommitDocumentAsync(before, result, "motion grammar", _selectedLaneId);
-                SetAutomationResult(result);
-                return $"Applied the {phrase} motion phrase from {startSeconds:0.###} s to {endSeconds:0.###} s.";
-            });
+      ShowAutomationInfo($"Track {trackIndex + 1} is locked.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private void CancelAutomation_Click(object sender, RoutedEventArgs e) =>
-        _automationCancellation?.Cancel();
-
-    private async void OpenWorkspace_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("workspace");
-
-    private async void OpenRender_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("render");
-
-    private async void OpenReview_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("review");
-
-    private async void OpenOutputs_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("outputs");
-
-    private async void OpenQueue_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("queue");
-
-    private async void OpenPlanner_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("plannerLab");
-
-    private async void OpenReactive_Click(object sender, RoutedEventArgs e) =>
-        await NavigateWithSaveAsync("reactiveLab");
-
-    private async void Refresh_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isDirty &&
-            !await ConfirmAsync(
-                "Reload timeline?",
-                "Reloading discards unsaved local edits. Autosaved recovery data remains available.",
-                "Reload"))
+    await RunAutomationAsync(
+        "Adding source clip...",
+        async token =>
         {
-            return;
-        }
+          token.ThrowIfCancellationRequested();
+          JsonObject before = CloneDocument(_timelineDocument!);
+          TimelineAutomationResult result = TimelineAutomation.AddSourceClip(
+                  timeline,
+                  _selectedSourcePath,
+                  _positionSeconds,
+                  duration,
+                  trackIndex);
+          await CommitDocumentAsync(before, result.Timeline, "source clip insertion", _selectedLaneId);
+          SetAutomationResult(result.Timeline);
+          return result.Summary;
+        });
+  }
 
-        await LoadActiveProjectAsync();
+  private async void SequenceTrack_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null)
+    {
+      ShowAutomationInfo("Load a Timeline before sequencing a track.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async void AddClipAtPlayhead_Click(object sender, RoutedEventArgs e)
+    if (!TryReadFinite(SequenceTrackNumberBox, out double trackNumber) ||
+        !TryReadFinite(SequenceStartNumberBox, out double startSeconds) ||
+        !TryReadFinite(SequenceGapNumberBox, out double gapSeconds))
     {
-        if (!TryGetNewLaneRange(out double start, out double end) || _timelineDocument is null)
-        {
-            return;
-        }
-
-        int trackIndex = SelectedLane is { IsLayer: false } selected ? selected.TrackIndex : 0;
-        if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
-        {
-            ShowInfo("Unlock the destination track before adding a clip.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        var tracks = _timelineDocument["tracks"] as JsonArray;
-        string trackId = tracks is not null && trackIndex < tracks.Count
-            ? tracks[trackIndex]?["id"]?.GetValue<string>() ?? string.Empty
-            : string.Empty;
-        JsonObject? addTrack = null;
-        if (string.IsNullOrEmpty(trackId))
-        {
-            trackId = Guid.NewGuid().ToString("N");
-            addTrack = new JsonObject { ["kind"] = "add_track", ["track_type"] = "video", ["new_id"] = trackId };
-        }
-        await ExecuteNativeEditAsync(new JsonObject
-        {
-            ["kind"] = "add_clip", ["track_id"] = trackId, ["new_id"] = Guid.NewGuid().ToString("N"),
-            ["name"] = $"Clip {_lanes.Count(lane => !lane.IsLayer) + 1}",
-            ["start_seconds"] = start.ToString("R", CultureInfo.InvariantCulture),
-            ["end_seconds"] = end.ToString("R", CultureInfo.InvariantCulture)
-        }, "Add timeline clip", addTrack);
+      ShowAutomationInfo("Enter valid sequencing values.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async void AddOverlayAtPlayhead_Click(object sender, RoutedEventArgs e)
+    int trackIndex = Math.Max(0, (int)Math.Round(trackNumber) - 1);
+    if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
     {
-        if (!TryGetNewLaneRange(out double start, out double end) || _timelineDocument is null)
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        TimelineLaneDocument overlay = TimelineProjection.CreateLayer(
-            $"Overlay {_lanes.Count(lane => lane.IsLayer) + 1}",
-            "overlay",
-            start,
-            end);
-        _lanes = [.. _lanes, overlay];
-        await CommitLanesAsync(before, "timeline overlay add", overlay.StableId);
+      ShowAutomationInfo($"Track {trackIndex + 1} is locked.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private bool TryGetNewLaneRange(out double start, out double end)
-    {
-        start = 0;
-        end = 0;
-        if (_timelineDocument is null ||
-            _durationSeconds < TimelineProjection.MinimumDurationSeconds)
+    await RunAutomationAsync(
+        "Sequencing track...",
+        async token =>
         {
-            ShowInfo("The Timeline duration is too short to add an item.", InfoBarSeverity.Warning);
-            return false;
-        }
+          token.ThrowIfCancellationRequested();
+          JsonObject before = CloneDocument(_timelineDocument);
+          TimelineAutomationResult result =
+                  TimelineAutomation.SequenceTrack(_timelineDocument, trackIndex, startSeconds, gapSeconds);
+          await CommitDocumentAsync(before, result.Timeline, "track sequencing", _selectedLaneId);
+          SetAutomationResult(result.Timeline);
+          return result.Summary;
+        });
+  }
 
-        start = Math.Clamp(
-            _positionSeconds,
-            0,
-            _durationSeconds - TimelineProjection.MinimumDurationSeconds);
-        end = Math.Min(_durationSeconds, start + 1);
-        return true;
+  private async void ApplyMotion_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      ShowAutomationInfo("Load a project Timeline before applying motion grammar.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async void ApplyInspector_Click(object sender, RoutedEventArgs e)
+    if (!TryReadFinite(MotionStartNumberBox, out double startSeconds) ||
+        !TryReadFinite(MotionEndNumberBox, out double endSeconds) ||
+        endSeconds <= startSeconds)
     {
-        if (_timelineDocument is null ||
-            SelectedLane is not TimelineLaneDocument lane ||
-            IsLaneLocked(lane))
-        {
-            return;
-        }
-
-        double track = 1;
-        if (!TryReadFinite(StartNumberBox, out double start) ||
-            !TryReadFinite(EndNumberBox, out double end) ||
-            !TryReadFinite(SourceInNumberBox, out double sourceIn) ||
-            !TryReadFinite(SourceOutNumberBox, out double sourceOut) ||
-            !TryReadFinite(SpeedNumberBox, out double speed) ||
-            (!lane.IsLayer && !TryReadFinite(TrackNumberBox, out track)) ||
-             !TryReadFinite(VolumeNumberBox, out double volume) ||
-             !TryReadFinite(FadeInNumberBox, out double fadeIn) ||
-             !TryReadFinite(FadeOutNumberBox, out double fadeOut) ||
-             !TryReadFinite(OpacityNumberBox, out double opacity) ||
-             !TryReadFinite(BrightnessNumberBox, out double brightness) ||
-             !TryReadFinite(ContrastNumberBox, out double contrast) ||
-             !TryReadFinite(SaturationNumberBox, out double saturation))
-        {
-            ShowInfo("Inspector values must be finite numbers.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (start < 0 ||
-            end - start < TimelineProjection.MinimumDurationSeconds ||
-            end > _durationSeconds ||
-            sourceIn < 0 ||
-            sourceOut < 0 ||
-            speed is < 0.25 or > 4 ||
-            (!lane.IsLayer && track < 1) ||
-             volume is < 0 or > 2 ||
-             fadeIn < 0 ||
-             fadeOut < 0 ||
-             opacity is < 0 or > 1 ||
-             brightness is < -1 or > 1 ||
-             contrast is < 0 or > 2 ||
-             saturation is < 0 or > 3)
-        {
-            ShowInfo(
-                "Check the clip range, track, speed, volume, source, fade, and video-adjustment values.",
-                InfoBarSeverity.Warning);
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        TimelineLaneDocument updated = TimelineProjection.Trim(
-            lane,
-            start,
-            end,
-            _durationSeconds);
-        updated.Name = string.IsNullOrWhiteSpace(LaneNameTextBox.Text)
-            ? lane.Name
-            : LaneNameTextBox.Text.Trim();
-        updated.Type = string.IsNullOrWhiteSpace(LaneTypeTextBox.Text)
-            ? lane.Type
-            : LaneTypeTextBox.Text.Trim();
-        updated.SourcePath = SourcePathTextBox.Text.Trim();
-        updated.SourceInSeconds = sourceIn;
-        updated.SourceOutSeconds = sourceOut;
-        updated.Speed = speed;
-        updated.Volume = volume;
-        updated.Muted = MutedToggle.IsOn;
-        updated.FadeInSeconds = fadeIn;
-        updated.FadeOutSeconds = fadeOut;
-        if (IsVisualLane(updated))
-        {
-            updated.FitMode = GetSelectedTag(FitModeComboBox) ?? "contain";
-            updated.Opacity = opacity;
-            updated.Brightness = brightness;
-            updated.Contrast = contrast;
-            updated.Saturation = saturation;
-            updated.RotationDegrees = int.TryParse(
-                GetSelectedTag(RotationComboBox),
-                NumberStyles.Integer,
-                CultureInfo.InvariantCulture,
-                out int rotationDegrees)
-                    ? rotationDegrees
-                    : 0;
-            updated.FlipHorizontal = FlipHorizontalToggle.IsOn;
-        }
-        if (!lane.IsLayer)
-        {
-            int destinationTrack =
-                Math.Max(0, (int)Math.Round(track, MidpointRounding.AwayFromZero) - 1);
-            if (TimelineProjection.IsTrackLocked(_timelineDocument, destinationTrack))
-            {
-                ShowInfo(
-                    "Unlock the destination track before moving a clip there.",
-                    InfoBarSeverity.Warning);
-                return;
-            }
-
-            updated = TimelineProjection.ReassignTrack(updated, destinationTrack);
-        }
-
-        ReplaceLaneByStableId(lane.StableId, updated);
-        if (!updated.IsLayer)
-        {
-            foreach (TimelineLaneDocument trackLane in _lanes.Where(item =>
-                         !item.IsLayer &&
-                         item.TrackIndex == updated.TrackIndex))
-            {
-                trackLane.Type = updated.Type;
-            }
-        }
-        if (_rippleEnabled &&
-            !lane.IsLayer &&
-            lane.TrackIndex == updated.TrackIndex)
-        {
-            _lanes = TimelineProjection.RippleAfterEdit(
-                _lanes,
-                lane,
-                updated,
-                _durationSeconds);
-        }
-
-        await CommitLanesAsync(
-            before,
-            updated.IsLayer ? "timeline overlay inspector edit" : "timeline clip inspector edit",
-            updated.StableId);
+      ShowAutomationInfo("Motion end time must be later than its start time.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private void ApplyVideoLook_Click(object sender, RoutedEventArgs e)
-    {
-        switch (GetSelectedTag(VideoLookComboBox) ?? "neutral")
+    string phrase = GetSelectedTag(MotionPhraseComboBox) ?? "prepare";
+    await RunAutomationAsync(
+        "Applying motion grammar...",
+        async token =>
         {
-            case "punchy":
-                BrightnessNumberBox.Value = 0.03;
-                ContrastNumberBox.Value = 1.18;
-                SaturationNumberBox.Value = 1.25;
-                break;
-            case "soft":
-                BrightnessNumberBox.Value = 0.04;
-                ContrastNumberBox.Value = 0.9;
-                SaturationNumberBox.Value = 0.85;
-                break;
-            case "monochrome":
-                BrightnessNumberBox.Value = 0;
-                ContrastNumberBox.Value = 1.05;
-                SaturationNumberBox.Value = 0;
-                break;
-            default:
-                BrightnessNumberBox.Value = 0;
-                ContrastNumberBox.Value = 1;
-                SaturationNumberBox.Value = 1;
-                break;
-        }
+          if (_isDirty)
+          {
+            await SaveTimelineDocumentAsync(token);
+          }
+
+          JsonObject before = CloneDocument(_timelineDocument);
+          ApplyMotionGrammarResponse response =
+                  await App.Services.ApiClient.ApplyMotionGrammarAsync(
+                      _loadedProjectId,
+                      [new MotionPhraseRequest(phrase, startSeconds, endSeconds)],
+                      OverwriteMotionToggle.IsOn,
+                      StudioPageHelpers.ExpectedRevision(_project),
+                      token);
+          if (!response.Ok)
+          {
+            throw new InvalidOperationException("The backend did not apply the motion grammar.");
+          }
+          await RefreshProjectRevisionAsync(_loadedProjectId, token);
+
+          JsonObject result = TimelineProjection.PreserveLockedTracks(
+                  before,
+                  ExtractTimeline(response.Timeline));
+          await CommitDocumentAsync(before, result, "motion grammar", _selectedLaneId);
+          SetAutomationResult(result);
+          return $"Applied the {phrase} motion phrase from {startSeconds:0.###} s to {endSeconds:0.###} s.";
+        });
+  }
+
+  private void CancelAutomation_Click(object sender, RoutedEventArgs e)
+  {
+    _automationCancellation?.Cancel();
+  }
+
+  private async void OpenWorkspace_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("workspace");
+  }
+
+  private async void OpenRender_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("render");
+  }
+
+  private async void OpenReview_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("review");
+  }
+
+  private async void OpenOutputs_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("outputs");
+  }
+
+  private async void OpenQueue_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("queue");
+  }
+
+  private async void OpenPlanner_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("plannerLab");
+  }
+
+  private async void OpenReactive_Click(object sender, RoutedEventArgs e)
+  {
+    await NavigateWithSaveAsync("reactiveLab");
+  }
+
+  private async void Refresh_Click(object sender, RoutedEventArgs e)
+  {
+    if (_isDirty &&
+        !await ConfirmAsync(
+            "Reload timeline?",
+            "Reloading discards unsaved local edits. Autosaved recovery data remains available.",
+            "Reload"))
+    {
+      return;
     }
 
-    private void ResetVideoAdjustments_Click(object sender, RoutedEventArgs e)
+    await LoadActiveProjectAsync();
+  }
+
+  private async void AddClipAtPlayhead_Click(object sender, RoutedEventArgs e)
+  {
+    if (!TryGetNewLaneRange(out double start, out double end) || _timelineDocument is null)
     {
-        SelectComboByTag(FitModeComboBox, "contain");
-        SelectComboByTag(RotationComboBox, "0");
-        SelectComboByTag(VideoLookComboBox, "neutral");
-        OpacityNumberBox.Value = 1;
+      return;
+    }
+
+    int trackIndex = SelectedLane is { IsLayer: false } selected ? selected.TrackIndex : 0;
+    if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
+    {
+      ShowInfo("Unlock the destination track before adding a clip.", InfoBarSeverity.Warning);
+      return;
+    }
+
+    JsonArray? tracks = _timelineDocument["tracks"] as JsonArray;
+    string trackId = tracks is not null && trackIndex < tracks.Count
+        ? tracks[trackIndex]?["id"]?.GetValue<string>() ?? string.Empty
+        : string.Empty;
+    JsonObject? addTrack = null;
+    if (string.IsNullOrEmpty(trackId))
+    {
+      trackId = Guid.NewGuid().ToString("N");
+      addTrack = new JsonObject { ["kind"] = "add_track", ["track_type"] = "video", ["new_id"] = trackId };
+    }
+    _ = await ExecuteNativeEditAsync(new JsonObject
+    {
+      ["kind"] = "add_clip",
+      ["track_id"] = trackId,
+      ["new_id"] = Guid.NewGuid().ToString("N"),
+      ["name"] = $"Clip {_lanes.Count(lane => !lane.IsLayer) + 1}",
+      ["start_seconds"] = start.ToString("R", CultureInfo.InvariantCulture),
+      ["end_seconds"] = end.ToString("R", CultureInfo.InvariantCulture)
+    }, "Add timeline clip", addTrack);
+  }
+
+  private async void AddOverlayAtPlayhead_Click(object sender, RoutedEventArgs e)
+  {
+    if (!TryGetNewLaneRange(out double start, out double end) || _timelineDocument is null)
+    {
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    TimelineLaneDocument overlay = TimelineProjection.CreateLayer(
+        $"Overlay {_lanes.Count(lane => lane.IsLayer) + 1}",
+        "overlay",
+        start,
+        end);
+    _lanes = [.. _lanes, overlay];
+    await CommitLanesAsync(before, "timeline overlay add", overlay.StableId);
+  }
+
+  private bool TryGetNewLaneRange(out double start, out double end)
+  {
+    start = 0;
+    end = 0;
+    if (_timelineDocument is null ||
+        _durationSeconds < TimelineProjection.MinimumDurationSeconds)
+    {
+      ShowInfo("The Timeline duration is too short to add an item.", InfoBarSeverity.Warning);
+      return false;
+    }
+
+    start = Math.Clamp(
+        _positionSeconds,
+        0,
+        _durationSeconds - TimelineProjection.MinimumDurationSeconds);
+    end = Math.Min(_durationSeconds, start + 1);
+    return true;
+  }
+
+  private async void ApplyInspector_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null ||
+        SelectedLane is not TimelineLaneDocument lane ||
+        IsLaneLocked(lane))
+    {
+      return;
+    }
+
+    double track = 1;
+    if (!TryReadFinite(StartNumberBox, out double start) ||
+        !TryReadFinite(EndNumberBox, out double end) ||
+        !TryReadFinite(SourceInNumberBox, out double sourceIn) ||
+        !TryReadFinite(SourceOutNumberBox, out double sourceOut) ||
+        !TryReadFinite(SpeedNumberBox, out double speed) ||
+        (!lane.IsLayer && !TryReadFinite(TrackNumberBox, out track)) ||
+         !TryReadFinite(VolumeNumberBox, out double volume) ||
+         !TryReadFinite(FadeInNumberBox, out double fadeIn) ||
+         !TryReadFinite(FadeOutNumberBox, out double fadeOut) ||
+         !TryReadFinite(OpacityNumberBox, out double opacity) ||
+         !TryReadFinite(BrightnessNumberBox, out double brightness) ||
+         !TryReadFinite(ContrastNumberBox, out double contrast) ||
+         !TryReadFinite(SaturationNumberBox, out double saturation))
+    {
+      ShowInfo("Inspector values must be finite numbers.", InfoBarSeverity.Warning);
+      return;
+    }
+
+    if (start < 0 ||
+        end - start < TimelineProjection.MinimumDurationSeconds ||
+        end > _durationSeconds ||
+        sourceIn < 0 ||
+        sourceOut < 0 ||
+        speed is < 0.25 or > 4 ||
+        (!lane.IsLayer && track < 1) ||
+         volume is < 0 or > 2 ||
+         fadeIn < 0 ||
+         fadeOut < 0 ||
+         opacity is < 0 or > 1 ||
+         brightness is < -1 or > 1 ||
+         contrast is < 0 or > 2 ||
+         saturation is < 0 or > 3)
+    {
+      ShowInfo(
+          "Check the clip range, track, speed, volume, source, fade, and video-adjustment values.",
+          InfoBarSeverity.Warning);
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    TimelineLaneDocument updated = TimelineProjection.Trim(
+        lane,
+        start,
+        end,
+        _durationSeconds);
+    updated.Name = string.IsNullOrWhiteSpace(LaneNameTextBox.Text)
+        ? lane.Name
+        : LaneNameTextBox.Text.Trim();
+    updated.Type = string.IsNullOrWhiteSpace(LaneTypeTextBox.Text)
+        ? lane.Type
+        : LaneTypeTextBox.Text.Trim();
+    updated.SourcePath = SourcePathTextBox.Text.Trim();
+    updated.SourceInSeconds = sourceIn;
+    updated.SourceOutSeconds = sourceOut;
+    updated.Speed = speed;
+    updated.Volume = volume;
+    updated.Muted = MutedToggle.IsOn;
+    updated.FadeInSeconds = fadeIn;
+    updated.FadeOutSeconds = fadeOut;
+    if (IsVisualLane(updated))
+    {
+      updated.FitMode = GetSelectedTag(FitModeComboBox) ?? "contain";
+      updated.Opacity = opacity;
+      updated.Brightness = brightness;
+      updated.Contrast = contrast;
+      updated.Saturation = saturation;
+      updated.RotationDegrees = int.TryParse(
+          GetSelectedTag(RotationComboBox),
+          NumberStyles.Integer,
+          CultureInfo.InvariantCulture,
+          out int rotationDegrees)
+              ? rotationDegrees
+              : 0;
+      updated.FlipHorizontal = FlipHorizontalToggle.IsOn;
+    }
+    if (!lane.IsLayer)
+    {
+      int destinationTrack =
+          Math.Max(0, (int)Math.Round(track, MidpointRounding.AwayFromZero) - 1);
+      if (TimelineProjection.IsTrackLocked(_timelineDocument, destinationTrack))
+      {
+        ShowInfo(
+            "Unlock the destination track before moving a clip there.",
+            InfoBarSeverity.Warning);
+        return;
+      }
+
+      updated = TimelineProjection.ReassignTrack(updated, destinationTrack);
+    }
+
+    ReplaceLaneByStableId(lane.StableId, updated);
+    if (!updated.IsLayer)
+    {
+      foreach (TimelineLaneDocument trackLane in _lanes.Where(item =>
+                   !item.IsLayer &&
+                   item.TrackIndex == updated.TrackIndex))
+      {
+        trackLane.Type = updated.Type;
+      }
+    }
+    if (_rippleEnabled &&
+        !lane.IsLayer &&
+        lane.TrackIndex == updated.TrackIndex)
+    {
+      _lanes = TimelineProjection.RippleAfterEdit(
+          _lanes,
+          lane,
+          updated,
+          _durationSeconds);
+    }
+
+    await CommitLanesAsync(
+        before,
+        updated.IsLayer ? "timeline overlay inspector edit" : "timeline clip inspector edit",
+        updated.StableId);
+  }
+
+  private void ApplyVideoLook_Click(object sender, RoutedEventArgs e)
+  {
+    switch (GetSelectedTag(VideoLookComboBox) ?? "neutral")
+    {
+      case "punchy":
+        BrightnessNumberBox.Value = 0.03;
+        ContrastNumberBox.Value = 1.18;
+        SaturationNumberBox.Value = 1.25;
+        break;
+      case "soft":
+        BrightnessNumberBox.Value = 0.04;
+        ContrastNumberBox.Value = 0.9;
+        SaturationNumberBox.Value = 0.85;
+        break;
+      case "monochrome":
+        BrightnessNumberBox.Value = 0;
+        ContrastNumberBox.Value = 1.05;
+        SaturationNumberBox.Value = 0;
+        break;
+      default:
         BrightnessNumberBox.Value = 0;
         ContrastNumberBox.Value = 1;
         SaturationNumberBox.Value = 1;
-        FlipHorizontalToggle.IsOn = false;
+        break;
+    }
+  }
+
+  private void ResetVideoAdjustments_Click(object sender, RoutedEventArgs e)
+  {
+    SelectComboByTag(FitModeComboBox, "contain");
+    SelectComboByTag(RotationComboBox, "0");
+    SelectComboByTag(VideoLookComboBox, "neutral");
+    OpacityNumberBox.Value = 1;
+    BrightnessNumberBox.Value = 0;
+    ContrastNumberBox.Value = 1;
+    SaturationNumberBox.Value = 1;
+    FlipHorizontalToggle.IsOn = false;
+  }
+
+  private async Task SplitLaneAtAsync(TimelineLaneDocument lane, double splitSeconds)
+  {
+    if (_timelineDocument is null)
+    {
+      return;
     }
 
-    private async Task SplitLaneAtAsync(TimelineLaneDocument lane, double splitSeconds)
+    if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "split", SnapSample(splitSeconds), out JsonObject operation))
     {
-        if (_timelineDocument is null)
-        {
-            return;
-        }
-
-        if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "split", SnapSample(splitSeconds), out JsonObject operation))
-        {
-            operation = CreateNativeSplitOperation(operation, SnapSample(splitSeconds));
-            await ExecuteNativeEditAsync(operation, "Split timeline clip");
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        var (left, right) = TimelineProjection.Split(lane, splitSeconds);
-        var updated = _lanes.ToList();
-        int index = updated.FindIndex(item => item.StableId == lane.StableId);
-        if (index < 0)
-        {
-            return;
-        }
-
-        updated[index] = left;
-        updated.Insert(index + 1, right);
-        _lanes = updated;
-        await CommitLanesAsync(
-            before,
-            lane.IsLayer ? "timeline overlay split" : "timeline clip split",
-            right.StableId);
+      operation = CreateNativeSplitOperation(operation, SnapSample(splitSeconds));
+      _ = await ExecuteNativeEditAsync(operation, "Split timeline clip");
+      return;
     }
 
-    private JsonObject CreateNativeSplitOperation(JsonObject operation, long position)
+    JsonObject before = CloneDocument(_timelineDocument);
+    (TimelineLaneDocument? left, TimelineLaneDocument? right) = TimelineProjection.Split(lane, splitSeconds);
+    List<TimelineLaneDocument> updated = _lanes.ToList();
+    int index = updated.FindIndex(item => item.StableId == lane.StableId);
+    if (index < 0)
     {
-        string trackId = operation["track_id"]?.GetValue<string>()
-            ?? throw new InvalidOperationException("Split track ID is required.");
-        string clipId = operation["clip_id"]?.GetValue<string>()
-            ?? throw new InvalidOperationException("Split clip ID is required.");
-        ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(RequiredProject().Timeline);
-        string[] rightTakeIds = editing.Takes.Where(take => take.ClipId == clipId)
-            .Select(_ => $"take-{Guid.NewGuid():N}").ToArray();
-        string[] rightCompIds = editing.CompRanges
-            .Where(comp => comp.ClipId == clipId && comp.EndSample > position)
-            .Select(_ => $"comp-{Guid.NewGuid():N}").ToArray();
-        return ProjectTimelineOperations.SplitEvent(
-            RequiredProject(), trackId, clipId, new TimelinePosition(position),
-            $"clip-{Guid.NewGuid():N}", rightTakeIds, rightCompIds).Operation;
+      return;
     }
 
-    private async void SplitClip_Click(object sender, RoutedEventArgs e) =>
-        await SplitSelectedAtPlayheadAsync();
+    updated[index] = left;
+    updated.Insert(index + 1, right);
+    _lanes = updated;
+    await CommitLanesAsync(
+        before,
+        lane.IsLayer ? "timeline overlay split" : "timeline clip split",
+        right.StableId);
+  }
 
-    private async Task SplitSelectedAtPlayheadAsync()
+  private JsonObject CreateNativeSplitOperation(JsonObject operation, long position)
+  {
+    string trackId = operation["track_id"]?.GetValue<string>()
+        ?? throw new InvalidOperationException("Split track ID is required.");
+    string clipId = operation["clip_id"]?.GetValue<string>()
+        ?? throw new InvalidOperationException("Split clip ID is required.");
+    ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(RequiredProject().Timeline);
+    string[] rightTakeIds = editing.Takes.Where(take => take.ClipId == clipId)
+        .Select(_ => $"take-{Guid.NewGuid():N}").ToArray();
+    string[] rightCompIds = editing.CompRanges
+        .Where(comp => comp.ClipId == clipId && comp.EndSample > position)
+        .Select(_ => $"comp-{Guid.NewGuid():N}").ToArray();
+    return ProjectTimelineOperations.SplitEvent(
+        RequiredProject(), trackId, clipId, new TimelinePosition(position),
+        $"clip-{Guid.NewGuid():N}", rightTakeIds, rightCompIds).Operation;
+  }
+
+  private async void SplitClip_Click(object sender, RoutedEventArgs e)
+  {
+    await SplitSelectedAtPlayheadAsync();
+  }
+
+  private async Task SplitSelectedAtPlayheadAsync()
+  {
+    if (_timelineDocument is null ||
+        SelectedLane is not TimelineLaneDocument lane ||
+        IsLaneLocked(lane))
     {
-        if (_timelineDocument is null ||
-            SelectedLane is not TimelineLaneDocument lane ||
-            IsLaneLocked(lane))
-        {
-            return;
-        }
-
-        try
-        {
-            await SplitLaneAtAsync(lane, _positionSeconds);
-        }
-        catch (ArgumentOutOfRangeException ex)
-        {
-            ShowInfo(ex.Message, InfoBarSeverity.Warning);
-        }
+      return;
     }
 
-    private async void DuplicateClip_Click(object sender, RoutedEventArgs e) =>
-        await DuplicateSelectedAsync();
-
-    private async Task DuplicateSelectedAsync()
+    try
     {
-        if (_selectedCameraKeyframeIdentity is not null)
-        {
-            await DuplicateSelectedCameraKeyframeAsync();
-            return;
-        }
+      await SplitLaneAtAsync(lane, _positionSeconds);
+    }
+    catch (ArgumentOutOfRangeException ex)
+    {
+      ShowInfo(ex.Message, InfoBarSeverity.Warning);
+    }
+  }
 
-        if (_timelineDocument is null ||
-            SelectedLane is not TimelineLaneDocument lane ||
-            IsLaneLocked(lane))
-        {
-            return;
-        }
+  private async void DuplicateClip_Click(object sender, RoutedEventArgs e)
+  {
+    await DuplicateSelectedAsync();
+  }
 
-        if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "duplicate", 0, out JsonObject operation))
-        {
-            operation.Remove("position");
-            operation.Remove("snap");
-            operation["new_id"] = Guid.NewGuid().ToString("N");
-            CanonicalProject project = RequiredProject();
-            ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
-            ProfessionalEditingOperations.AddDuplicateEditingIds(project, lane.StableId, operation,
-                editing.Takes.Where(take => take.ClipId == lane.StableId).Select(_ => Guid.NewGuid().ToString("N")).ToArray(),
-                editing.CompRanges.Where(comp => comp.ClipId == lane.StableId).Select(_ => Guid.NewGuid().ToString("N")).ToArray());
-            await ExecuteNativeEditAsync(operation, "Duplicate timeline clip");
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        TimelineLaneDocument duplicate = TimelineProjection.DuplicateAt(
-            lane,
-            SnapTime(_positionSeconds),
-            _durationSeconds);
-        _lanes = [.. _lanes, duplicate];
-        await CommitLanesAsync(before, "timeline clip duplicated", duplicate.StableId);
+  private async Task DuplicateSelectedAsync()
+  {
+    if (_selectedCameraKeyframeIdentity is not null)
+    {
+      await DuplicateSelectedCameraKeyframeAsync();
+      return;
     }
 
-    private async void DeleteSelectedClip_Click(object sender, RoutedEventArgs e) =>
-        await DeleteSelectedAsync();
-
-    private async Task DeleteSelectedAsync()
+    if (_timelineDocument is null ||
+        SelectedLane is not TimelineLaneDocument lane ||
+        IsLaneLocked(lane))
     {
-        if (_selectedCameraKeyframeIdentity is not null)
-        {
-            await DeleteSelectedCameraKeyframeAsync();
-            return;
-        }
-
-        if (_timelineDocument is null ||
-            SelectedLane is not TimelineLaneDocument lane ||
-            IsLaneLocked(lane))
-        {
-            return;
-        }
-
-        bool isLayer = lane.IsLayer;
-        if (!await ConfirmAsync(
-            isLayer ? "Delete selected overlay?" : "Delete selected clip?",
-            isLayer
-                ? $"Delete the “{lane.Name}” overlay from the timeline?"
-                : $"Delete “{lane.Name}” from the timeline?",
-            "Delete"))
-        {
-            return;
-        }
-
-
-        if (!lane.IsLayer && !_rippleEnabled && TryCreateNativeEventOperation(lane, "delete", 0, out JsonObject operation))
-        {
-            operation.Remove("position");
-            operation.Remove("snap");
-            await ExecuteNativeEditAsync(operation, "Delete timeline clip", beforeRefresh: () =>
-            {
-                _selectedLaneId = null;
-                _selectedCameraKeyframeIdentity = null;
-            });
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        _lanes = _rippleEnabled && !lane.IsLayer
-            ? TimelineProjection.RippleAfterDelete(_lanes, lane, _durationSeconds)
-            : _lanes.Where(item => item.StableId != lane.StableId).ToArray();
-        await CommitLanesAsync(before, "timeline clip deleted", selectionId: null);
+      return;
     }
 
-    private async void MoveSelectedToPlayhead_Click(object sender, RoutedEventArgs e) =>
-        await MoveSelectedToPlayheadAsync();
-
-    private async Task MoveSelectedToPlayheadAsync()
+    if (!lane.IsLayer && TryCreateNativeEventOperation(lane, "duplicate", 0, out JsonObject operation))
     {
-        if (_selectedCameraKeyframeIdentity is not null)
-        {
-            await MoveSelectedCameraToPlayheadAsync();
-            return;
-        }
-
-        if (_timelineDocument is null ||
-            SelectedLane is not TimelineLaneDocument lane ||
-            IsLaneLocked(lane))
-        {
-            return;
-        }
-
-
-        if (!lane.IsLayer && !_rippleEnabled &&
-            TryCreateNativeEventOperation(lane, "move", SnapSample(_positionSeconds), out JsonObject operation))
-        {
-            await ExecuteNativeEditAsync(operation, "Move timeline clip to playhead");
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        TimelineLaneDocument moved = TimelineProjection.Move(
-            lane,
-            _positionSeconds,
-            _durationSeconds);
-        ReplaceLaneByStableId(lane.StableId, moved);
-        if (_rippleEnabled && !lane.IsLayer)
-        {
-            _lanes = TimelineProjection.RippleAfterEdit(_lanes, lane, moved, _durationSeconds);
-        }
-        await CommitLanesAsync(before, "timeline selection moved to playhead", moved.StableId);
+      _ = operation.Remove("position");
+      _ = operation.Remove("snap");
+      operation["new_id"] = Guid.NewGuid().ToString("N");
+      CanonicalProject project = RequiredProject();
+      ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
+      ProfessionalEditingOperations.AddDuplicateEditingIds(project, lane.StableId, operation,
+          editing.Takes.Where(take => take.ClipId == lane.StableId).Select(_ => Guid.NewGuid().ToString("N")).ToArray(),
+          editing.CompRanges.Where(comp => comp.ClipId == lane.StableId).Select(_ => Guid.NewGuid().ToString("N")).ToArray());
+      _ = await ExecuteNativeEditAsync(operation, "Duplicate timeline clip");
+      return;
     }
 
-    private async void QuantizeSelected_Click(object sender, RoutedEventArgs e)
+    JsonObject before = CloneDocument(_timelineDocument);
+    TimelineLaneDocument duplicate = TimelineProjection.DuplicateAt(
+        lane,
+        SnapTime(_positionSeconds),
+        _durationSeconds);
+    _lanes = [.. _lanes, duplicate];
+    await CommitLanesAsync(before, "timeline clip duplicated", duplicate.StableId);
+  }
+
+  private async void DeleteSelectedClip_Click(object sender, RoutedEventArgs e)
+  {
+    await DeleteSelectedAsync();
+  }
+
+  private async Task DeleteSelectedAsync()
+  {
+    if (_selectedCameraKeyframeIdentity is not null)
     {
-        if (_selectedCameraKeyframeIdentity is not null)
+      await DeleteSelectedCameraKeyframeAsync();
+      return;
+    }
+
+    if (_timelineDocument is null ||
+        SelectedLane is not TimelineLaneDocument lane ||
+        IsLaneLocked(lane))
+    {
+      return;
+    }
+
+    bool isLayer = lane.IsLayer;
+    if (!await ConfirmAsync(
+        isLayer ? "Delete selected overlay?" : "Delete selected clip?",
+        isLayer
+            ? $"Delete the “{lane.Name}” overlay from the timeline?"
+            : $"Delete “{lane.Name}” from the timeline?",
+        "Delete"))
+    {
+      return;
+    }
+
+
+    if (!lane.IsLayer && !_rippleEnabled && TryCreateNativeEventOperation(lane, "delete", 0, out JsonObject operation))
+    {
+      _ = operation.Remove("position");
+      _ = operation.Remove("snap");
+      _ = await ExecuteNativeEditAsync(operation, "Delete timeline clip", beforeRefresh: () =>
+      {
+        _selectedLaneId = null;
+        _selectedCameraKeyframeIdentity = null;
+      });
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    _lanes = _rippleEnabled && !lane.IsLayer
+        ? TimelineProjection.RippleAfterDelete(_lanes, lane, _durationSeconds)
+        : _lanes.Where(item => item.StableId != lane.StableId).ToArray();
+    await CommitLanesAsync(before, "timeline clip deleted", selectionId: null);
+  }
+
+  private async void MoveSelectedToPlayhead_Click(object sender, RoutedEventArgs e)
+  {
+    await MoveSelectedToPlayheadAsync();
+  }
+
+  private async Task MoveSelectedToPlayheadAsync()
+  {
+    if (_selectedCameraKeyframeIdentity is not null)
+    {
+      await MoveSelectedCameraToPlayheadAsync();
+      return;
+    }
+
+    if (_timelineDocument is null ||
+        SelectedLane is not TimelineLaneDocument lane ||
+        IsLaneLocked(lane))
+    {
+      return;
+    }
+
+
+    if (!lane.IsLayer && !_rippleEnabled &&
+        TryCreateNativeEventOperation(lane, "move", SnapSample(_positionSeconds), out JsonObject operation))
+    {
+      _ = await ExecuteNativeEditAsync(operation, "Move timeline clip to playhead");
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    TimelineLaneDocument moved = TimelineProjection.Move(
+        lane,
+        _positionSeconds,
+        _durationSeconds);
+    ReplaceLaneByStableId(lane.StableId, moved);
+    if (_rippleEnabled && !lane.IsLayer)
+    {
+      _lanes = TimelineProjection.RippleAfterEdit(_lanes, lane, moved, _durationSeconds);
+    }
+    await CommitLanesAsync(before, "timeline selection moved to playhead", moved.StableId);
+  }
+
+  private async void QuantizeSelected_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedCameraKeyframeIdentity is not null)
+    {
+      await QuantizeSelectedCameraKeyframeAsync();
+      return;
+    }
+
+    if (_timelineDocument is null ||
+        SelectedLane is not TimelineLaneDocument lane ||
+        IsLaneLocked(lane))
+    {
+      return;
+    }
+
+    if (!CanQuantizeToCurrentGrid())
+    {
+      ShowInfo("Turn snap on and choose an available beat or BPM grid first.", InfoBarSeverity.Warning);
+      return;
+    }
+
+    if (!lane.IsLayer && !_rippleEnabled &&
+        TryCreateNativeEventOperation(lane, "move", SnapSample(lane.StartSeconds), out JsonObject operation))
+    {
+      _ = await ExecuteNativeEditAsync(operation, "Quantize timeline clip");
+      return;
+    }
+
+    JsonObject before = CloneDocument(_timelineDocument);
+    double minimumDuration = TimelineProjection.MinimumDurationSeconds;
+    double maximumStart = Math.Max(0, _durationSeconds - minimumDuration);
+    double start = Math.Clamp(SnapTime(lane.StartSeconds), 0, maximumStart);
+    double minimumEnd = Math.Min(_durationSeconds, start + minimumDuration);
+    double end = Math.Clamp(SnapTime(lane.EndSeconds), minimumEnd, _durationSeconds);
+    TimelineLaneDocument quantized = TimelineProjection.Trim(
+        lane,
+        start,
+        end,
+        _durationSeconds);
+    ReplaceLaneByStableId(lane.StableId, quantized);
+    if (_rippleEnabled && !lane.IsLayer)
+    {
+      _lanes = TimelineProjection.RippleAfterEdit(_lanes, lane, quantized, _durationSeconds);
+    }
+    await CommitLanesAsync(before, "timeline selection quantized", quantized.StableId);
+  }
+
+  private async void PlayPause_Click(object sender, RoutedEventArgs e)
+  {
+    await DispatchCommandAsync(StudioCommandIds.TransportPlayPause, "button");
+  }
+
+  private StudioCommandResult ExecutePlayPause()
+  {
+    if (ShowAudioEngineFailure())
+    {
+      return new(false, App.Services.AudioEngine.FailureMessage);
+    }
+    if (App.Services.Transport.State.Mode != TransportMode.Stopped)
+    {
+      StopPlayback();
+      return new(true);
+    }
+    if (_timelineDocument is not null)
+    {
+      PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+          PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Preview);
+      if (!gate.Allowed)
+      {
+        ShowInfo(gate.Explanation, InfoBarSeverity.Error);
+        return new(false, gate.Explanation);
+      }
+    }
+
+    if (_positionSeconds >= _durationSeconds)
+    {
+      SetPosition(LoopToggle.IsChecked == true ? ResolveLoopBounds().Start : 0, requestPreview: false);
+    }
+
+    SyncTransportConfiguration();
+    ApplyLoopToTransport();
+    App.Services.Transport.Play();
+    _transportTimer.Start();
+    UpdateTransportUi();
+    return new(true);
+  }
+
+  private async void Stop_Click(object sender, RoutedEventArgs e)
+  {
+    await DispatchCommandAsync(StudioCommandIds.TransportStop, "button");
+  }
+
+  private StudioCommandResult ExecuteStop()
+  {
+    _transportTimer.Stop();
+    App.Services.Transport.Stop();
+    SetPosition(0, requestPreview: true, updateTransport: false);
+    return new(true);
+  }
+
+  private async void StepBackward_Click(object sender, RoutedEventArgs e)
+  {
+    await DispatchCommandAsync(StudioCommandIds.TransportStepBackward, "button");
+  }
+
+  private StudioCommandResult ExecuteStepBackward()
+  {
+    StopPlayback();
+    SetPosition(StepByFrames(-1), requestPreview: true);
+    return new(true);
+  }
+
+  private async void StepForward_Click(object sender, RoutedEventArgs e)
+  {
+    await DispatchCommandAsync(StudioCommandIds.TransportStepForward, "button");
+  }
+
+  private StudioCommandResult ExecuteStepForward()
+  {
+    StopPlayback();
+    SetPosition(StepByFrames(1), requestPreview: true);
+    return new(true);
+  }
+
+  private void RegisterRemoteCommands()
+  {
+    StudioCommandDispatcher commands = App.Services.Commands;
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportPlayPause,
+        _ => ValueTask.FromResult(ExecutePlayPause()), TransportCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStop,
+        _ => ValueTask.FromResult(ExecuteStop()), TransportCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStepBackward,
+        _ => ValueTask.FromResult(ExecuteStepBackward()), TransportCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStepForward,
+        _ => ValueTask.FromResult(ExecuteStepForward()), TransportCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedGain,
+        invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedGain), MixerCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedPan,
+        invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedPan), MixerCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedMute,
+        invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedMute), MixerCommandState));
+    _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedSolo,
+        invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedSolo), MixerCommandState));
+  }
+
+  private StudioCommandState TransportCommandState()
+  {
+    return _timelineDocument is null || _isBusy
+      ? new(false, "Load a timeline before using transport controls.")
+      : new(true, DisplayValue: App.Services.Transport.State.Mode.ToString());
+  }
+
+  private StudioCommandState MixerCommandState()
+  {
+    if (_timelineDocument is null || _isBusy || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
+    {
+      return new(false, "Select an editable audio channel.");
+    }
+
+    TimelineTrackMixerState state = TimelineMixerProjection.Project(track);
+    return new(true, DisplayValue: $"Gain {state.Gain:0.00} · Pan {state.Pan:0.00}");
+  }
+
+  private async ValueTask<StudioCommandResult> ApplyRemoteMixerAsync(StudioCommandInvocation invocation, string commandId)
+  {
+    if (MixerCommandState().IsAvailable is false)
+    {
+      return new(false, "Select an editable audio channel.");
+    }
+
+    switch (commandId)
+    {
+      case StudioCommandIds.MixerSelectedGain when invocation.NormalizedValue is double gain:
+        MixerGainNumberBox.Value = gain * 4;
+        break;
+      case StudioCommandIds.MixerSelectedPan when invocation.NormalizedValue is double pan:
+        MixerPanNumberBox.Value = (pan * 2) - 1;
+        break;
+      case StudioCommandIds.MixerSelectedMute:
+        MixerMuteToggle.IsOn = !MixerMuteToggle.IsOn;
+        break;
+      case StudioCommandIds.MixerSelectedSolo:
+        MixerSoloToggle.IsOn = !MixerSoloToggle.IsOn;
+        break;
+      default:
+        return new(false, "This continuous control requires a value.");
+    }
+    return await ApplyMixerAsync();
+  }
+
+  private async Task DispatchCommandAsync(string commandId, string source, double? normalizedValue = null)
+  {
+    StudioCommandResult result = await App.Services.Commands.DispatchAsync(new(commandId, source, normalizedValue));
+    if (!result.Executed && !string.IsNullOrWhiteSpace(result.Message))
+    {
+      ShowInfo(result.Message, InfoBarSeverity.Warning);
+    }
+  }
+
+  private void Commands_StateChanged(object? sender, EventArgs e)
+  {
+    _ = DispatcherQueue.TryEnqueue(RefreshQuickControls);
+  }
+
+  private void RemoteControl_Changed(object? sender, EventArgs e)
+  {
+    _ = DispatcherQueue.TryEnqueue(RefreshQuickControls);
+  }
+
+  private void RefreshQuickControls()
+  {
+    QuickControlsPanel.Children.Clear();
+    foreach (StudioQuickControl assignment in App.Services.RemoteControl.Document.QuickControls.OrderBy(item => item.Slot))
+    {
+      StudioCommandDescriptor descriptor = StudioCommandRegistry.Commands.Single(command => command.Id == assignment.CommandId);
+      StudioCommandState state = App.Services.Commands.GetState(assignment.CommandId);
+      if (descriptor.AcceptsContinuousValue)
+      {
+        StackPanel panel = new() { Width = 130, Spacing = 2 };
+        panel.Children.Add(new TextBlock { Text = $"{assignment.Slot}. {descriptor.Name}" });
+        Slider slider = new()
         {
-            await QuantizeSelectedCameraKeyframeAsync();
-            return;
+          Minimum = 0,
+          Maximum = 1,
+          StepFrequency = 0.01,
+          IsEnabled = state.IsAvailable,
+          Tag = assignment.CommandId
+        };
+        double value = assignment.CommandId == StudioCommandIds.MixerSelectedGain
+            ? Math.Clamp(MixerGainNumberBox.Value / 4, 0, 1)
+            : Math.Clamp((MixerPanNumberBox.Value + 1) / 2, 0, 1);
+        slider.Value = double.IsFinite(value) ? value : 0.5;
+        slider.AddHandler(PointerReleasedEvent, new PointerEventHandler(QuickControlSlider_PointerReleased), true);
+        slider.KeyUp += QuickControlSlider_KeyUp;
+        AutomationProperties.SetAutomationId(slider, $"Timeline.QuickControl.{assignment.Slot}");
+        panel.Children.Add(slider);
+        QuickControlsPanel.Children.Add(panel);
+      }
+      else
+      {
+        Button button = new() { Content = $"{assignment.Slot}. {descriptor.Name}", IsEnabled = state.IsAvailable, Tag = assignment.CommandId };
+        button.Click += QuickControlButton_Click;
+        AutomationProperties.SetAutomationId(button, $"Timeline.QuickControl.{assignment.Slot}");
+        QuickControlsPanel.Children.Add(button);
+      }
+    }
+  }
+
+  private async void QuickControlButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (sender is Button { Tag: string commandId })
+    {
+      await DispatchCommandAsync(commandId, "quick-control");
+    }
+  }
+
+  private async void QuickControlSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
+  {
+    if (sender is Slider { Tag: string commandId } slider)
+    {
+      await DispatchCommandAsync(commandId, "quick-control", slider.Value);
+    }
+  }
+
+  private async void QuickControlSlider_KeyUp(object sender, KeyRoutedEventArgs e)
+  {
+    if (e.Key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End) ||
+        sender is not Slider { Tag: string commandId } slider)
+    {
+      return;
+    }
+
+    await DispatchCommandAsync(commandId, "quick-control", slider.Value);
+    e.Handled = true;
+  }
+
+  private static bool IsKeyPressed(VirtualKey key)
+  {
+    return (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key) & CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
+  }
+
+  private async void TransportTimer_Tick(object? sender, object e)
+  {
+    if (App.Services.AudioPreviewEngineSelection.SelectedEngine == AudioPreviewEngine.Juce &&
+        _configuredJuceGraphKey is not null)
+    {
+      try
+      {
+        JuceTransportPosition position = await App.Services.JuceAudioEngine.RequestAsync<JuceTransportPosition>(
+            JuceAudioEngineProtocol.TransportCommand, new JuceTransportCommand("query"),
+            JuceAudioEngineProtocol.TransportPositionEvent, timeout: TimeSpan.FromSeconds(1));
+        SetPosition(position.PositionSamples / (double)position.SampleRate, requestPreview: true, updateTransport: false);
+        if (string.Equals(position.State, "stopped", StringComparison.Ordinal) &&
+            App.Services.Transport.State.Mode != TransportMode.Stopped)
+        {
+          App.Services.Transport.Pause();
         }
-
-        if (_timelineDocument is null ||
-            SelectedLane is not TimelineLaneDocument lane ||
-            IsLaneLocked(lane))
-        {
-            return;
-        }
-
-        if (!CanQuantizeToCurrentGrid())
-        {
-            ShowInfo("Turn snap on and choose an available beat or BPM grid first.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!lane.IsLayer && !_rippleEnabled &&
-            TryCreateNativeEventOperation(lane, "move", SnapSample(lane.StartSeconds), out JsonObject operation))
-        {
-            await ExecuteNativeEditAsync(operation, "Quantize timeline clip");
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        double minimumDuration = TimelineProjection.MinimumDurationSeconds;
-        double maximumStart = Math.Max(0, _durationSeconds - minimumDuration);
-        double start = Math.Clamp(SnapTime(lane.StartSeconds), 0, maximumStart);
-        double minimumEnd = Math.Min(_durationSeconds, start + minimumDuration);
-        double end = Math.Clamp(SnapTime(lane.EndSeconds), minimumEnd, _durationSeconds);
-        TimelineLaneDocument quantized = TimelineProjection.Trim(
-            lane,
-            start,
-            end,
-            _durationSeconds);
-        ReplaceLaneByStableId(lane.StableId, quantized);
-        if (_rippleEnabled && !lane.IsLayer)
-        {
-            _lanes = TimelineProjection.RippleAfterEdit(_lanes, lane, quantized, _durationSeconds);
-        }
-        await CommitLanesAsync(before, "timeline selection quantized", quantized.StableId);
-    }
-
-    private async void PlayPause_Click(object sender, RoutedEventArgs e) =>
-        await DispatchCommandAsync(StudioCommandIds.TransportPlayPause, "button");
-
-    private StudioCommandResult ExecutePlayPause()
-    {
-        if (ShowAudioEngineFailure())
-        {
-            return new(false, App.Services.AudioEngine.FailureMessage);
-        }
-        if (App.Services.Transport.State.Mode != TransportMode.Stopped)
-        {
-            StopPlayback();
-            return new(true);
-        }
-        if (_timelineDocument is not null)
-        {
-            PostProductionOperationGate gate = PostProductionCapabilities.Gate(
-                PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Preview);
-            if (!gate.Allowed)
-            {
-                ShowInfo(gate.Explanation, InfoBarSeverity.Error);
-                return new(false, gate.Explanation);
-            }
-        }
-
-        if (_positionSeconds >= _durationSeconds)
-        {
-            SetPosition(LoopToggle.IsChecked == true ? ResolveLoopBounds().Start : 0, requestPreview: false);
-        }
-
-        SyncTransportConfiguration();
-        ApplyLoopToTransport();
-        App.Services.Transport.Play();
-        _transportTimer.Start();
-        UpdateTransportUi();
-        return new(true);
-    }
-
-    private async void Stop_Click(object sender, RoutedEventArgs e) =>
-        await DispatchCommandAsync(StudioCommandIds.TransportStop, "button");
-
-    private StudioCommandResult ExecuteStop()
-    {
-        _transportTimer.Stop();
-        App.Services.Transport.Stop();
-        SetPosition(0, requestPreview: true, updateTransport: false);
-        return new(true);
-    }
-
-    private async void StepBackward_Click(object sender, RoutedEventArgs e) =>
-        await DispatchCommandAsync(StudioCommandIds.TransportStepBackward, "button");
-
-    private StudioCommandResult ExecuteStepBackward()
-    {
-        StopPlayback();
-        SetPosition(StepByFrames(-1), requestPreview: true);
-        return new(true);
-    }
-
-    private async void StepForward_Click(object sender, RoutedEventArgs e) =>
-        await DispatchCommandAsync(StudioCommandIds.TransportStepForward, "button");
-
-    private StudioCommandResult ExecuteStepForward()
-    {
-        StopPlayback();
-        SetPosition(StepByFrames(1), requestPreview: true);
-        return new(true);
-    }
-
-    private void RegisterRemoteCommands()
-    {
-        StudioCommandDispatcher commands = App.Services.Commands;
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportPlayPause,
-            _ => ValueTask.FromResult(ExecutePlayPause()), TransportCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStop,
-            _ => ValueTask.FromResult(ExecuteStop()), TransportCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStepBackward,
-            _ => ValueTask.FromResult(ExecuteStepBackward()), TransportCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.TransportStepForward,
-            _ => ValueTask.FromResult(ExecuteStepForward()), TransportCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedGain,
-            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedGain), MixerCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedPan,
-            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedPan), MixerCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedMute,
-            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedMute), MixerCommandState));
-        _commandRegistrations.Add(commands.Register(StudioCommandIds.MixerSelectedSolo,
-            invocation => ApplyRemoteMixerAsync(invocation, StudioCommandIds.MixerSelectedSolo), MixerCommandState));
-    }
-
-    private StudioCommandState TransportCommandState() => _timelineDocument is null || _isBusy
-        ? new(false, "Load a timeline before using transport controls.")
-        : new(true, DisplayValue: App.Services.Transport.State.Mode.ToString());
-
-    private StudioCommandState MixerCommandState()
-    {
-        if (_timelineDocument is null || _isBusy || SelectedMixerTrack is not Track track || !IsAudioTrack(track))
-            return new(false, "Select an editable audio channel.");
-        TimelineTrackMixerState state = TimelineMixerProjection.Project(track);
-        return new(true, DisplayValue: $"Gain {state.Gain:0.00} · Pan {state.Pan:0.00}");
-    }
-
-    private async ValueTask<StudioCommandResult> ApplyRemoteMixerAsync(StudioCommandInvocation invocation, string commandId)
-    {
-        if (MixerCommandState().IsAvailable is false) return new(false, "Select an editable audio channel.");
-        switch (commandId)
-        {
-            case StudioCommandIds.MixerSelectedGain when invocation.NormalizedValue is double gain:
-                MixerGainNumberBox.Value = gain * 4;
-                break;
-            case StudioCommandIds.MixerSelectedPan when invocation.NormalizedValue is double pan:
-                MixerPanNumberBox.Value = (pan * 2) - 1;
-                break;
-            case StudioCommandIds.MixerSelectedMute:
-                MixerMuteToggle.IsOn = !MixerMuteToggle.IsOn;
-                break;
-            case StudioCommandIds.MixerSelectedSolo:
-                MixerSoloToggle.IsOn = !MixerSoloToggle.IsOn;
-                break;
-            default:
-                return new(false, "This continuous control requires a value.");
-        }
-        return await ApplyMixerAsync();
-    }
-
-    private async Task DispatchCommandAsync(string commandId, string source, double? normalizedValue = null)
-    {
-        StudioCommandResult result = await App.Services.Commands.DispatchAsync(new(commandId, source, normalizedValue));
-        if (!result.Executed && !string.IsNullOrWhiteSpace(result.Message)) ShowInfo(result.Message, InfoBarSeverity.Warning);
-    }
-
-    private void Commands_StateChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(RefreshQuickControls);
-    private void RemoteControl_Changed(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(RefreshQuickControls);
-
-    private void RefreshQuickControls()
-    {
-        QuickControlsPanel.Children.Clear();
-        foreach (StudioQuickControl assignment in App.Services.RemoteControl.Document.QuickControls.OrderBy(item => item.Slot))
-        {
-            StudioCommandDescriptor descriptor = StudioCommandRegistry.Commands.Single(command => command.Id == assignment.CommandId);
-            StudioCommandState state = App.Services.Commands.GetState(assignment.CommandId);
-            if (descriptor.AcceptsContinuousValue)
-            {
-                var panel = new StackPanel { Width = 130, Spacing = 2 };
-                panel.Children.Add(new TextBlock { Text = $"{assignment.Slot}. {descriptor.Name}" });
-                var slider = new Slider
-                {
-                    Minimum = 0,
-                    Maximum = 1,
-                    StepFrequency = 0.01,
-                    IsEnabled = state.IsAvailable,
-                    Tag = assignment.CommandId
-                };
-                double value = assignment.CommandId == StudioCommandIds.MixerSelectedGain
-                    ? Math.Clamp(MixerGainNumberBox.Value / 4, 0, 1)
-                    : Math.Clamp((MixerPanNumberBox.Value + 1) / 2, 0, 1);
-                slider.Value = double.IsFinite(value) ? value : 0.5;
-                slider.AddHandler(PointerReleasedEvent, new PointerEventHandler(QuickControlSlider_PointerReleased), true);
-                slider.KeyUp += QuickControlSlider_KeyUp;
-                AutomationProperties.SetAutomationId(slider, $"Timeline.QuickControl.{assignment.Slot}");
-                panel.Children.Add(slider);
-                QuickControlsPanel.Children.Add(panel);
-            }
-            else
-            {
-                var button = new Button { Content = $"{assignment.Slot}. {descriptor.Name}", IsEnabled = state.IsAvailable, Tag = assignment.CommandId };
-                button.Click += QuickControlButton_Click;
-                AutomationProperties.SetAutomationId(button, $"Timeline.QuickControl.{assignment.Slot}");
-                QuickControlsPanel.Children.Add(button);
-            }
-        }
-    }
-
-    private async void QuickControlButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: string commandId }) await DispatchCommandAsync(commandId, "quick-control");
-    }
-
-    private async void QuickControlSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
-    {
-        if (sender is Slider { Tag: string commandId } slider) await DispatchCommandAsync(commandId, "quick-control", slider.Value);
-    }
-
-    private async void QuickControlSlider_KeyUp(object sender, KeyRoutedEventArgs e)
-    {
-        if (e.Key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End) ||
-            sender is not Slider { Tag: string commandId } slider)
-            return;
-        await DispatchCommandAsync(commandId, "quick-control", slider.Value);
-        e.Handled = true;
-    }
-
-    private static bool IsKeyPressed(VirtualKey key) =>
-        (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key) & CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
-
-    private void TransportTimer_Tick(object? sender, object e)
-    {
-        if (ShowAudioEngineFailure())
-        {
-            return;
-        }
-        TransportState state = App.Services.Transport.State;
-        if (state.Mode == TransportMode.Stopped)
-        {
-            _transportTimer.Stop();
-            SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
-            return;
-        }
-        SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
-    }
-
-    private bool ShowAudioEngineFailure()
-    {
-        if (App.Services.AudioEngine.FailureMessage is not string message)
-        {
-            return false;
-        }
-        StopPlayback();
-        _configuredAudioGraphKey = null;
-        AudioEngineStatusText.Text = "Audio: engine stopped";
-        ShowInfo(message, InfoBarSeverity.Error);
-        return true;
-    }
-
-    private void Transport_StateChanged(object? sender, TransportState state)
-    {
-        if (!_isLoaded || !string.Equals(state.ProjectId, _loadedProjectId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (state.Mode == TransportMode.Stopped)
-            {
-                _transportTimer.Stop();
-            }
-            else if (!_transportTimer.IsEnabled)
-            {
-                _transportTimer.Start();
-            }
-            SetPosition(state.PositionSeconds, requestPreview: state.Mode == TransportMode.Stopped, updateTransport: false);
-        });
-    }
-
-    private void StopPlayback()
-    {
+      }
+      catch (Exception exception)
+      {
         _transportTimer.Stop();
         App.Services.Transport.Pause();
-        UpdateTransportUi();
+        ShowInfo($"JUCE preview stopped: {exception.Message}", InfoBarSeverity.Error);
+      }
+      return;
     }
-
-    private void SetPosition(double position, bool requestPreview, bool updateTransport = true)
+    if (ShowAudioEngineFailure())
     {
-        _positionSeconds = Math.Clamp(position, 0, _durationSeconds);
-        if (updateTransport && !string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            SyncTransportConfiguration();
-            App.Services.Transport.Seek(ToSamples(_positionSeconds));
-        }
-        PersistViewState();
-        _updatingPosition = true;
-        PositionSlider.Value = _positionSeconds;
-        _updatingPosition = false;
-        UpdateTransportUi();
-        RenderPlayhead();
-        UpdateSplitCommandState();
-        if (requestPreview)
-        {
-            _ = RefreshPreviewAsync(force: false);
-        }
+      return;
     }
-
-    private void SyncTransportConfiguration()
+    TransportState state = App.Services.Transport.State;
+    if (state.Mode == TransportMode.Stopped)
     {
-        if (string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            return;
-        }
+      _transportTimer.Stop();
+      SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
+      return;
+    }
+    SetPosition(state.PositionSeconds, requestPreview: true, updateTransport: false);
+  }
 
-        int sampleRate = _canonicalProject?.Timebase.SampleRate ?? TransportService.DefaultSampleRate;
-        double refreshRate = Math.Clamp(CurrentFramesPerSecond, 10, 30);
-        _transportTimer.Interval = TimeSpan.FromMilliseconds(1000 / refreshRate);
-        long durationSamples = checked((long)Math.Round(
-            _durationSeconds * sampleRate,
-            MidpointRounding.AwayFromZero));
-        TransportState current = App.Services.Transport.State;
-        if (!string.Equals(current.ProjectId, _loadedProjectId, StringComparison.Ordinal) ||
-            current.SampleRate != sampleRate ||
-            current.DurationSamples != durationSamples)
-        {
-            App.Services.Transport.Configure(_loadedProjectId, sampleRate, durationSamples, ToSamples(_positionSeconds));
-        }
+  private bool ShowAudioEngineFailure()
+  {
+    if (App.Services.AudioEngine.FailureMessage is not string message)
+    {
+      return false;
+    }
+    StopPlayback();
+    _configuredAudioGraphKey = null;
+    AudioEngineStatusText.Text = "Audio: engine stopped";
+    ShowInfo(message, InfoBarSeverity.Error);
+    return true;
+  }
+
+  private void Transport_StateChanged(object? sender, TransportState state)
+  {
+    if (!_isLoaded || !string.Equals(state.ProjectId, _loadedProjectId, StringComparison.Ordinal))
+    {
+      return;
     }
 
-    private async Task ConfigureAudioEngineAsync(CancellationToken cancellationToken)
+    _ = DispatcherQueue.TryEnqueue(() =>
+    {
+      if (App.Services.AudioPreviewEngineSelection.SelectedEngine == AudioPreviewEngine.Juce)
+      {
+        _ = ObserveJuceTransportAsync(state);
+      }
+      if (state.Mode == TransportMode.Stopped)
+      {
+        _transportTimer.Stop();
+      }
+      else if (!_transportTimer.IsEnabled)
+      {
+        _transportTimer.Start();
+      }
+      SetPosition(state.PositionSeconds, requestPreview: state.Mode == TransportMode.Stopped, updateTransport: false);
+    });
+  }
+
+  private async Task ObserveJuceTransportAsync(TransportState state)
+  {
+    try
+    {
+      _ = await SendJuceTransportStateAsync(state, _pageCancellation?.Token ?? CancellationToken.None);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (Exception exception)
+    {
+      _configuredJuceGraphKey = null;
+      App.Services.Transport.Pause();
+      ShowInfo($"JUCE transport failed and was stopped safely: {exception.Message}", InfoBarSeverity.Error);
+    }
+  }
+
+  private void StopPlayback()
+  {
+    _transportTimer.Stop();
+    App.Services.Transport.Pause();
+    UpdateTransportUi();
+  }
+
+  private void SetPosition(double position, bool requestPreview, bool updateTransport = true)
+  {
+    _positionSeconds = Math.Clamp(position, 0, _durationSeconds);
+    if (updateTransport && !string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      SyncTransportConfiguration();
+      App.Services.Transport.Seek(ToSamples(_positionSeconds));
+    }
+    PersistViewState();
+    _updatingPosition = true;
+    PositionSlider.Value = _positionSeconds;
+    _updatingPosition = false;
+    UpdateTransportUi();
+    RenderPlayhead();
+    UpdateSplitCommandState();
+    if (requestPreview)
+    {
+      _ = RefreshPreviewAsync(force: false);
+    }
+  }
+
+  private void SyncTransportConfiguration()
+  {
+    if (string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      return;
+    }
+
+    int sampleRate = _canonicalProject?.Timebase.SampleRate ?? TransportService.DefaultSampleRate;
+    double refreshRate = Math.Clamp(CurrentFramesPerSecond, 10, 30);
+    _transportTimer.Interval = TimeSpan.FromMilliseconds(1000 / refreshRate);
+    long durationSamples = checked((long)Math.Round(
+        _durationSeconds * sampleRate,
+        MidpointRounding.AwayFromZero));
+    TransportState current = App.Services.Transport.State;
+    if (!string.Equals(current.ProjectId, _loadedProjectId, StringComparison.Ordinal) ||
+        current.SampleRate != sampleRate ||
+        current.DurationSamples != durationSamples)
+    {
+      App.Services.Transport.Configure(_loadedProjectId, sampleRate, durationSamples, ToSamples(_positionSeconds));
+    }
+  }
+
+  private async Task ConfigureAudioEngineAsync(CancellationToken cancellationToken)
+  {
+    CanonicalProject? project = _canonicalProject;
+    string? projectId = _loadedProjectId;
+    if (project is null || string.IsNullOrWhiteSpace(projectId))
+    {
+      AudioEngineStatusText.Text = "Audio: not configured";
+      MixerRoutingText.Text = "Load a project to inspect its audio routes.";
+      return;
+    }
+
+    PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+        PostProductionContracts.Read(project.Timeline), PostProductionOperation.Preview);
+    if (!gate.Allowed)
+    {
+      _ = Interlocked.Increment(ref _audioGraphGeneration);
+      _configuredAudioGraphKey = null;
+      AudioEngineStatusText.Text = "Audio: blocked by channel layout";
+      MixerRoutingText.Text = gate.Explanation;
+      return;
+    }
+
+    string graphKey = CreateAudioGraphKey(project);
+    if (string.Equals(graphKey, _configuredAudioGraphKey, StringComparison.Ordinal))
+    {
+      return;
+    }
+
+    long generation = Interlocked.Increment(ref _audioGraphGeneration);
+    AudioEngineStatusText.Text = "Audio: preparing project media...";
+    MixerRoutingText.Text = "Preparing audio routes...";
+    try
+    {
+      await App.Services.AudioEngine.RefreshDevicesAsync(cancellationToken);
+      AudioDeviceDescriptor? device = App.Services.AudioEngine.Devices.FirstOrDefault(item => item.IsDefault)
+          ?? App.Services.AudioEngine.Devices.FirstOrDefault();
+      string deviceId = device?.Id ?? "{default}";
+
+      IReadOnlyDictionary<string, string> localPaths = await MaterializeAudioAssetsAsync(
+          project,
+          projectId,
+          cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
+      if (generation != Volatile.Read(ref _audioGraphGeneration) ||
+          !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+      {
+        return;
+      }
+
+      AudioRenderGraph graph = AudioRenderGraphBuilder.Build(
+          project,
+          deviceId,
+          DefaultAudioBufferFrames,
+          asset => localPaths.GetValueOrDefault(asset.Id));
+      MixerGraphPlan mixer = MixerGraphBuilder.FromAudioRoutes(graph.Configuration);
+      Dictionary<string, string> trackNames = project.Tracks.ToDictionary(track => track.Id, track => track.Name);
+      MixerRoutingText.Text = $"Modeled insert latency: {mixer.TotalLatencySamples} samples\n" +
+          string.Join("\n", mixer.Routes.Select(route =>
+          {
+            string state = mixer.AudibleChannelIds.Contains(route.SourceId) ? "audible" : "inaudible";
+            return $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · {state} · compensation {route.DelaySamples} samples";
+          }));
+      MixerDocument mixerDocument = MixerDocumentCodec.ReadOrMigrate(_timelineDocument ?? project.Timeline, project);
+      AudioEngineConfiguration playbackConfiguration = graph.Configuration with
+      {
+        MixerChannels = MixerDocumentCodec.ToMixerChannels(mixerDocument),
+        Automation = _automationSnapshot
+      };
+      if (App.Services.AudioPreviewEngineSelection.SelectedEngine == AudioPreviewEngine.Juce)
+      {
+        try
         {
-            CanonicalProject? project = _canonicalProject;
-            string? projectId = _loadedProjectId;
-            if (project is null || string.IsNullOrWhiteSpace(projectId))
-            {
-                AudioEngineStatusText.Text = "Audio: not configured";
-                MixerRoutingText.Text = "Load a project to inspect its audio routes.";
-                return;
-            }
-
-            PostProductionOperationGate gate = PostProductionCapabilities.Gate(
-                PostProductionContracts.Read(project.Timeline), PostProductionOperation.Preview);
-            if (!gate.Allowed)
-            {
-                Interlocked.Increment(ref _audioGraphGeneration);
-                _configuredAudioGraphKey = null;
-                AudioEngineStatusText.Text = "Audio: blocked by channel layout";
-                MixerRoutingText.Text = gate.Explanation;
-                return;
-            }
-
-            string graphKey = CreateAudioGraphKey(project);
-            if (string.Equals(graphKey, _configuredAudioGraphKey, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            long generation = Interlocked.Increment(ref _audioGraphGeneration);
-            AudioEngineStatusText.Text = "Audio: preparing project media...";
-            MixerRoutingText.Text = "Preparing audio routes...";
-            try
-            {
-                await App.Services.AudioEngine.RefreshDevicesAsync(cancellationToken);
-                AudioDeviceDescriptor? device = App.Services.AudioEngine.Devices.FirstOrDefault(item => item.IsDefault)
-                    ?? App.Services.AudioEngine.Devices.FirstOrDefault();
-                string deviceId = device?.Id ?? "{default}";
-
-                IReadOnlyDictionary<string, string> localPaths = await MaterializeAudioAssetsAsync(
-                    project,
-                    projectId,
-                    cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (generation != Volatile.Read(ref _audioGraphGeneration) ||
-                    !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
-                {
-                    return;
-                }
-
-                AudioRenderGraph graph = AudioRenderGraphBuilder.Build(
-                    project,
-                    deviceId,
-                    DefaultAudioBufferFrames,
-                    asset => localPaths.GetValueOrDefault(asset.Id));
-                MixerGraphPlan mixer = MixerGraphBuilder.FromAudioRoutes(graph.Configuration);
-                var trackNames = project.Tracks.ToDictionary(track => track.Id, track => track.Name);
-                MixerRoutingText.Text = $"Modeled insert latency: {mixer.TotalLatencySamples} samples\n" +
-                    string.Join("\n", mixer.Routes.Select(route =>
-                    {
-                        string state = mixer.AudibleChannelIds.Contains(route.SourceId) ? "audible" : "inaudible";
-                        return $"{trackNames.GetValueOrDefault(route.SourceId, route.SourceId)} → Master · {state} · compensation {route.DelaySamples} samples";
-                    }));
-                MixerDocument mixerDocument = MixerDocumentCodec.ReadOrMigrate(_timelineDocument ?? project.Timeline, project);
-                AudioEngineConfiguration playbackConfiguration = graph.Configuration with
-                {
-                    MixerChannels = MixerDocumentCodec.ToMixerChannels(mixerDocument),
-                    Automation = _automationSnapshot
-                };
-                await App.Services.AudioEngine.ConfigureAsync(playbackConfiguration, cancellationToken);
-                await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
-                if (generation != Volatile.Read(ref _audioGraphGeneration) ||
-                    !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
-                {
-                    return;
-                }
-
-                _configuredAudioGraphKey = graphKey;
-                int clipCount = graph.Configuration.Tracks.Sum(route => route.Clips.Length);
-                AudioEngineStatusText.Text =
-                    $"Audio: {device?.Name ?? "Windows default"} · {project.Timebase.SampleRate} Hz · {clipCount} clip{(clipCount == 1 ? string.Empty : "s")}";
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                if (generation != Volatile.Read(ref _audioGraphGeneration) ||
-                    !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
-                {
-                    return;
-                }
-
-                AudioEngineStatusText.Text = "Audio: unavailable";
-                MixerRoutingText.Text = $"Audio routing could not be activated: {exception.Message}";
-                ShowInfo($"Timeline loaded, but audio playback could not be prepared: {exception.Message}", InfoBarSeverity.Warning);
-            }
+          await ConfigureJucePreviewAsync(graph, project, graphKey, cancellationToken);
         }
-
-        private static async Task<IReadOnlyDictionary<string, string>> MaterializeAudioAssetsAsync(
-            CanonicalProject project,
-            string projectId,
-            CancellationToken cancellationToken)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            HashSet<string> referencedAssetIds = project.Tracks
-                .Where(track => string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
-                                track.Events.Any(item => string.Equals(item.Type, "audio", StringComparison.OrdinalIgnoreCase)))
-                .SelectMany(track => track.Events)
-                .Where(item => !string.IsNullOrWhiteSpace(item.MediaAssetId))
-                .Select(item => item.MediaAssetId!)
-                .ToHashSet(StringComparer.Ordinal);
-            var localPaths = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (referencedAssetIds.Count == 0)
-            {
-                return localPaths;
-            }
-
-            string cacheRoot = ResolveTimelineCacheRoot("audio-media");
-            foreach (MediaAsset asset in project.MediaAssets.Where(asset => referencedAssetIds.Contains(asset.Id)))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                string contentHash = ReadAssetContentHash(asset);
-                string cacheIdentity = CreateStableHash($"{projectId}\n{asset.Id}\n{asset.Path}\n{contentHash}");
-                string extension = System.IO.Path.GetExtension(asset.Path);
-                if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
-                {
-                    extension = ".media";
-                }
-                string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
-                if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
-                {
-                    await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(
-                        projectId,
-                        asset.Path,
-                        destination,
-                        cancellationToken);
-                }
-                localPaths[asset.Id] = destination;
-            }
-            return localPaths;
+          await StopJucePreviewAsync();
+          _ = App.Services.AudioPreviewEngineSelection.Select(AudioPreviewEngine.AudioGraph, TransportMode.Stopped);
+          ShowInfo($"JUCE preview could not start; AudioGraph was restored: {exception.Message}", InfoBarSeverity.Warning);
+          await App.Services.AudioEngine.ConfigureAsync(playbackConfiguration, cancellationToken);
+          await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
         }
+      }
+      else
+      {
+        await StopJucePreviewAsync();
+        await App.Services.AudioEngine.ConfigureAsync(playbackConfiguration, cancellationToken);
+        await App.Services.AudioEngine.EnqueueTransportStateAsync(App.Services.Transport.State, cancellationToken);
+      }
+      if (generation != Volatile.Read(ref _audioGraphGeneration) ||
+          !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+      {
+        return;
+      }
 
-        private static string CreateAudioGraphKey(CanonicalProject project)
-        {
-            var value = new StringBuilder()
+      _configuredAudioGraphKey = App.Services.AudioPreviewEngineSelection.SelectedEngine == AudioPreviewEngine.AudioGraph
+          ? graphKey
+          : null;
+      int clipCount = graph.Configuration.Tracks.Sum(route => route.Clips.Length);
+      AudioEngineStatusText.Text = App.Services.AudioPreviewEngineSelection.SelectedEngine == AudioPreviewEngine.Juce
+          ? $"Audio: JUCE preview · {project.Timebase.SampleRate} Hz · {clipCount} clip{(clipCount == 1 ? string.Empty : "s")}"
+          : $"Audio: {device?.Name ?? "Windows default"} · {project.Timebase.SampleRate} Hz · {clipCount} clip{(clipCount == 1 ? string.Empty : "s")}";
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      throw;
+    }
+    catch (Exception exception)
+    {
+      if (generation != Volatile.Read(ref _audioGraphGeneration) ||
+          !string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+      {
+        return;
+      }
+
+      AudioEngineStatusText.Text = "Audio: unavailable";
+      MixerRoutingText.Text = $"Audio routing could not be activated: {exception.Message}";
+      ShowInfo($"Timeline loaded, but audio playback could not be prepared: {exception.Message}", InfoBarSeverity.Warning);
+    }
+  }
+
+  private async Task ConfigureJucePreviewAsync(
+      AudioRenderGraph graph,
+      CanonicalProject project,
+      string graphKey,
+      CancellationToken cancellationToken)
+  {
+    if (string.Equals(graphKey, _configuredJuceGraphKey, StringComparison.Ordinal))
+    {
+      return;
+    }
+
+    App.Services.Transport.Pause();
+    if (App.Services.AudioEngine is WindowsAudioEngine windowsAudioEngine)
+    {
+      await windowsAudioEngine.ReleaseDeviceAsync(cancellationToken);
+    }
+
+    JuceAudioEngineStatus status = await App.Services.JuceAudioEngine.StartAsync(cancellationToken);
+    if (status.State != JuceAudioEngineLifecycleState.ReadyWithoutDevice)
+    {
+      throw new InvalidOperationException(status.Message);
+    }
+
+    JuceAudioDeviceDescriptor[] devices = await App.Services.JuceAudioEngine.RequestAsync<JuceAudioDeviceDescriptor[]>(
+        JuceAudioEngineProtocol.ListDevicesCommand, new { }, JuceAudioEngineProtocol.DeviceListEvent,
+        cancellationToken: cancellationToken);
+    JuceAudioDeviceDescriptor output = devices.FirstOrDefault(item => item.IsDefaultOutput)
+        ?? devices.FirstOrDefault()
+        ?? throw new InvalidOperationException("JUCE did not find an output audio device.");
+    int sampleRate = project.Timebase.SampleRate;
+    int bufferFrames = output.BufferSizes.Contains(DefaultAudioBufferFrames)
+        ? DefaultAudioBufferFrames
+        : output.BufferSizes.OrderBy(value => Math.Abs(value - DefaultAudioBufferFrames)).FirstOrDefault(512);
+    JuceAudioDeviceConfigurationResult configured = await App.Services.JuceAudioEngine.RequestAsync<JuceAudioDeviceConfigurationResult>(
+        JuceAudioEngineProtocol.ConfigureDeviceCommand,
+        new JuceAudioDeviceConfiguration(output.Id, sampleRate, bufferFrames, Math.Min(2, output.OutputChannels), false),
+        JuceAudioEngineProtocol.DeviceConfiguredEvent,
+        timeout: TimeSpan.FromSeconds(10), cancellationToken: cancellationToken);
+    if (!configured.Configured)
+    {
+      throw new InvalidOperationException(configured.Diagnostic ?? "JUCE could not configure the output device.");
+    }
+
+    ProfessionalEditingDocument editing = ProfessionalEditingContracts.Read(project.Timeline);
+    FileBackedWaveTimelineSourceReader reader = new();
+    long revision = Interlocked.Increment(ref _juceSnapshotRevision);
+    JuceTimelineSnapshot snapshot = await JuceTimelineSnapshotBuilder.BuildAsync(
+        revision, graph, editing, reader, cancellationToken);
+    JucePreparedTimelineSnapshot prepared = JucePreparedTimelineProjection.Create(snapshot, preferFileBackedMedia: true);
+    JucePreparedTimelineResult result = await App.Services.JuceAudioEngine.RequestAsync<JucePreparedTimelineResult>(
+        JuceAudioEngineProtocol.PrepareTimelineCommand, prepared, JuceAudioEngineProtocol.TimelinePreparedEvent,
+        timeout: TimeSpan.FromSeconds(30), cancellationToken: cancellationToken);
+    if (!result.Prepared)
+    {
+      throw new InvalidOperationException("JUCE rejected the prepared Timeline snapshot.");
+    }
+
+    _configuredJuceGraphKey = graphKey;
+    await SendJuceTransportStateAsync(App.Services.Transport.State, cancellationToken);
+  }
+
+  private async Task StopJucePreviewAsync()
+  {
+    _configuredJuceGraphKey = null;
+    try
+    {
+      if (App.Services.JuceAudioEngine.Status.State == JuceAudioEngineLifecycleState.ReadyWithoutDevice)
+      {
+        _ = await App.Services.JuceAudioEngine.RequestAsync<JsonElement>(
+            JuceAudioEngineProtocol.CloseDeviceCommand, new { }, JuceAudioEngineProtocol.DeviceClosedEvent,
+            timeout: TimeSpan.FromSeconds(3));
+      }
+      await App.Services.JuceAudioEngine.StopAsync();
+    }
+    catch (Exception exception)
+    {
+      CrashLogger.Write($"JUCE preview cleanup failed: {exception}");
+    }
+  }
+
+  private async Task<JuceTransportPosition?> SendJuceTransportStateAsync(
+      TransportState state,
+      CancellationToken cancellationToken = default)
+  {
+    if (App.Services.AudioPreviewEngineSelection.SelectedEngine != AudioPreviewEngine.Juce ||
+        _configuredJuceGraphKey is null ||
+        App.Services.JuceAudioEngine.Status.State != JuceAudioEngineLifecycleState.ReadyWithoutDevice)
+    {
+      return null;
+    }
+
+    await _juceTransportGate.WaitAsync(cancellationToken);
+    try
+    {
+      _ = await App.Services.JuceAudioEngine.RequestAsync<JuceTransportPosition>(
+          JuceAudioEngineProtocol.TransportCommand,
+          new JuceTransportCommand("loop", LoopEnabled: state.Loop.Enabled,
+              LoopStartSample: state.Loop.StartSample, LoopEndSample: state.Loop.EndSample),
+          JuceAudioEngineProtocol.TransportPositionEvent, cancellationToken: cancellationToken);
+      _ = await App.Services.JuceAudioEngine.RequestAsync<JuceTransportPosition>(
+          JuceAudioEngineProtocol.TransportCommand,
+          new JuceTransportCommand("seek", PositionSamples: state.PositionSamples,
+              SeekSequence: Interlocked.Increment(ref _juceSeekSequence)),
+          JuceAudioEngineProtocol.TransportPositionEvent, cancellationToken: cancellationToken);
+      string action = state.Mode == TransportMode.Playing ? "play" : "pause";
+      return await App.Services.JuceAudioEngine.RequestAsync<JuceTransportPosition>(
+          JuceAudioEngineProtocol.TransportCommand, new JuceTransportCommand(action),
+          JuceAudioEngineProtocol.TransportPositionEvent, cancellationToken: cancellationToken);
+    }
+    finally
+    {
+      _ = _juceTransportGate.Release();
+    }
+  }
+
+  private static async Task<IReadOnlyDictionary<string, string>> MaterializeAudioAssetsAsync(
+      CanonicalProject project,
+      string projectId,
+      CancellationToken cancellationToken)
+  {
+    HashSet<string> referencedAssetIds = project.Tracks
+        .Where(track => string.Equals(track.Type, "audio", StringComparison.OrdinalIgnoreCase) ||
+                        track.Events.Any(item => string.Equals(item.Type, "audio", StringComparison.OrdinalIgnoreCase)))
+        .SelectMany(track => track.Events)
+        .Where(item => !string.IsNullOrWhiteSpace(item.MediaAssetId))
+        .Select(item => item.MediaAssetId!)
+        .ToHashSet(StringComparer.Ordinal);
+    Dictionary<string, string> localPaths = new(StringComparer.Ordinal);
+    if (referencedAssetIds.Count == 0)
+    {
+      return localPaths;
+    }
+
+    string cacheRoot = ResolveTimelineCacheRoot("audio-media");
+    foreach (MediaAsset asset in project.MediaAssets.Where(asset => referencedAssetIds.Contains(asset.Id)))
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      string contentHash = ReadAssetContentHash(asset);
+      string cacheIdentity = CreateStableHash($"{projectId}\n{asset.Id}\n{asset.Path}\n{contentHash}");
+      string extension = System.IO.Path.GetExtension(asset.Path);
+      if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
+      {
+        extension = ".media";
+      }
+      string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
+      if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
+      {
+        _ = await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(
+            projectId,
+            asset.Path,
+            destination,
+            cancellationToken);
+      }
+      localPaths[asset.Id] = destination;
+    }
+    return localPaths;
+  }
+
+  private static string CreateAudioGraphKey(CanonicalProject project)
+  {
+    StringBuilder value = new StringBuilder()
                 .Append(project.Id).Append('|')
                 .Append(project.Timebase.SampleRate);
-            foreach (Track track in project.Tracks)
-            {
-                value.Append('|').Append(track.Id).Append(':').Append(track.Type).Append(':')
-                    .Append(track.Muted).Append(':').Append(track.Solo).Append(':')
-                    .Append(track.Metadata["gain"]).Append(':').Append(track.Metadata["pan"])
-                    .Append(':').Append(track.Metadata["routing"]);
-                foreach (TimelineEvent item in track.Events)
-                {
-                    value.Append('|').Append(item.Id).Append(':').Append(item.Type).Append(':')
-                        .Append(item.MediaAssetId).Append(':').Append(item.Start.Samples).Append(':')
-                        .Append(item.End.Samples).Append(':').Append(item.Source?.Start.Samples).Append(':')
-                        .Append(item.Source?.Start.SampleRate);
-                }
-            }
-            foreach (MediaAsset asset in project.MediaAssets)
-            {
-                value.Append('|').Append(asset.Id).Append(':').Append(asset.Path).Append(':')
-                    .Append(ReadAssetContentHash(asset));
-            }
-            value.Append('|').Append(project.Timeline.ToJsonString());
-            return CreateStableHash(value.ToString());
-        }
-
-        private static string ReadAssetContentHash(MediaAsset asset) =>
-            asset.Metadata["sha256"]?.GetValue<string>()?.Trim()
-            ?? asset.Provenance?.ContentHash?.Trim()
-            ?? string.Empty;
-
-        private static string CreateStableHash(string value) =>
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-
-    private void ApplyLoopToTransport()
+    foreach (Track track in project.Tracks)
     {
-        if (LoopToggle.IsChecked == true)
-        {
-            (double start, double end) = ResolveLoopBounds();
-            App.Services.Transport.SetLoop(true, ToSamples(start), ToSamples(end));
-        }
-        else
-        {
-            App.Services.Transport.SetLoop(false, 0, ToSamples(_durationSeconds));
-        }
+      _ = value.Append('|').Append(track.Id).Append(':').Append(track.Type).Append(':')
+          .Append(track.Muted).Append(':').Append(track.Solo).Append(':')
+          .Append(track.Metadata["gain"]).Append(':').Append(track.Metadata["pan"])
+          .Append(':').Append(track.Metadata["routing"]);
+      foreach (TimelineEvent item in track.Events)
+      {
+        _ = value.Append('|').Append(item.Id).Append(':').Append(item.Type).Append(':')
+            .Append(item.MediaAssetId).Append(':').Append(item.Start.Samples).Append(':')
+            .Append(item.End.Samples).Append(':').Append(item.Source?.Start.Samples).Append(':')
+            .Append(item.Source?.Start.SampleRate);
+      }
+    }
+    foreach (MediaAsset asset in project.MediaAssets)
+    {
+      _ = value.Append('|').Append(asset.Id).Append(':').Append(asset.Path).Append(':')
+          .Append(ReadAssetContentHash(asset));
+    }
+    _ = value.Append('|').Append(project.Timeline.ToJsonString());
+    return CreateStableHash(value.ToString());
+  }
+
+  private static string ReadAssetContentHash(MediaAsset asset)
+  {
+    return asset.Metadata["sha256"]?.GetValue<string>()?.Trim()
+      ?? asset.Provenance?.ContentHash?.Trim()
+      ?? string.Empty;
+  }
+
+  private static string CreateStableHash(string value)
+  {
+    return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+  }
+
+  private void ApplyLoopToTransport()
+  {
+    if (LoopToggle.IsChecked == true)
+    {
+      (double start, double end) = ResolveLoopBounds();
+      App.Services.Transport.SetLoop(true, ToSamples(start), ToSamples(end));
+    }
+    else
+    {
+      App.Services.Transport.SetLoop(false, 0, ToSamples(_durationSeconds));
+    }
+  }
+
+  private void LoopControl_Changed(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is not null)
+    {
+      SyncTransportConfiguration();
+      ApplyLoopToTransport();
+    }
+  }
+
+  private void LoopNumberBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+  {
+    if (_timelineDocument is not null && LoopToggle.IsChecked == true)
+    {
+      SyncTransportConfiguration();
+      ApplyLoopToTransport();
+    }
+  }
+
+  private long ToSamples(double seconds)
+  {
+    int sampleRate = _canonicalProject?.Timebase.SampleRate ?? TransportService.DefaultSampleRate;
+    return checked((long)Math.Round(seconds * sampleRate, MidpointRounding.AwayFromZero));
+  }
+
+  private void RenderPlayhead()
+  {
+    if (_playheadLine is null)
+    {
+      return;
     }
 
-    private void LoopControl_Changed(object sender, RoutedEventArgs e)
+    double x = _positionSeconds * _pixelsPerSecond;
+    _playheadLine.X1 = x;
+    _playheadLine.X2 = x;
+  }
+
+  private void UpdateTransportUi()
+  {
+    TimecodeText.Text = FormatTimecode(_positionSeconds);
+    if (_canonicalProject is not null)
     {
-        if (_timelineDocument is not null)
-        {
-            SyncTransportConfiguration();
-            ApplyLoopToTransport();
-        }
+      PostPlayheadTimecodeText.Text = $"Playhead: {FormatTimecode(_positionSeconds)}";
     }
 
-    private void LoopNumberBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    PlayPauseButton.Content = App.Services.Transport.State.Mode == TransportMode.Stopped ? "Play" : "Pause";
+  }
+
+  private void PositionSlider_ValueChanged(
+      object sender,
+      RangeBaseValueChangedEventArgs e)
+  {
+    if (_updatingPosition || _timelineDocument is null)
     {
-        if (_timelineDocument is not null && LoopToggle.IsChecked == true)
-        {
-            SyncTransportConfiguration();
-            ApplyLoopToTransport();
-        }
+      return;
     }
 
-    private long ToSamples(double seconds)
+    _positionSeconds = Math.Clamp(e.NewValue, 0, _durationSeconds);
+    SyncTransportConfiguration();
+    App.Services.Transport.Seek(ToSamples(_positionSeconds));
+    PersistViewState();
+    UpdateTransportUi();
+    RenderPlayhead();
+    UpdateSplitCommandState();
+    if (_positionPointerActive || App.Services.Transport.State.Mode == TransportMode.Stopped)
     {
-        int sampleRate = _canonicalProject?.Timebase.SampleRate ?? TransportService.DefaultSampleRate;
-        return checked((long)Math.Round(seconds * sampleRate, MidpointRounding.AwayFromZero));
+      _ = RefreshPreviewAsync(force: false);
+    }
+  }
+
+  private void PositionSlider_PointerPressed(object sender, PointerRoutedEventArgs e)
+  {
+    _positionPointerActive = true;
+    StopPlayback();
+  }
+
+  private void PositionSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
+  {
+    _positionPointerActive = false;
+    _ = RefreshPreviewAsync(force: true);
+  }
+
+  private void ZoomSlider_ValueChanged(
+      object sender,
+      RangeBaseValueChangedEventArgs e)
+  {
+    if (!_isXamlInitialized || _updatingZoom)
+    {
+      return;
     }
 
-    private void RenderPlayhead()
-    {
-        if (_playheadLine is null)
-        {
-            return;
-        }
+    ApplyZoom(e.NewValue, TimelineScroll.ViewportWidth / 2);
+  }
 
-        double x = _positionSeconds * _pixelsPerSecond;
-        _playheadLine.X1 = x;
-        _playheadLine.X2 = x;
+  private void ApplyZoom(double pixelsPerSecond, double anchorInViewport)
+  {
+    double oldPixelsPerSecond = _pixelsPerSecond;
+    double newPixelsPerSecond = Math.Clamp(
+        pixelsPerSecond,
+        MinimumPixelsPerSecond,
+        MaximumPixelsPerSecond);
+    double targetOffset = TimelineViewport.OffsetAfterZoom(
+        TimelineScroll.HorizontalOffset,
+        anchorInViewport,
+        oldPixelsPerSecond,
+        newPixelsPerSecond,
+        _durationSeconds,
+        TimelineScroll.ViewportWidth);
+    _pixelsPerSecond = newPixelsPerSecond;
+    _updatingZoom = true;
+    ZoomSlider.Value = newPixelsPerSecond;
+    _updatingZoom = false;
+    if (_timelineDocument is not null)
+    {
+      RenderRuler();
+      RenderTimeline();
+      _ = TimelineScroll.ChangeView(targetOffset, null, null, true);
+    }
+    PersistViewState(targetOffset);
+  }
+
+  private void FitTimeline_Click(object sender, RoutedEventArgs e)
+  {
+    if (_durationSeconds <= 0)
+    {
+      return;
     }
 
-    private void UpdateTransportUi()
+    double viewport = TimelineScroll.ViewportWidth > 0
+        ? TimelineScroll.ViewportWidth
+        : 900;
+    _pixelsPerSecond = TimelineViewport.FitPixelsPerSecond(
+        _durationSeconds,
+        viewport,
+        MinimumPixelsPerSecond,
+        MaximumPixelsPerSecond);
+    _updatingZoom = true;
+    ZoomSlider.Value = _pixelsPerSecond;
+    _updatingZoom = false;
+    RenderRuler();
+    RenderTimeline();
+    _ = TimelineScroll.ChangeView(0, null, null, true);
+    PersistViewState(horizontalOffset: 0);
+  }
+
+  private void TrackHeaderScroll_ViewChanged(
+      object sender,
+      ScrollViewerViewChangedEventArgs e)
+  {
+    if (_syncingScroll)
     {
-        TimecodeText.Text = FormatTimecode(_positionSeconds);
-        if (_canonicalProject is not null)
-            PostPlayheadTimecodeText.Text = $"Playhead: {FormatTimecode(_positionSeconds)}";
-        PlayPauseButton.Content = App.Services.Transport.State.Mode == TransportMode.Stopped ? "Play" : "Pause";
+      return;
     }
 
-    private void PositionSlider_ValueChanged(
-        object sender,
-        RangeBaseValueChangedEventArgs e)
+    _syncingScroll = true;
+    _ = TimelineScroll.ChangeView(
+        TimelineScroll.HorizontalOffset,
+        TrackHeaderScroll.VerticalOffset,
+        null,
+        true);
+    _syncingScroll = false;
+    if (_timelineDocument is not null && _dragBorder is null)
     {
-        if (_updatingPosition || _timelineDocument is null)
-        {
-            return;
-        }
+      RenderTimeline();
+    }
+  }
 
-        _positionSeconds = Math.Clamp(e.NewValue, 0, _durationSeconds);
-        SyncTransportConfiguration();
-        App.Services.Transport.Seek(ToSamples(_positionSeconds));
-        PersistViewState();
-        UpdateTransportUi();
-        RenderPlayhead();
-        UpdateSplitCommandState();
-        if (_positionPointerActive || App.Services.Transport.State.Mode == TransportMode.Stopped)
-        {
-            _ = RefreshPreviewAsync(force: false);
-        }
+  private void TimelineScroll_ViewChanged(
+      object sender,
+      ScrollViewerViewChangedEventArgs e)
+  {
+    if (_syncingScroll)
+    {
+      return;
     }
 
-    private void PositionSlider_PointerPressed(object sender, PointerRoutedEventArgs e)
+    _syncingScroll = true;
+    _ = TrackHeaderScroll.ChangeView(
+        null,
+        TimelineScroll.VerticalOffset,
+        null,
+        true);
+    _ = RulerScroll.ChangeView(
+        TimelineScroll.HorizontalOffset,
+        null,
+        null,
+        true);
+    _syncingScroll = false;
+    RenderRuler();
+    if (_timelineDocument is not null && _dragBorder is null)
     {
-        _positionPointerActive = true;
-        StopPlayback();
+      RenderTimeline();
     }
 
-    private void PositionSlider_PointerReleased(object sender, PointerRoutedEventArgs e)
+    if (!e.IsIntermediate)
     {
-        _positionPointerActive = false;
-        _ = RefreshPreviewAsync(force: true);
+      PersistViewState();
     }
+  }
 
-    private void ZoomSlider_ValueChanged(
-        object sender,
-        RangeBaseValueChangedEventArgs e)
+  private void TimelineScroll_SizeChanged(object sender, SizeChangedEventArgs e)
+  {
+    if (_timelineDocument is not null)
     {
-        if (!_isXamlInitialized || _updatingZoom)
-        {
-            return;
-        }
-
-        ApplyZoom(e.NewValue, TimelineScroll.ViewportWidth / 2);
-    }
-
-    private void ApplyZoom(double pixelsPerSecond, double anchorInViewport)
-    {
-        double oldPixelsPerSecond = _pixelsPerSecond;
-        double newPixelsPerSecond = Math.Clamp(
-            pixelsPerSecond,
-            MinimumPixelsPerSecond,
-            MaximumPixelsPerSecond);
-        double targetOffset = TimelineViewport.OffsetAfterZoom(
-            TimelineScroll.HorizontalOffset,
-            anchorInViewport,
-            oldPixelsPerSecond,
-            newPixelsPerSecond,
-            _durationSeconds,
-            TimelineScroll.ViewportWidth);
-        _pixelsPerSecond = newPixelsPerSecond;
-        _updatingZoom = true;
-        ZoomSlider.Value = newPixelsPerSecond;
-        _updatingZoom = false;
-        if (_timelineDocument is not null)
-        {
-            RenderRuler();
-            RenderTimeline();
-            TimelineScroll.ChangeView(targetOffset, null, null, true);
-        }
-        PersistViewState(targetOffset);
-    }
-
-    private void FitTimeline_Click(object sender, RoutedEventArgs e)
-    {
-        if (_durationSeconds <= 0)
-        {
-            return;
-        }
-
-        double viewport = TimelineScroll.ViewportWidth > 0
-            ? TimelineScroll.ViewportWidth
-            : 900;
-        _pixelsPerSecond = TimelineViewport.FitPixelsPerSecond(
-            _durationSeconds,
-            viewport,
-            MinimumPixelsPerSecond,
-            MaximumPixelsPerSecond);
-        _updatingZoom = true;
-        ZoomSlider.Value = _pixelsPerSecond;
-        _updatingZoom = false;
-        RenderRuler();
+      RenderRuler();
+      if (_dragBorder is null)
+      {
         RenderTimeline();
-        TimelineScroll.ChangeView(0, null, null, true);
-        PersistViewState(horizontalOffset: 0);
+      }
+    }
+  }
+
+  private void TimelineCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+  {
+    Point point = e.GetCurrentPoint(TimelineCanvas).Position;
+    StopPlayback();
+    _ = TimelineCanvas.Focus(FocusState.Pointer);
+    SelectLane(null);
+    SetPosition(SnapTime(point.X / _pixelsPerSecond), requestPreview: true);
+  }
+
+  private void TimelineScroll_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+  {
+    if (!IsControlPressed())
+    {
+      return;
     }
 
-    private void TrackHeaderScroll_ViewChanged(
-        object sender,
-        ScrollViewerViewChangedEventArgs e)
-    {
-        if (_syncingScroll)
-        {
-            return;
-        }
+    Microsoft.UI.Input.PointerPoint point = e.GetCurrentPoint(TimelineScroll);
+    double factor = point.Properties.MouseWheelDelta > 0 ? 1.15 : 1 / 1.15;
+    ApplyZoom(_pixelsPerSecond * factor, point.Position.X);
+    e.Handled = true;
+  }
 
-        _syncingScroll = true;
-        TimelineScroll.ChangeView(
-            TimelineScroll.HorizontalOffset,
-            TrackHeaderScroll.VerticalOffset,
-            null,
-            true);
-        _syncingScroll = false;
-        if (_timelineDocument is not null && _dragBorder is null) RenderTimeline();
+  private void RulerCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+  {
+    _rulerPointerActive = true;
+    _rulerPointerId = e.Pointer.PointerId;
+    _ = RulerCanvas.CapturePointer(e.Pointer);
+    StopPlayback();
+    ScrubRuler(e, forcePreview: false);
+    e.Handled = true;
+  }
+
+  private void RulerCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+  {
+    if (!_rulerPointerActive || e.Pointer.PointerId != _rulerPointerId)
+    {
+      return;
     }
 
-    private void TimelineScroll_ViewChanged(
-        object sender,
-        ScrollViewerViewChangedEventArgs e)
-    {
-        if (_syncingScroll)
-        {
-            return;
-        }
+    ScrubRuler(e, forcePreview: false);
+    e.Handled = true;
+  }
 
-        _syncingScroll = true;
-        TrackHeaderScroll.ChangeView(
-            null,
-            TimelineScroll.VerticalOffset,
-            null,
-            true);
-        RulerScroll.ChangeView(
-            TimelineScroll.HorizontalOffset,
-            null,
-            null,
-            true);
-        _syncingScroll = false;
-        RenderRuler();
-        if (_timelineDocument is not null && _dragBorder is null) RenderTimeline();
-        if (!e.IsIntermediate) PersistViewState();
+  private void RulerCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+  {
+    if (!_rulerPointerActive || e.Pointer.PointerId != _rulerPointerId)
+    {
+      return;
     }
 
-    private void TimelineScroll_SizeChanged(object sender, SizeChangedEventArgs e)
+    ScrubRuler(e, forcePreview: true);
+    RulerCanvas.ReleasePointerCapture(e.Pointer);
+    _rulerPointerActive = false;
+    _rulerPointerId = 0;
+    e.Handled = true;
+  }
+
+  private void RulerCanvas_PointerCanceled(object sender, PointerRoutedEventArgs e)
+  {
+    if (e.Pointer.PointerId == _rulerPointerId)
     {
-        if (_timelineDocument is not null)
-        {
-            RenderRuler();
-            if (_dragBorder is null) RenderTimeline();
-        }
+      _rulerPointerActive = false;
+      _rulerPointerId = 0;
+    }
+  }
+
+  private void ScrubRuler(PointerRoutedEventArgs e, bool forcePreview)
+  {
+    double position = SnapTime(e.GetCurrentPoint(RulerCanvas).Position.X / _pixelsPerSecond);
+    SetPosition(position, requestPreview: !forcePreview);
+    if (forcePreview)
+    {
+      _ = RefreshPreviewAsync(force: true);
+    }
+  }
+
+  private async void TimelinePage_KeyDown(object sender, KeyRoutedEventArgs e)
+  {
+    if (IsTextEntrySource(e.OriginalSource) ||
+        IsSliderAdjustment(e.OriginalSource, e.Key) ||
+        IsButtonActivation(e.OriginalSource, e.Key))
+    {
+      return;
     }
 
-    private void TimelineCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    StudioKeyModifiers modifiers = StudioKeyModifiers.None;
+    if (IsKeyPressed(VirtualKey.Control))
     {
-        Point point = e.GetCurrentPoint(TimelineCanvas).Position;
-        StopPlayback();
-        TimelineCanvas.Focus(FocusState.Pointer);
-        SelectLane(null);
-        SetPosition(SnapTime(point.X / _pixelsPerSecond), requestPreview: true);
+      modifiers |= StudioKeyModifiers.Control;
     }
 
-    private void TimelineScroll_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    if (IsKeyPressed(VirtualKey.Menu))
     {
-        if (!IsControlPressed())
-        {
-            return;
-        }
+      modifiers |= StudioKeyModifiers.Alt;
+    }
 
-        Microsoft.UI.Input.PointerPoint point = e.GetCurrentPoint(TimelineScroll);
-        double factor = point.Properties.MouseWheelDelta > 0 ? 1.15 : 1 / 1.15;
-        ApplyZoom(_pixelsPerSecond * factor, point.Position.X);
+    if (IsKeyPressed(VirtualKey.Shift))
+    {
+      modifiers |= StudioKeyModifiers.Shift;
+    }
+
+    if (IsKeyPressed(VirtualKey.LeftWindows) || IsKeyPressed(VirtualKey.RightWindows))
+    {
+      modifiers |= StudioKeyModifiers.Windows;
+    }
+
+    string? commandId = App.Services.RemoteControl.ResolveKey(new(e.Key.ToString().ToUpperInvariant(), modifiers));
+    if (commandId is not null)
+    {
+      await DispatchCommandAsync(commandId, "keyboard");
+      e.Handled = true;
+      return;
+    }
+  }
+
+  private async void TimelineCanvas_KeyDown(object sender, KeyRoutedEventArgs e)
+  {
+    switch (e.Key)
+    {
+      case VirtualKey.Delete:
+        await DeleteSelectedAsync();
         e.Handled = true;
+        break;
+    }
+  }
+
+  private static bool IsTextEntrySource(object source)
+  {
+    DependencyObject? current = source as DependencyObject;
+    while (current is not null)
+    {
+      if (current is TextBox or PasswordBox or NumberBox or AutoSuggestBox or ComboBox)
+      {
+        return true;
+      }
+
+      current = VisualTreeHelper.GetParent(current);
+    }
+    return false;
+  }
+
+  private static bool IsSliderAdjustment(object source, VirtualKey key)
+  {
+    if (key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End))
+    {
+      return false;
     }
 
-    private void RulerCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    DependencyObject? current = source as DependencyObject;
+    while (current is not null)
     {
-        _rulerPointerActive = true;
-        _rulerPointerId = e.Pointer.PointerId;
-        RulerCanvas.CapturePointer(e.Pointer);
-        StopPlayback();
-        ScrubRuler(e, forcePreview: false);
-        e.Handled = true;
+      if (current is Slider)
+      {
+        return true;
+      }
+
+      current = VisualTreeHelper.GetParent(current);
+    }
+    return false;
+  }
+
+  private static bool IsButtonActivation(object source, VirtualKey key)
+  {
+    if (key is not (VirtualKey.Space or VirtualKey.Enter))
+    {
+      return false;
     }
 
-    private void RulerCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+    DependencyObject? current = source as DependencyObject;
+    while (current is not null)
     {
-        if (!_rulerPointerActive || e.Pointer.PointerId != _rulerPointerId)
-        {
-            return;
-        }
+      if (current is ButtonBase)
+      {
+        return true;
+      }
 
-        ScrubRuler(e, forcePreview: false);
-        e.Handled = true;
+      current = VisualTreeHelper.GetParent(current);
+    }
+    return false;
+  }
+
+  private void SelectToolButton_Click(object sender, RoutedEventArgs e)
+  {
+    SetPointerTool(TimelinePointerTool.Select);
+  }
+
+  private void BladeToolButton_Click(object sender, RoutedEventArgs e)
+  {
+    SetPointerTool(TimelinePointerTool.Blade);
+  }
+
+  private void SnapCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (!_isLoaded)
+    {
+      return;
     }
 
-    private void RulerCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
-    {
-        if (!_rulerPointerActive || e.Pointer.PointerId != _rulerPointerId)
-        {
-            return;
-        }
+    RenderTimeline();
+    RefreshCameraEditor();
+    UpdateCommandState();
+  }
 
-        ScrubRuler(e, forcePreview: true);
-        RulerCanvas.ReleasePointerCapture(e.Pointer);
-        _rulerPointerActive = false;
-        _rulerPointerId = 0;
-        e.Handled = true;
+  private void RippleToggle_Changed(object sender, RoutedEventArgs e)
+  {
+    _rippleEnabled = RippleToggle.IsChecked == true;
+  }
+
+  private async void TrackLockButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || sender is not Button { Tag: int trackIndex })
+    {
+      return;
     }
 
-    private void RulerCanvas_PointerCanceled(object sender, PointerRoutedEventArgs e)
+    JsonObject before = CloneDocument(_timelineDocument);
+    bool locked = !TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex);
+    _timelineDocument = TimelineProjection.SetTrackLocked(_timelineDocument, trackIndex, locked);
+    await CommitLanesAsync(
+        before,
+        locked ? "timeline track locked" : "timeline track unlocked",
+        _selectedLaneId);
+  }
+
+  private async void UndoAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+  {
+    args.Handled = true;
+    await ApplyHistoryAsync("undo");
+  }
+
+  private async void RedoAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+  {
+    args.Handled = true;
+    await ApplyHistoryAsync("redo");
+  }
+
+  private void SaveAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+  {
+    args.Handled = true;
+    SaveTimeline_Click(sender, new RoutedEventArgs());
+  }
+
+  private async void DuplicateAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+  {
+    args.Handled = true;
+    await DuplicateSelectedAsync();
+  }
+
+  private static bool IsControlPressed()
+  {
+    return (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control) &
+       CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
+  }
+
+  private bool CanQuantizeToCurrentGrid()
+  {
+    return TryGetSnapGridSeconds(out _);
+  }
+
+  private bool TryGetSnapGridSeconds(out double gridSeconds)
+  {
+    gridSeconds = 0;
+    string mode = GetSelectedTag(SnapCombo) ?? "off";
+    if (string.Equals(mode, "off", StringComparison.OrdinalIgnoreCase))
     {
-        if (e.Pointer.PointerId == _rulerPointerId)
-        {
-            _rulerPointerActive = false;
-            _rulerPointerId = 0;
-        }
+      return false;
     }
 
-    private void ScrubRuler(PointerRoutedEventArgs e, bool forcePreview)
+    double bpm = _project?.Bpm is double projectBpm &&
+                 double.IsFinite(projectBpm) &&
+                 projectBpm > 0
+        ? projectBpm
+        : 120;
+    double beatSeconds = 60 / bpm;
+    gridSeconds = mode switch
     {
-        double position = SnapTime(e.GetCurrentPoint(RulerCanvas).Position.X / _pixelsPerSecond);
-        SetPosition(position, requestPreview: !forcePreview);
-        if (forcePreview)
-        {
-            _ = RefreshPreviewAsync(force: true);
-        }
-    }
+      "half" => beatSeconds / 2,
+      "quarter" => beatSeconds / 4,
+      _ => beatSeconds
+    };
+    return double.IsFinite(gridSeconds) && gridSeconds > 0;
+  }
 
-    private async void TimelinePage_KeyDown(object sender, KeyRoutedEventArgs e)
-    {
-        if (IsTextEntrySource(e.OriginalSource) ||
-            IsSliderAdjustment(e.OriginalSource, e.Key) ||
-            IsButtonActivation(e.OriginalSource, e.Key)) return;
-        StudioKeyModifiers modifiers = StudioKeyModifiers.None;
-        if (IsKeyPressed(VirtualKey.Control)) modifiers |= StudioKeyModifiers.Control;
-        if (IsKeyPressed(VirtualKey.Menu)) modifiers |= StudioKeyModifiers.Alt;
-        if (IsKeyPressed(VirtualKey.Shift)) modifiers |= StudioKeyModifiers.Shift;
-        if (IsKeyPressed(VirtualKey.LeftWindows) || IsKeyPressed(VirtualKey.RightWindows)) modifiers |= StudioKeyModifiers.Windows;
-        string? commandId = App.Services.RemoteControl.ResolveKey(new(e.Key.ToString().ToUpperInvariant(), modifiers));
-        if (commandId is not null)
-        {
-            await DispatchCommandAsync(commandId, "keyboard");
-            e.Handled = true;
-            return;
-        }
-    }
-
-    private async void TimelineCanvas_KeyDown(object sender, KeyRoutedEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case VirtualKey.Delete:
-                await DeleteSelectedAsync();
-                e.Handled = true;
-                break;
-        }
-    }
-
-    private static bool IsTextEntrySource(object source)
-    {
-        DependencyObject? current = source as DependencyObject;
-        while (current is not null)
-        {
-            if (current is TextBox or PasswordBox or NumberBox or AutoSuggestBox or ComboBox) return true;
-            current = VisualTreeHelper.GetParent(current);
-        }
-        return false;
-    }
-
-    private static bool IsSliderAdjustment(object source, VirtualKey key)
-    {
-        if (key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End))
-        {
-            return false;
-        }
-
-        DependencyObject? current = source as DependencyObject;
-        while (current is not null)
-        {
-            if (current is Slider) return true;
-            current = VisualTreeHelper.GetParent(current);
-        }
-        return false;
-    }
-
-    private static bool IsButtonActivation(object source, VirtualKey key)
-    {
-        if (key is not (VirtualKey.Space or VirtualKey.Enter)) return false;
-
-        DependencyObject? current = source as DependencyObject;
-        while (current is not null)
-        {
-            if (current is ButtonBase) return true;
-            current = VisualTreeHelper.GetParent(current);
-        }
-        return false;
-    }
-
-    private void SelectToolButton_Click(object sender, RoutedEventArgs e) =>
-        SetPointerTool(TimelinePointerTool.Select);
-
-    private void BladeToolButton_Click(object sender, RoutedEventArgs e) =>
-        SetPointerTool(TimelinePointerTool.Blade);
-
-    private void SnapCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_isLoaded)
-        {
-            return;
-        }
-
-        RenderTimeline();
-        RefreshCameraEditor();
-        UpdateCommandState();
-    }
-
-    private void RippleToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        _rippleEnabled = RippleToggle.IsChecked == true;
-    }
-
-    private async void TrackLockButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null || sender is not Button { Tag: int trackIndex })
-        {
-            return;
-        }
-
-        JsonObject before = CloneDocument(_timelineDocument);
-        bool locked = !TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex);
-        _timelineDocument = TimelineProjection.SetTrackLocked(_timelineDocument, trackIndex, locked);
-        await CommitLanesAsync(
-            before,
-            locked ? "timeline track locked" : "timeline track unlocked",
-            _selectedLaneId);
-    }
-
-    private async void UndoAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
-    {
-        args.Handled = true;
-        await ApplyHistoryAsync("undo");
-    }
-
-    private async void RedoAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
-    {
-        args.Handled = true;
-        await ApplyHistoryAsync("redo");
-    }
-
-    private void SaveAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
-    {
-        args.Handled = true;
-        SaveTimeline_Click(sender, new RoutedEventArgs());
-    }
-
-    private async void DuplicateAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
-    {
-        args.Handled = true;
-        await DuplicateSelectedAsync();
-    }
-
-    private static bool IsControlPressed() =>
-        (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control) &
-         CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
-
-    private bool CanQuantizeToCurrentGrid() =>
-        TryGetSnapGridSeconds(out _);
-
-    private bool TryGetSnapGridSeconds(out double gridSeconds)
-    {
-        gridSeconds = 0;
-        string mode = GetSelectedTag(SnapCombo) ?? "off";
-        if (string.Equals(mode, "off", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        double bpm = _project?.Bpm is double projectBpm &&
-                     double.IsFinite(projectBpm) &&
-                     projectBpm > 0
-            ? projectBpm
-            : 120;
-        double beatSeconds = 60 / bpm;
-        gridSeconds = mode switch
-        {
-            "half" => beatSeconds / 2,
-            "quarter" => beatSeconds / 4,
-            _ => beatSeconds
-        };
-        return double.IsFinite(gridSeconds) && gridSeconds > 0;
-    }
-
-    private double SnapTime(double value)
-    {
-        double clamped = double.IsFinite(value)
-            ? Math.Clamp(value, 0, _durationSeconds)
-            : 0;
-        if (!TryGetSnapGridSeconds(out double gridSeconds))
-        {
-            return clamped;
-        }
-
-        return Math.Clamp(
+  private double SnapTime(double value)
+  {
+    double clamped = double.IsFinite(value)
+        ? Math.Clamp(value, 0, _durationSeconds)
+        : 0;
+    return !TryGetSnapGridSeconds(out double gridSeconds)
+          ? clamped
+          : Math.Clamp(
             Math.Round(clamped / gridSeconds, MidpointRounding.AwayFromZero) * gridSeconds,
             0,
             _durationSeconds);
+  }
+
+  private (double Start, double End) ResolveLoopBounds()
+  {
+    double start = ReadFiniteOrDefault(LoopInNumberBox, 0);
+    double end = ReadFiniteOrDefault(LoopOutNumberBox, _durationSeconds);
+    start = Math.Clamp(start, 0, _durationSeconds);
+    end = Math.Clamp(end, start + TimelineProjection.MinimumDurationSeconds, _durationSeconds);
+    return (start, end);
+  }
+
+  private async Task RefreshPreviewAsync(bool force)
+  {
+    CancelPreview();
+    if (_timelineDocument is null ||
+        string.IsNullOrWhiteSpace(_loadedProjectId) ||
+        !TimelineProjection.HasRenderableVideoClip(_timelineDocument))
+    {
+      PreviewSurface.ShowUnsupported("No renderable video clip is present at this timeline.");
+      PreviewHintText.Text = "Add a video clip with a source path to enable preview.";
+      return;
+    }
+    PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+        PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Preview);
+    if (!gate.Allowed)
+    {
+      PreviewSurface.ShowUnsupported(gate.Explanation);
+      PreviewHintText.Text = gate.Explanation;
+      return;
     }
 
-    private (double Start, double End) ResolveLoopBounds()
+    CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+        _pageCancellation?.Token ?? CancellationToken.None);
+    _previewCancellation = cancellation;
+    long generation = ++_previewGeneration;
+    try
     {
-        double start = ReadFiniteOrDefault(LoopInNumberBox, 0);
-        double end = ReadFiniteOrDefault(LoopOutNumberBox, _durationSeconds);
-        start = Math.Clamp(start, 0, _durationSeconds);
-        end = Math.Clamp(end, start + TimelineProjection.MinimumDurationSeconds, _durationSeconds);
-        return (start, end);
+      if (!force)
+      {
+        await Task.Delay(TimeSpan.FromMilliseconds(90), cancellation.Token);
+      }
+
+      PreviewHintText.Text = $"Rendering frame at {FormatClock(_positionSeconds)}...";
+      double requestPosition = _positionSeconds;
+      _ = await App.Services.ApiClient.StreamTimelineFrameAsync(
+          _loadedProjectId,
+          requestPosition,
+          1280,
+          720,
+          force,
+          async (file, token) =>
+          {
+            if (generation != _previewGeneration)
+            {
+              return false;
+            }
+
+            await PreviewSurface.LoadStreamAsync(
+                      file.Stream,
+                      file.ContentHeaders.ContentType?.MediaType,
+                      token);
+            return true;
+          },
+          cancellation.Token);
+      if (generation == _previewGeneration)
+      {
+        PreviewHintText.Text = $"Frame {FormatClock(requestPosition)}";
+      }
     }
-
-    private async Task RefreshPreviewAsync(bool force)
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
     {
-        CancelPreview();
-        if (_timelineDocument is null ||
-            string.IsNullOrWhiteSpace(_loadedProjectId) ||
-            !TimelineProjection.HasRenderableVideoClip(_timelineDocument))
-        {
-            PreviewSurface.ShowUnsupported("No renderable video clip is present at this timeline.");
-            PreviewHintText.Text = "Add a video clip with a source path to enable preview.";
-            return;
-        }
-        PostProductionOperationGate gate = PostProductionCapabilities.Gate(
-            PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Preview);
-        if (!gate.Allowed)
-        {
-            PreviewSurface.ShowUnsupported(gate.Explanation);
-            PreviewHintText.Text = gate.Explanation;
-            return;
-        }
-
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            _pageCancellation?.Token ?? CancellationToken.None);
-        _previewCancellation = cancellation;
-        long generation = ++_previewGeneration;
-        try
-        {
-            if (!force)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(90), cancellation.Token);
-            }
-
-            PreviewHintText.Text = $"Rendering frame at {FormatClock(_positionSeconds)}...";
-            double requestPosition = _positionSeconds;
-            await App.Services.ApiClient.StreamTimelineFrameAsync(
-                _loadedProjectId,
-                requestPosition,
-                1280,
-                720,
-                force,
-                async (file, token) =>
-                {
-                    if (generation != _previewGeneration)
-                    {
-                        return false;
-                    }
-
-                    await PreviewSurface.LoadStreamAsync(
-                        file.Stream,
-                        file.ContentHeaders.ContentType?.MediaType,
-                        token);
-                    return true;
-                },
-                cancellation.Token);
-            if (generation == _previewGeneration)
-            {
-                PreviewHintText.Text = $"Frame {FormatClock(requestPosition)}";
-            }
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            CrashLogger.Write($"Timeline recovery status could not be refreshed for project '{_loadedProjectId}'.", ex);
-            if (generation == _previewGeneration)
-            {
-                PreviewSurface.ShowError(ex.Message);
-                PreviewHintText.Text = "Timeline preview failed.";
-            }
-        }
-        finally
-        {
-            if (ReferenceEquals(_previewCancellation, cancellation))
-            {
-                _previewCancellation = null;
-            }
-
-            cancellation.Dispose();
-        }
     }
-
-    private void CancelPreview()
+    catch (Exception ex)
     {
-        _previewGeneration++;
-        _previewCancellation?.Cancel();
+      CrashLogger.Write($"Timeline recovery status could not be refreshed for project '{_loadedProjectId}'.", ex);
+      if (generation == _previewGeneration)
+      {
+        PreviewSurface.ShowError(ex.Message);
+        PreviewHintText.Text = "Timeline preview failed.";
+      }
+    }
+    finally
+    {
+      if (ReferenceEquals(_previewCancellation, cancellation))
+      {
         _previewCancellation = null;
+      }
+
+      cancellation.Dispose();
+    }
+  }
+
+  private void CancelPreview()
+  {
+    _previewGeneration++;
+    _previewCancellation?.Cancel();
+    _previewCancellation = null;
+  }
+
+  private async void RenderMaster_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      return;
     }
 
-    private async void RenderMaster_Click(object sender, RoutedEventArgs e)
+    string name = OutputNameTextBox.Text.Trim();
+    if (string.IsNullOrWhiteSpace(name))
     {
-        if (_timelineDocument is null || string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            return;
-        }
+      ShowInfo("Enter an output name before rendering.", InfoBarSeverity.Warning);
+      return;
+    }
 
-        string name = OutputNameTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            ShowInfo("Enter an output name before rendering.", InfoBarSeverity.Warning);
-            return;
-        }
+    string mode = GetSelectedTag(ModeComboBox) ?? "final";
+    string aspect = GetSelectedTag(AspectRatioComboBox) ?? "16:9";
+    (int width, int height) = ResolveRenderDimensions(mode, aspect);
+    int quality = string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase)
+        ? 23
+        : 18;
 
-        string mode = GetSelectedTag(ModeComboBox) ?? "final";
-        string aspect = GetSelectedTag(AspectRatioComboBox) ?? "16:9";
-        (int width, int height) = ResolveRenderDimensions(mode, aspect);
-        int quality = string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase)
-            ? 23
-            : 18;
+    SetBusy(true);
+    StatusText.Text = "Queueing timeline render...";
+    try
+    {
+      PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+          PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Render);
+      if (!gate.Allowed)
+      {
+        throw new InvalidOperationException(gate.Explanation);
+      }
 
-        SetBusy(true);
-        StatusText.Text = "Queueing timeline render...";
-        try
-        {
-            PostProductionOperationGate gate = PostProductionCapabilities.Gate(
-                PostProductionContracts.Read(_timelineDocument), PostProductionOperation.Render);
-            if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
-            var request = new TimelineRenderRequest(
+      TimelineRenderRequest request = new(
                 width,
                 height,
                 CurrentFramesPerSecond,
@@ -4913,1441 +5493,1547 @@ public sealed partial class TimelinePage : Page
                 "aac",
                 quality,
                 name);
-            TimelineRenderResponse response =
-                await App.Services.ApiClient.QueueTimelineRenderAsync(
-                    _loadedProjectId,
-                    request,
-                    _pageCancellation?.Token ?? CancellationToken.None);
-            if (!response.Ok)
-            {
-                throw new InvalidOperationException("The backend did not accept the timeline render.");
-            }
+      TimelineRenderResponse response =
+          await App.Services.ApiClient.QueueTimelineRenderAsync(
+              _loadedProjectId,
+              request,
+              _pageCancellation?.Token ?? CancellationToken.None);
+      if (!response.Ok)
+      {
+        throw new InvalidOperationException("The backend did not accept the timeline render.");
+      }
 
-            StatusText.Text = $"Render {response.Job.Id}: {response.Job.Status}";
-            ShowInfo(
-                $"Timeline render queued as job {response.Job.Id}.",
-                InfoBarSeverity.Success);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            await HandleProjectRevisionConflictAsync(conflict);
-        }
-        catch (Exception ex)
-        {
-            CrashLogger.Write($"Timeline recovery could not be applied for project '{_loadedProjectId}'.", ex);
-            StatusText.Text = "Render could not be queued.";
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+      StatusText.Text = $"Render {response.Job.Id}: {response.Job.Status}";
+      ShowInfo(
+          $"Timeline render queued as job {response.Job.Id}.",
+          InfoBarSeverity.Success);
     }
-
-    private static (int Width, int Height) ResolveRenderDimensions(
-        string mode,
-        string aspect)
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
     {
-        int longEdge = string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase)
-            ? 1280
-            : 1920;
-        int shortEdge = string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase)
-            ? 720
-            : 1080;
-        return aspect switch
-        {
-            "9:16" => (shortEdge, longEdge),
-            "1:1" => (shortEdge, shortEdge),
-            "4:5" => (
-                string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase) ? 864 : 1080,
-                string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase) ? 1080 : 1350),
-            _ => (longEdge, shortEdge)
-        };
     }
-
-    private async Task RefreshRecoveryAsync()
+    catch (ProjectRevisionConflictException conflict)
     {
-        if (string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            return;
-        }
-
-        try
-        {
-            JsonElement response = await App.Services.ApiClient.GetRecoveryAsync(
-                _loadedProjectId,
-                _pageCancellation?.Token ?? CancellationToken.None);
-            _recoveryDocument = JsonNode.Parse(response.GetRawText()) as JsonObject;
-            RefreshRecoverySummary();
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (Exception ex)
-        {
-            CrashLogger.Write($"Timeline recovery metadata could not be exported for project '{_loadedProjectId}'.", ex);
-            BackupSummaryText.Text = $"Recovery status unavailable: {ex.Message}";
-        }
+      await HandleProjectRevisionConflictAsync(conflict);
     }
-
-    private void RefreshRecoverySummary()
+    catch (Exception ex)
     {
-        bool needsRecovery = _recoveryDocument?["needs_recovery"]?.GetValue<bool>() == true;
-        int candidateCount = (_recoveryDocument?["candidates"] as JsonArray)?.Count ?? 0;
-        BackupSummaryText.Text = needsRecovery
-            ? $"{candidateCount} recovery candidate{(candidateCount == 1 ? string.Empty : "s")} available."
-            : candidateCount > 0
-                ? $"{candidateCount} clean backup candidate{(candidateCount == 1 ? string.Empty : "s")} available."
-                : "No recovery candidates are available.";
-        RestoreBackupButton.IsEnabled = !_isBusy && needsRecovery && candidateCount > 0;
-        ExportRecoveryButton.IsEnabled = !_isBusy && _recoveryDocument is not null;
-        DeleteRecoveryButton.IsEnabled = !_isBusy && needsRecovery;
+      CrashLogger.Write($"Timeline recovery could not be applied for project '{_loadedProjectId}'.", ex);
+      StatusText.Text = "Render could not be queued.";
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
     }
-
-    private async void RestoreBackup_Click(object sender, RoutedEventArgs e)
+    finally
     {
-        if (string.IsNullOrWhiteSpace(_loadedProjectId) ||
-            !TryGetRecoveryCandidate(out string source, out string? snapshotName))
-        {
-            ShowInfo("No recovery candidate is available.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!await ConfirmAsync(
-            "Restore recovery data?",
-            "The selected recovery candidate will replace the current project timeline.",
-            "Restore"))
-        {
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            await App.Services.ApiClient.ApplyRecoveryAsync(
-                _loadedProjectId,
-                new RecoveryApplyRequest(
-                    source,
-                    snapshotName,
-                    StudioPageHelpers.ExpectedRevision(_project)),
-                _pageCancellation?.Token ?? CancellationToken.None);
-            await LoadActiveProjectAsync(forceReload: true);
-            ShowInfo("Recovery data was restored.", InfoBarSeverity.Success);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            await HandleProjectRevisionConflictAsync(conflict);
-        }
-        catch (Exception ex)
-        {
-            CrashLogger.Write($"Timeline recovery journal could not be discarded for project '{_loadedProjectId}'.", ex);
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+      SetBusy(false);
     }
+  }
 
-    private bool TryGetRecoveryCandidate(out string source, out string? snapshotName)
+  private static (int Width, int Height) ResolveRenderDimensions(
+      string mode,
+      string aspect)
+  {
+    int longEdge = string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase)
+        ? 1280
+        : 1920;
+    int shortEdge = string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase)
+        ? 720
+        : 1080;
+    return aspect switch
     {
-        if (!TimelineRecovery.TrySelectCrashRecovery(
-                _recoveryDocument,
-                out TimelineRecoveryCandidate candidate))
-        {
-            source = "journal";
-            snapshotName = null;
-            return false;
-        }
-
-        source = candidate.Source;
-        snapshotName = candidate.SnapshotName;
-        return true;
-    }
-
-    private async void ExportRecovery_Click(object sender, RoutedEventArgs e)
-    {
-        if (_recoveryDocument is null || App.MainWindowInstance is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var picker = new FileSavePicker
-            {
-                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
-                SuggestedFileName = $"{_project?.Name ?? "timeline"}-recovery"
-            };
-            picker.FileTypeChoices.Add("JSON document", [".json"]);
-            nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
-            StorageFile? file = await picker.PickSaveFileAsync();
-            if (file is null)
-            {
-                return;
-            }
-
-            await FileIO.WriteTextAsync(
-                file,
-                _recoveryDocument.ToJsonString(new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                }));
-            ShowInfo("Recovery metadata was exported.", InfoBarSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
-        }
-    }
-
-    private async void DeleteRecovery_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(_loadedProjectId) ||
-            !await ConfirmAsync(
-                "Discard recovery journal?",
-                "This marks the autosave journal clean. Recovery snapshots and project files are not deleted.",
-                "Discard"))
-        {
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            await App.Services.ApiClient.DiscardRecoveryAsync(
-                _loadedProjectId,
-                _pageCancellation?.Token ?? CancellationToken.None);
-            await RefreshRecoveryAsync();
-            ShowInfo("The recovery journal was discarded.", InfoBarSeverity.Success);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            await HandleProjectRevisionConflictAsync(conflict);
-        }
-        catch (Exception ex)
-        {
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private async void ApplyRaw_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null)
-        {
-            return;
-        }
-
-        JsonObject? parsed;
-        try
-        {
-            parsed = JsonNode.Parse(TimelineTextBox.Text) as JsonObject;
-        }
-        catch (JsonException ex)
-        {
-            ShowInfo($"Invalid JSON: {ex.Message}", InfoBarSeverity.Error);
-            return;
-        }
-
-        if (parsed is null)
-        {
-            ShowInfo("Timeline JSON must be an object.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        try
-        {
-            _ = TimelineProjection.Project(parsed);
-            _ = TimelineCameraProjection.Project(parsed);
-            if (_project is not null)
-            {
-                CanonicalProject candidateProject = ProjectTimelineContracts.FromTimeline(_project, parsed);
-                _ = MixerDocumentCodec.ReadOrMigrate(parsed, candidateProject);
-            }
-            JsonObject before = CloneDocument(_timelineDocument);
-            await CommitDocumentAsync(before, parsed, "timeline raw JSON applied");
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or InvalidDataException or ArgumentException)
-        {
-            ShowInfo(ex.Message, InfoBarSeverity.Error);
-        }
-    }
-
-    private void RevertRaw_Click(object sender, RoutedEventArgs e)
-    {
-        if (_timelineDocument is null)
-        {
-            return;
-        }
-
-        TimelineTextBox.Text = _timelineDocument.ToJsonString(new JsonSerializerOptions
-        {
-            WriteIndented = true
-        });
-        PageInfoBar.IsOpen = false;
-    }
-
-    private void ResetPostProductionEditor(string message)
-    {
-        PostStatusText.Text = message;
-        PostTimebaseText.Text = "Timebase unavailable.";
-        PostPlayheadTimecodeText.Text = "Playhead: --:--:--:--";
-        PostSyncReferenceMediaComboBox.ItemsSource = null;
-        PostSyncMediaComboBox.ItemsSource = null;
-        PostAdrMediaComboBox.ItemsSource = null;
-        PostAudioLayoutMediaComboBox.ItemsSource = null;
-        PostAdrCueListView.ItemsSource = null;
-        PostAdrTakeListView.ItemsSource = null;
-        PostAudioLayoutsText.Text = "No layout metadata.";
-        PostCompatibilityText.Text = "No interchange report.";
-        PostSyncPreviewText.Text = "No alignment planned.";
-        PostReconformPreviewText.Text = "No reconform preview.";
-        ApplyPostSyncButton.IsEnabled = false;
-        ApplyPostReconformButton.IsEnabled = false;
-    }
-
-    private void InvalidatePostPreviews()
-    {
-        if (_pendingPostAlignment is not null)
-            PostSyncPreviewText.Text = "Timeline changed; plan alignment again before applying.";
-        if (_pendingReconformPlan is not null)
-            PostReconformPreviewText.Text = "Timeline changed; preview reconform again before applying.";
-        _pendingPostAlignment = null;
-        _pendingPostAlignmentDocument = null;
-        _pendingReconformPlan = null;
-        _pendingReconformDocument = null;
-        ApplyPostSyncButton.IsEnabled = false;
-        ApplyPostReconformButton.IsEnabled = false;
-    }
-
-    private void RefreshPostProductionEditor()
-    {
-        if (_timelineDocument is null || _canonicalProject is null)
-        {
-            ResetPostProductionEditor("Load a project to use post-production tools.");
-            return;
-        }
-
-        try
-        {
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument);
-            ProjectTimebase timebase = _canonicalProject.Timebase;
-            string rate = timebase.FrameRate.Denominator == 1
-                ? timebase.FrameRate.Numerator.ToString(CultureInfo.InvariantCulture)
-                : $"{timebase.FrameRate.Numerator}/{timebase.FrameRate.Denominator} ({timebase.FrameRate.FramesPerSecond:0.###})";
-            string timecodeMode = Timecode.Supports(timebase.FrameRate)
-                ? $"Start {timebase.StartTimecode}  •  {(timebase.DropFrame ? "drop-frame" : "non-drop-frame")}"
-                : "Professional timecode unavailable for this legacy frame rate";
-            PostTimebaseText.Text = $"{timecodeMode}  •  {rate} fps  •  {timebase.SampleRate:N0} Hz";
-            PostPlayheadTimecodeText.Text = $"Playhead: {FormatTimecode(_positionSeconds)}";
-
-            List<ProfessionalListItem> assets = _canonicalProject.MediaAssets
-                .Select(asset => new ProfessionalListItem(asset.Id, string.IsNullOrWhiteSpace(asset.Path) ? asset.Id : System.IO.Path.GetFileName(asset.Path), asset.Kind))
-                .ToList();
-            string? syncReferenceAsset = (PostSyncReferenceMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
-            string? syncAsset = (PostSyncMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
-            string? adrAsset = (PostAdrMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
-            string? layoutAsset = (PostAudioLayoutMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
-            PostSyncReferenceMediaComboBox.ItemsSource = assets;
-            PostSyncMediaComboBox.ItemsSource = assets;
-            PostAdrMediaComboBox.ItemsSource = assets;
-            PostAudioLayoutMediaComboBox.ItemsSource = new[] { new ProfessionalListItem(string.Empty, "None") }.Concat(assets).ToList();
-            SelectListItem(PostSyncReferenceMediaComboBox, syncReferenceAsset);
-            SelectListItem(PostSyncMediaComboBox, syncAsset);
-            SelectListItem(PostAdrMediaComboBox, adrAsset);
-            SelectListItem(PostAudioLayoutMediaComboBox, layoutAsset ?? string.Empty);
-
-            string? cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id;
-            PostAdrCueListView.ItemsSource = post.AdrCues.Select(cue => new ProfessionalListItem(
-                cue.Id, $"{cue.Id}: {cue.Text}", $"{cue.StartSample}–{cue.EndSample} • {cue.Takes.Length} takes")).ToList();
-            SelectListItem(PostAdrCueListView, cueId);
-            RefreshPostAdrTakes(post);
-            PostAudioLayoutsText.Text = post.AudioLayouts.IsEmpty
-                ? "No layout metadata. Native playback/render/export is stereo-only."
-                : string.Join(Environment.NewLine, post.AudioLayouts.Select(layout => $"{layout.Id}: {layout.Layout}, {layout.Channels} channel(s), media {layout.MediaAssetId ?? "none"}"));
-            PostStatusText.Text = $"Post document v{post.SchemaVersion}: {post.SyncAnchors.Length} sync anchors, {post.AdrCues.Length} ADR cues, {post.ReconformHistory.Length} reconforms.";
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException)
-        {
-            PostStatusText.Text = $"Post data is invalid: {ex.Message}";
-            ShowInfo(PostStatusText.Text, InfoBarSeverity.Error);
-        }
-    }
-
-    private static void SelectListItem(Selector selector, string? id)
-    {
-        if (id is null) return;
-        selector.SelectedItem = selector.Items.OfType<ProfessionalListItem>().FirstOrDefault(item => item.Id == id);
-    }
-
-    private void RefreshPostAdrTakes(PostProductionDocument? supplied = null)
-    {
-        if (_timelineDocument is null) return;
-        PostProductionDocument post = supplied ?? PostProductionContracts.Read(_timelineDocument);
-        string? cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id;
-        AdrCue? cue = post.AdrCues.FirstOrDefault(value => value.Id == cueId);
-        PostAdrTakeListView.ItemsSource = cue?.Takes.Select(take => new ProfessionalListItem(
-            take.Id, $"{take.Id}: {take.MediaAssetId}", $"{take.ReviewStatus}{(take.Preferred ? " • preferred" : string.Empty)}")).ToList() ?? [];
-    }
-
-    private void PostAdrCue_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isXamlInitialized) RefreshPostAdrTakes();
-    }
-
-    private void PostSyncMethod_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (PostReferenceTimecodeTextBox is null || PostCandidateTimecodeTextBox is null || PostSyncLimitationText is null)
-            return;
-        bool timecode = GetSelectedTag(PostSyncMethodComboBox) == "timecode";
-        PostReferenceTimecodeTextBox.IsEnabled = timecode;
-        PostCandidateTimecodeTextBox.IsEnabled = timecode;
-        PostSyncReferenceMediaComboBox.IsEnabled = !timecode;
-        PostSyncLimitationText.Text = timecode
-            ? "Timecode alignment uses the canonical project timebase and requires explicit acceptance."
-            : $"Native WAVE analysis uses authorized project media, matching the project sample rate, and is bounded to {WaveAlignmentService.MaximumSamplesPerSource:N0} frames per source.";
-        CancelPostAlignment();
-        _pendingPostAlignment = null;
-        ApplyPostSyncButton.IsEnabled = false;
-    }
-
-    private async void PlanPostSync_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            string methodTag = GetSelectedTag(PostSyncMethodComboBox) ?? "timecode";
-            ProfessionalListItem candidate = PostSyncMediaComboBox.SelectedItem as ProfessionalListItem
-                ?? throw new InvalidDataException("Select candidate project media.");
-            ProjectTimebase timebase = _canonicalProject!.Timebase;
-            AlignmentResult result;
-            SyncMethod method;
-            if (methodTag == "timecode")
-            {
-                Timecode reference = Timecode.Parse(PostReferenceTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
-                Timecode candidateTimecode = Timecode.Parse(PostCandidateTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
-                result = PostAlignment.FromTimecode(reference, candidateTimecode, timebase);
-                method = SyncMethod.Timecode;
-            }
-            else
-            {
-                ProfessionalListItem reference = PostSyncReferenceMediaComboBox.SelectedItem as ProfessionalListItem
-                    ?? throw new InvalidDataException("Select reference project media.");
-                if (reference.Id == candidate.Id)
-                    throw new InvalidDataException("Reference and candidate media must be different assets.");
-                method = PostProductionContracts.ParseSyncSelection(methodTag);
-
-                CancelPostAlignment();
-                _postAlignmentCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation?.Token ?? CancellationToken.None);
-                CancellationToken cancellationToken = _postAlignmentCancellation.Token;
-                string projectId = _loadedProjectId!;
-                long revision = _editorRevision;
-                JsonObject document = _timelineDocument!;
-                SetPostAlignmentBusy(true, "Materializing authorized project media…");
-                string referencePath = await MaterializePostAlignmentAssetAsync(_canonicalProject!, projectId, reference.Id, cancellationToken);
-                string candidatePath = await MaterializePostAlignmentAssetAsync(_canonicalProject!, projectId, candidate.Id, cancellationToken);
-                EnsurePostPreviewCurrent(projectId, revision, document);
-                SetPostStatus("Analyzing bounded waveform windows…");
-                await using FileStream referenceStream = File.OpenRead(referencePath);
-                await using FileStream candidateStream = File.OpenRead(candidatePath);
-                int maximumShift = Math.Min(timebase.SampleRate * 10, WaveAlignmentService.MaximumShiftSamples);
-                result = await new WaveAlignmentService().AlignAsync(referenceStream, candidateStream, method,
-                    maximumShift, cancellationToken: cancellationToken, requiredSampleRate: timebase.SampleRate);
-                EnsurePostPreviewCurrent(projectId, revision, document);
-            }
-
-            _pendingPostAlignment = result;
-            _pendingPostAlignmentMediaId = candidate.Id;
-            _pendingPostAlignmentMethod = method;
-            _pendingPostAlignmentProjectId = _loadedProjectId;
-            _pendingPostAlignmentRevision = _editorRevision;
-            _pendingPostAlignmentDocument = _timelineDocument;
-            ApplyPostSyncButton.IsEnabled = result.Acceptable;
-            PostSyncPreviewText.Text = $"Offset {result.OffsetSamples} samples • confidence {result.Confidence:P0} • {result.Diagnostics} Explicit acceptance is required.";
-            SetPostStatus("Alignment plan ready; no timeline changes were made.");
-        }
-        catch (OperationCanceledException)
-        {
-            SetPostStatus("Alignment canceled; no timeline changes were made.");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or ArgumentException or InvalidOperationException or NotSupportedException or OverflowException)
-        {
-            PostMutationFailed(ex);
-        }
-        finally
-        {
-            SetPostAlignmentBusy(false);
-            _postAlignmentCancellation?.Dispose();
-            _postAlignmentCancellation = null;
-        }
-    }
-
-    private void CancelPostSync_Click(object sender, RoutedEventArgs e) => CancelPostAlignment();
-
-    private void CancelPostAlignment()
-    {
-        _postAlignmentCancellation?.Cancel();
-    }
-
-    private void SetPostAlignmentBusy(bool busy, string? status = null)
-    {
-        if (PostSyncProgressBar is null) return;
-        PostSyncProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        PlanPostSyncButton.IsEnabled = !busy;
-        CancelPostSyncButton.IsEnabled = busy;
-        if (status is not null) SetPostStatus(status);
-    }
-
-    private static async Task<string> MaterializePostAlignmentAssetAsync(CanonicalProject project, string projectId,
-        string assetId, CancellationToken cancellationToken)
-    {
-        MediaAsset asset = project.MediaAssets.FirstOrDefault(value => value.Id == assetId)
-            ?? throw new InvalidDataException($"Project media asset '{assetId}' no longer exists.");
-        string contentHash = ReadAssetContentHash(asset);
-        string cacheIdentity = CreateStableHash($"{projectId}\n{asset.Id}\n{asset.Path}\n{contentHash}");
-        string extension = System.IO.Path.GetExtension(asset.Path);
-        if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
-            extension = ".media";
-        string cacheRoot = ResolveTimelineCacheRoot("post-alignment-media");
-        string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
-        if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
-            await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(projectId, asset.Path, destination, cancellationToken);
-        return destination;
-    }
-
-    private static string ResolveTimelineCacheRoot(string leaf)
-    {
-        string? packagedPath = WindowsPackageIdentity.IsPackaged
-            ? ApplicationData.Current.LocalCacheFolder.Path
-            : null;
-        return StudioStoragePaths.ResolveRoot(
-            WindowsPackageIdentity.IsPackaged,
-            packagedPath,
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            WindowsPackageIdentity.IsPackaged ? leaf : System.IO.Path.Combine("cache", leaf));
-    }
-
-    private async void ApplyPostSync_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            AlignmentResult result = _pendingPostAlignment ?? throw new InvalidOperationException("Plan alignment before applying it.");
-            EnsurePostPreviewCurrent(_pendingPostAlignmentProjectId, _pendingPostAlignmentRevision, _pendingPostAlignmentDocument);
-            if (!result.Acceptable) throw new InvalidOperationException("This alignment is not acceptable and cannot be applied.");
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            var anchor = new SyncAnchor(NewPostId("sync"), _pendingPostAlignmentMethod, null, _pendingPostAlignmentMediaId,
-                result.OffsetSamples, result.Confidence, new JsonObject { ["diagnostics"] = result.Diagnostics });
-            await CommitPostAsync(post with { SyncAnchors = post.SyncAnchors.Add(anchor) }, "post sync alignment accepted");
-            _pendingPostAlignment = null;
-            _pendingPostAlignmentDocument = null;
-            ApplyPostSyncButton.IsEnabled = false;
-            SetPostStatus("Alignment accepted and saved.");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private async void AddPostAdrCue_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            long start = ReadPostSample(PostAdrStartTextBox, "ADR start");
-            long end = ReadPostSample(PostAdrEndTextBox, "ADR end");
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            var cue = new AdrCue(NewPostId("adr"), null, start, end, PostAdrTextTextBox.Text.Trim(),
-                NullIfEmpty(PostAdrPerformerTextBox.Text), [], new JsonObject());
-            await CommitPostAsync(AdrOperations.AddCue(post, cue), "ADR cue added");
-            SetPostStatus($"ADR cue {cue.Id} added.");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private async void RegisterPostAdrTake_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            string cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select an ADR cue.");
-            string mediaId = (PostAdrMediaComboBox.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select imported or pre-recorded project media.");
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            var take = new AdrTake(NewPostId("take"), cueId, mediaId, AdrReviewStatus.Unreviewed, false,
-                new AdrRecordingMetadata(null, null, "imported project media", null, _canonicalProject!.Timebase.SampleRate, 2, new JsonObject()), new JsonObject());
-            await CommitPostAsync(AdrOperations.RegisterTake(post, cueId, take), "ADR take registered");
-            SetPostStatus($"Pre-recorded take {take.Id} registered; no native recording was performed.");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or KeyNotFoundException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private async void ReviewPostAdrTake_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            string cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select an ADR cue.");
-            string takeId = (PostAdrTakeListView.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select an ADR take.");
-            AdrReviewStatus status = GetSelectedTag(PostAdrReviewComboBox) switch
-            {
-                "approved" => AdrReviewStatus.Approved,
-                "rejected" => AdrReviewStatus.Rejected,
-                _ => AdrReviewStatus.Unreviewed
-            };
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            await CommitPostAsync(AdrOperations.ReviewTake(post, cueId, takeId, status, PostAdrPreferredToggle.IsOn), "ADR take reviewed");
-            SetPostStatus($"ADR take {takeId} review saved.");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or KeyNotFoundException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private void PreviewPostReconform_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            var edit = new ReconformEdit(GetSelectedTag(PostReconformKindComboBox) switch
-            {
-                "delete" => ReconformEditKind.Delete,
-                "move" => ReconformEditKind.Move,
-                _ => ReconformEditKind.Insert
-            }, ReadPostSample(PostOldStartTextBox, "old start"), ReadPostSample(PostOldEndTextBox, "old end"),
-                ReadPostSample(PostNewStartTextBox, "new start"), ReadPostSample(PostNewEndTextBox, "new end"));
-            SetReconformPreview(ReconformService.Plan([edit]), "Manual preview");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private void SetReconformPreview(ReconformPlan plan, string source)
-    {
-        _pendingReconformPlan = plan;
-        _pendingReconformProjectId = _loadedProjectId;
-        _pendingReconformRevision = _editorRevision;
-        _pendingReconformDocument = _timelineDocument;
-        ApplyPostReconformButton.IsEnabled = plan.CanApply && !plan.Edits.IsEmpty;
-        PostReconformPreviewText.Text = plan.Conflicts.IsEmpty
-            ? $"{source}: {plan.Edits.Length} edit(s), no conflicts. Review and explicitly apply."
-            : $"{source}: {string.Join(" | ", plan.Conflicts.Select(conflict => $"{conflict.Code}: {conflict.Message}"))}";
-        SetPostStatus("Reconform preview updated; no timeline changes were made.");
-    }
-
-    private async void ApplyPostReconform_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            ReconformPlan plan = _pendingReconformPlan ?? throw new InvalidOperationException("Preview a reconform before applying it.");
-            EnsurePostPreviewCurrent(_pendingReconformProjectId, _pendingReconformRevision, _pendingReconformDocument);
-            ReconformResult result = ReconformService.Apply(_canonicalProject!, PostProductionContracts.Read(_timelineDocument!), plan);
-            PostProductionDocument post = result.Post;
-            PostProductionContracts.ValidateAgainstProject(result.Project, post);
-            JsonObject before = CloneDocument(_timelineDocument!);
-            JsonObject baseDocument = CloneDocument(result.Project.Timeline);
-            JsonObject updated = PostProductionContracts.Write(baseDocument, post);
-            await CommitDocumentAsync(before, updated, "post reconform applied", _selectedLaneId, _selectedCameraKeyframeIdentity);
-            _pendingReconformPlan = null;
-            _pendingReconformDocument = null;
-            ApplyPostReconformButton.IsEnabled = false;
-            SetPostStatus("Reconform applied and saved to history.");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private async void ImportPostJson_Click(object sender, RoutedEventArgs e)
-    {
-        await ImportPostTextAsync(".json", async (text, fileName) =>
-        {
-            InterchangeResult<PostProductionDocument> result = PostProductionInterchange.ImportCanonical(text);
-            PostProductionDocument imported = PostProductionHistory.AppendInterchange(result.Value, "canonical-json", "import", result.Compatibility, fileName);
-            PostProductionContracts.ValidateAgainstProject(_canonicalProject!, imported);
-            await CommitPostAsync(imported, "canonical post JSON imported");
-            ShowPostCompatibility("Canonical JSON import", result.Compatibility);
-        });
-    }
-
-    private async void ExportPostJson_Click(object sender, RoutedEventArgs e)
-    {
-        await ExportPostTextAsync("JSON document", ".json", "post", () =>
-            PostProductionInterchange.ExportCanonical(PostProductionContracts.Read(_timelineDocument!)), "Canonical JSON export", "canonical-json");
-    }
-
-    private async void ImportPostCmx_Click(object sender, RoutedEventArgs e)
-    {
-        await ImportPostTextAsync(".edl", async (text, fileName) =>
-        {
-            InterchangeResult<ImmutableArray<ReconformEdit>> result = PostProductionInterchange.ImportCmx3600(text, _canonicalProject!.Timebase);
-            ShowPostCompatibility("CMX3600 import", result.Compatibility);
-            if (!result.Compatibility.IsCompatible)
-                throw new InvalidDataException("CMX3600 import contains errors. Review the compatibility report; no reconform preview was created.");
-            PostProductionDocument post = PostProductionHistory.AppendInterchange(PostProductionContracts.Read(_timelineDocument!),
-                "cmx3600", "import", result.Compatibility, fileName);
-            await CommitPostAsync(post, "CMX3600 imported for reconform preview");
-            SetReconformPreview(ReconformService.Plan(result.Value), "CMX3600 preview");
-        });
-    }
-
-    private async void ExportPostCmx_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            string? projectId = _loadedProjectId;
-            long revision = _editorRevision;
-            JsonObject document = _timelineDocument!;
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            InterchangeResult<string> result;
-            try
-            {
-                result = PostProductionInterchange.ExportCmx3600(_canonicalProject!, post);
-            }
-            catch (InvalidOperationException)
-            {
-                bool consent = await ConfirmAsync("Lossy CMX3600 export?",
-                    "CMX3600 omits ADR, sync, channel-layout, and object metadata. Export only after accepting these omissions.", "Export with omissions");
-                if (!consent) { SetPostStatus("CMX3600 export canceled; no file was written."); return; }
-                EnsurePostPreviewCurrent(projectId, revision, document);
-                result = PostProductionInterchange.ExportCmx3600(_canonicalProject!, post, allowOmissions: true);
-            }
-            StorageFile? file = await SavePostTextAsync("CMX3600 EDL", ".edl", "timeline", result.Value);
-            if (file is null) { SetPostStatus("CMX3600 export canceled; no file was written."); return; }
-            EnsurePostPreviewCurrent(projectId, revision, document);
-            await RecordPostInterchangeAsync("cmx3600", "export", result.Compatibility, file.Name);
-            ShowPostCompatibility("CMX3600 export", result.Compatibility);
-        }
-        catch (Exception ex)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private async void ImportPostAdrCsv_Click(object sender, RoutedEventArgs e)
-    {
-        await ImportPostTextAsync(".csv", async (text, fileName) =>
-        {
-            InterchangeResult<ImmutableArray<AdrCue>> result = PostProductionInterchange.ImportAdrCsv(text);
-            if (!result.Compatibility.IsCompatible) throw new InvalidDataException(FormatCompatibility(result.Compatibility));
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            var used = post.AdrCues.Select(cue => cue.Id).ToHashSet(StringComparer.Ordinal);
-            foreach (AdrCue imported in result.Value)
-            {
-                string baseId = string.IsNullOrWhiteSpace(imported.Id) ? "adr-import" : imported.Id;
-                string id = baseId;
-                for (int suffix = 2; !used.Add(id); suffix++) id = $"{baseId}-{suffix}";
-                post = AdrOperations.AddCue(post, imported with { Id = id });
-            }
-            post = PostProductionHistory.AppendInterchange(post, "adr-csv", "import", result.Compatibility, fileName);
-            PostProductionContracts.ValidateAgainstProject(_canonicalProject!, post);
-            await CommitPostAsync(post, "ADR CSV imported");
-            ShowPostCompatibility("ADR CSV import", result.Compatibility);
-        });
-    }
-
-    private async void ExportPostAdrCsv_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            string? projectId = _loadedProjectId;
-            long revision = _editorRevision;
-            JsonObject document = _timelineDocument!;
-            InterchangeResult<string> result = PostProductionInterchange.ExportAdrCsv(PostProductionContracts.Read(document));
-            ShowPostCompatibility("ADR CSV export", result.Compatibility);
-            if (PostProductionInterchangeConsent.RequiresExplicitConsent(result.Compatibility))
-            {
-                bool consent = await ConfirmAsync("Lossy ADR CSV export?",
-                    FormatCompatibility(result.Compatibility) + Environment.NewLine + "Export only after accepting these omissions.",
-                    "Export with omissions");
-                if (!consent) { SetPostStatus("ADR CSV export canceled; no file was written."); return; }
-                EnsurePostPreviewCurrent(projectId, revision, document);
-            }
-            StorageFile? file = await SavePostTextAsync("CSV document", ".csv", "adr-cues", result.Value);
-            if (file is null) { SetPostStatus("ADR CSV export canceled; no file was written."); return; }
-            EnsurePostPreviewCurrent(projectId, revision, document);
-            await RecordPostInterchangeAsync("adr-csv", "export", result.Compatibility, file.Name);
-        }
-        catch (Exception ex)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private void PostAudioLayout_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (PostAudioCapabilityText is null)
-            return;
-        AudioChannelLayout layout = ParsePostLayout();
-        AudioLayoutCapability capability = PostProductionCapabilities.Native.First(value => value.Layout == layout);
-        PostAudioCapabilityText.Text = capability.Detail;
-    }
-
-    private async void AddPostAudioLayout_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            EnsurePostProject();
-            AudioChannelLayout layout = ParsePostLayout();
-            int channels = layout switch { AudioChannelLayout.Mono => 1, AudioChannelLayout.Stereo => 2, AudioChannelLayout.Surround51 => 6, AudioChannelLayout.Surround71 => 8, _ => 1 };
-            string? mediaId = (PostAudioLayoutMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
-            mediaId = NullIfEmpty(mediaId);
-            PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
-            var descriptor = new AudioLayoutDescriptor(NewPostId("layout"), layout, channels, mediaId, [], new JsonObject());
-            await CommitPostAsync(post with { AudioLayouts = post.AudioLayouts.Add(descriptor) }, "post audio layout metadata added");
-            SetPostStatus($"{layout} metadata added. {PostProductionCapabilities.Native.First(value => value.Layout == layout).Detail}");
-        }
-        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException)
-        {
-            PostMutationFailed(ex);
-        }
-    }
-
-    private async Task CommitPostAsync(PostProductionDocument post, string reason)
-    {
-        EnsurePostProject();
-        PostProductionContracts.ValidateAgainstProject(_canonicalProject!, post);
-        JsonObject before = CloneDocument(_timelineDocument!);
-        JsonObject working = CloneDocument(_timelineDocument!);
-        JsonObject updated = PostProductionContracts.Write(working, post);
-        await CommitDocumentAsync(before, updated, reason, _selectedLaneId, _selectedCameraKeyframeIdentity);
-    }
-
-    private void EnsurePostProject()
-    {
-        if (_timelineDocument is null || _canonicalProject is null)
-            throw new InvalidOperationException("Load an active canonical project first.");
-    }
-
-    private void EnsurePostPreviewCurrent(string? projectId, long revision, JsonObject? document)
-    {
-        if (projectId != _loadedProjectId || revision != _editorRevision || !ReferenceEquals(document, _timelineDocument))
-            throw new InvalidOperationException("The timeline changed after this preview was created. Preview the operation again before applying it.");
-    }
-
-    private static long ReadPostSample(TextBox box, string label) =>
-        long.TryParse(box.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out long value) && value >= 0
-            ? value : throw new InvalidDataException($"{label} must be a canonical nonnegative whole sample value.");
-
-    private static string NewPostId(string prefix) => $"{prefix}-{Guid.NewGuid():N}";
-    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private AudioChannelLayout ParsePostLayout() => GetSelectedTag(PostAudioLayoutComboBox) switch
-    {
-        "mono" => AudioChannelLayout.Mono,
-        "5.1" => AudioChannelLayout.Surround51,
-        "7.1" => AudioChannelLayout.Surround71,
-        "object" => AudioChannelLayout.Object,
-        _ => AudioChannelLayout.Stereo
+      "9:16" => (shortEdge, longEdge),
+      "1:1" => (shortEdge, shortEdge),
+      "4:5" => (
+          string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase) ? 864 : 1080,
+          string.Equals(mode, "preview", StringComparison.OrdinalIgnoreCase) ? 1080 : 1350),
+      _ => (longEdge, shortEdge)
     };
+  }
 
-    private async Task ImportPostTextAsync(string extension, Func<string, string, Task> import)
+  private async Task RefreshRecoveryAsync()
+  {
+    if (string.IsNullOrWhiteSpace(_loadedProjectId))
     {
-        try
-        {
-            EnsurePostProject();
-            string? projectId = _loadedProjectId;
-            long revision = _editorRevision;
-            JsonObject document = _timelineDocument!;
-            if (App.MainWindowInstance is null) throw new InvalidOperationException("The Studio window is not ready for file selection.");
-            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary, ViewMode = PickerViewMode.List };
-            picker.FileTypeFilter.Add(extension);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
-            StorageFile? file = await picker.PickSingleFileAsync();
-            if (file is null) return;
-            string text = await FileIO.ReadTextAsync(file);
-            EnsurePostPreviewCurrent(projectId, revision, document);
-            await import(text, file.Name);
-            SetPostStatus($"Imported {file.Name}.");
-        }
-        catch (Exception ex)
-        {
-            PostMutationFailed(ex);
-        }
+      return;
     }
 
-    private async Task ExportPostTextAsync(string description, string extension, string suggestedName,
-        Func<InterchangeResult<string>> create, string reportTitle, string format)
+    try
     {
-        try
-        {
-            EnsurePostProject();
-            string? projectId = _loadedProjectId;
-            long revision = _editorRevision;
-            JsonObject document = _timelineDocument!;
-            InterchangeResult<string> result = create();
-            StorageFile? file = await SavePostTextAsync(description, extension, suggestedName, result.Value);
-            if (file is null) { SetPostStatus($"{reportTitle} canceled; no file was written."); return; }
-            EnsurePostPreviewCurrent(projectId, revision, document);
-            await RecordPostInterchangeAsync(format, "export", result.Compatibility, file.Name);
-            ShowPostCompatibility(reportTitle, result.Compatibility);
-        }
-        catch (Exception ex)
-        {
-            PostMutationFailed(ex);
-        }
+      JsonElement response = await App.Services.ApiClient.GetRecoveryAsync(
+          _loadedProjectId,
+          _pageCancellation?.Token ?? CancellationToken.None);
+      _recoveryDocument = JsonNode.Parse(response.GetRawText()) as JsonObject;
+      RefreshRecoverySummary();
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (Exception ex)
+    {
+      CrashLogger.Write($"Timeline recovery metadata could not be exported for project '{_loadedProjectId}'.", ex);
+      BackupSummaryText.Text = $"Recovery status unavailable: {ex.Message}";
+    }
+  }
+
+  private void RefreshRecoverySummary()
+  {
+    bool needsRecovery = _recoveryDocument?["needs_recovery"]?.GetValue<bool>() == true;
+    int candidateCount = (_recoveryDocument?["candidates"] as JsonArray)?.Count ?? 0;
+    BackupSummaryText.Text = needsRecovery
+        ? $"{candidateCount} recovery candidate{(candidateCount == 1 ? string.Empty : "s")} available."
+        : candidateCount > 0
+            ? $"{candidateCount} clean backup candidate{(candidateCount == 1 ? string.Empty : "s")} available."
+            : "No recovery candidates are available.";
+    RestoreBackupButton.IsEnabled = !_isBusy && needsRecovery && candidateCount > 0;
+    ExportRecoveryButton.IsEnabled = !_isBusy && _recoveryDocument is not null;
+    DeleteRecoveryButton.IsEnabled = !_isBusy && needsRecovery;
+  }
+
+  private async void RestoreBackup_Click(object sender, RoutedEventArgs e)
+  {
+    if (string.IsNullOrWhiteSpace(_loadedProjectId) ||
+        !TryGetRecoveryCandidate(out string source, out string? snapshotName))
+    {
+      ShowInfo("No recovery candidate is available.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private async Task RecordPostInterchangeAsync(string format, string direction, CompatibilityReport compatibility, string fileName)
+    if (!await ConfirmAsync(
+        "Restore recovery data?",
+        "The selected recovery candidate will replace the current project timeline.",
+        "Restore"))
     {
-        PostProductionDocument post = PostProductionHistory.AppendInterchange(
-            PostProductionContracts.Read(_timelineDocument!), format, direction, compatibility, fileName);
-        await CommitPostAsync(post, $"{format} {direction} recorded");
+      return;
     }
 
-    private async Task<StorageFile?> SavePostTextAsync(string description, string extension, string suggestedName, string text)
+    SetBusy(true);
+    try
     {
-        if (App.MainWindowInstance is null) throw new InvalidOperationException("The Studio window is not ready for file selection.");
-        var picker = new FileSavePicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary, SuggestedFileName = suggestedName };
-        picker.FileTypeChoices.Add(description, [extension]);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
-        StorageFile? file = await picker.PickSaveFileAsync();
-        if (file is null) return null;
-        await FileIO.WriteTextAsync(file, text);
-        SetPostStatus($"Exported {file.Name}.");
-        return file;
+      _ = await App.Services.ApiClient.ApplyRecoveryAsync(
+          _loadedProjectId,
+          new RecoveryApplyRequest(
+              source,
+              snapshotName,
+              StudioPageHelpers.ExpectedRevision(_project)),
+          _pageCancellation?.Token ?? CancellationToken.None);
+      await LoadActiveProjectAsync(forceReload: true);
+      ShowInfo("Recovery data was restored.", InfoBarSeverity.Success);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      await HandleProjectRevisionConflictAsync(conflict);
+    }
+    catch (Exception ex)
+    {
+      CrashLogger.Write($"Timeline recovery journal could not be discarded for project '{_loadedProjectId}'.", ex);
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private bool TryGetRecoveryCandidate(out string source, out string? snapshotName)
+  {
+    if (!TimelineRecovery.TrySelectCrashRecovery(
+            _recoveryDocument,
+            out TimelineRecoveryCandidate candidate))
+    {
+      source = "journal";
+      snapshotName = null;
+      return false;
     }
 
-    private void ShowPostCompatibility(string operation, CompatibilityReport report)
+    source = candidate.Source;
+    snapshotName = candidate.SnapshotName;
+    return true;
+  }
+
+  private async void ExportRecovery_Click(object sender, RoutedEventArgs e)
+  {
+    if (_recoveryDocument is null || App.MainWindowInstance is null)
     {
-        PostCompatibilityText.Text = $"{operation}: {FormatCompatibility(report)}";
+      return;
     }
 
-    private static string FormatCompatibility(CompatibilityReport report) => report.Issues.IsEmpty
-        ? "compatible and lossless."
-        : string.Join(Environment.NewLine, report.Issues.Select(issue => $"{issue.Severity}: {issue.Code} — {issue.Message}"));
-
-    private void SetPostStatus(string message) => PostStatusText.Text = message;
-
-    private void PostMutationFailed(Exception exception)
+    try
     {
-        SetPostStatus($"Post operation failed: {exception.Message}");
-        ShowInfo(PostStatusText.Text, InfoBarSeverity.Error);
+      FileSavePicker picker = new()
+      {
+        SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+        SuggestedFileName = $"{_project?.Name ?? "timeline"}-recovery"
+      };
+      picker.FileTypeChoices.Add("JSON document", [".json"]);
+      nint windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindowInstance);
+      WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
+      StorageFile? file = await picker.PickSaveFileAsync();
+      if (file is null)
+      {
+        return;
+      }
+
+      await FileIO.WriteTextAsync(
+          file,
+          _recoveryDocument.ToJsonString(new JsonSerializerOptions
+          {
+            WriteIndented = true
+          }));
+      ShowInfo("Recovery metadata was exported.", InfoBarSeverity.Success);
+    }
+    catch (Exception ex)
+    {
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
+    }
+  }
+
+  private async void DeleteRecovery_Click(object sender, RoutedEventArgs e)
+  {
+    if (string.IsNullOrWhiteSpace(_loadedProjectId) ||
+        !await ConfirmAsync(
+            "Discard recovery journal?",
+            "This marks the autosave journal clean. Recovery snapshots and project files are not deleted.",
+            "Discard"))
+    {
+      return;
     }
 
-    private void RefreshWorkflowPlanSummary()
+    SetBusy(true);
+    try
     {
-        if (string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            WorkspacePlanText.Text =
-                "Select a project in Workspace to apply its plan on this Timeline.";
-            return;
-        }
+      _ = await App.Services.ApiClient.DiscardRecoveryAsync(
+          _loadedProjectId,
+          _pageCancellation?.Token ?? CancellationToken.None);
+      await RefreshRecoveryAsync();
+      ShowInfo("The recovery journal was discarded.", InfoBarSeverity.Success);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      await HandleProjectRevisionConflictAsync(conflict);
+    }
+    catch (Exception ex)
+    {
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
 
-        WorkspacePlanText.Text =
-            $"Workspace plan variant {_loadedVariantIndex + 1} is selected for " +
-            $"{_project?.Name ?? _loadedProjectId}. Append preserves current clips; overwrite replaces them.";
+  private async void ApplyRaw_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null)
+    {
+      return;
     }
 
-    private async Task LoadWorkflowAssetsAsync(CancellationToken cancellationToken)
+    JsonObject? parsed;
+    try
     {
-        if (string.IsNullOrWhiteSpace(_loadedProjectId))
-        {
-            throw new InvalidOperationException("Select a project before refreshing sources.");
-        }
-
-        WorkspaceAssetsResponse response =
-            await App.Services.ApiClient.GetProjectAssetsAsync(_loadedProjectId, cancellationToken);
-        string[] paths = response.Assets.Audio
-            .Concat(response.Assets.References)
-            .Select(asset => asset.Path)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        SourceAssetComboBox.ItemsSource = paths;
-
-        if (paths.Contains(_selectedSourcePath, StringComparer.OrdinalIgnoreCase))
-        {
-            SourceAssetComboBox.SelectedItem = paths.First(
-                path => string.Equals(path, _selectedSourcePath, StringComparison.OrdinalIgnoreCase));
-        }
+      parsed = JsonNode.Parse(TimelineTextBox.Text) as JsonObject;
+    }
+    catch (JsonException ex)
+    {
+      ShowInfo($"Invalid JSON: {ex.Message}", InfoBarSeverity.Error);
+      return;
     }
 
-    private void SelectSource(string sourcePath)
+    if (parsed is null)
     {
-        _selectedSourcePath = sourcePath;
-        SelectedSourceText.Text = string.IsNullOrWhiteSpace(sourcePath)
-            ? "No source selected."
-            : sourcePath;
-        UpdateCommandState();
+      ShowInfo("Timeline JSON must be an object.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private bool TryGetAutomationContext(bool requireSelection, out JsonObject timeline)
+    try
     {
-        timeline = null!;
-        if (_timelineDocument is null)
-        {
-            ShowAutomationInfo("Load a Timeline before changing its sources.", InfoBarSeverity.Warning);
-            return false;
-        }
+      _ = TimelineProjection.Project(parsed);
+      _ = TimelineCameraProjection.Project(parsed);
+      if (_project is not null)
+      {
+        CanonicalProject candidateProject = ProjectTimelineContracts.FromTimeline(_project, parsed);
+        _ = MixerDocumentCodec.ReadOrMigrate(parsed, candidateProject);
+      }
+      JsonObject before = CloneDocument(_timelineDocument);
+      await CommitDocumentAsync(before, parsed, "timeline raw JSON applied");
+    }
+    catch (Exception ex) when (ex is JsonException or InvalidOperationException or InvalidDataException or ArgumentException)
+    {
+      ShowInfo(ex.Message, InfoBarSeverity.Error);
+    }
+  }
 
-        if (string.IsNullOrWhiteSpace(_selectedSourcePath))
-        {
-            ShowAutomationInfo("Select a project source or browse to a local file first.", InfoBarSeverity.Warning);
-            return false;
-        }
-
-        if (requireSelection && string.IsNullOrWhiteSpace(_selectedLaneId))
-        {
-            ShowAutomationInfo("Select a Timeline clip before assigning its source.", InfoBarSeverity.Warning);
-            return false;
-        }
-
-        timeline = CloneDocument(_timelineDocument);
-        return true;
+  private void RevertRaw_Click(object sender, RoutedEventArgs e)
+  {
+    if (_timelineDocument is null)
+    {
+      return;
     }
 
-    private async Task RefreshProjectRevisionAsync(
-        string projectId,
-        CancellationToken cancellationToken)
+    TimelineTextBox.Text = _timelineDocument.ToJsonString(new JsonSerializerOptions
     {
-        ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-        if (string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
-        {
-            _project = refreshed.Project;
-        }
+      WriteIndented = true
+    });
+    PageInfoBar.IsOpen = false;
+  }
+
+  private void ResetPostProductionEditor(string message)
+  {
+    PostStatusText.Text = message;
+    PostTimebaseText.Text = "Timebase unavailable.";
+    PostPlayheadTimecodeText.Text = "Playhead: --:--:--:--";
+    PostSyncReferenceMediaComboBox.ItemsSource = null;
+    PostSyncMediaComboBox.ItemsSource = null;
+    PostAdrMediaComboBox.ItemsSource = null;
+    PostAudioLayoutMediaComboBox.ItemsSource = null;
+    PostAdrCueListView.ItemsSource = null;
+    PostAdrTakeListView.ItemsSource = null;
+    PostAudioLayoutsText.Text = "No layout metadata.";
+    PostCompatibilityText.Text = "No interchange report.";
+    PostSyncPreviewText.Text = "No alignment planned.";
+    PostReconformPreviewText.Text = "No reconform preview.";
+    ApplyPostSyncButton.IsEnabled = false;
+    ApplyPostReconformButton.IsEnabled = false;
+  }
+
+  private void InvalidatePostPreviews()
+  {
+    if (_pendingPostAlignment is not null)
+    {
+      PostSyncPreviewText.Text = "Timeline changed; plan alignment again before applying.";
     }
 
-    private async Task HandleProjectRevisionConflictAsync(ProjectRevisionConflictException conflict)
+    if (_pendingReconformPlan is not null)
     {
-        _revisionConflictInterruptedOperation = true;
-        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
-        {
-            ShowInfo(
-                "The failed change was not applied. Your local Timeline edits remain open; reload the project before retrying.",
-                InfoBarSeverity.Warning);
-            return;
-        }
-
-        string? projectId = _loadedProjectId;
-        await LoadActiveProjectAsync(forceReload: true);
-        if (_project is not null &&
-            string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
-        {
-            ShowInfo(
-                "The latest project revision is loaded. Review the Timeline, then retry your change.",
-                InfoBarSeverity.Informational);
-        }
+      PostReconformPreviewText.Text = "Timeline changed; preview reconform again before applying.";
     }
 
-    private async Task RunAutomationAsync(
-        string progressMessage,
-        Func<CancellationToken, Task<string>> operation)
+    _pendingPostAlignment = null;
+    _pendingPostAlignmentDocument = null;
+    _pendingReconformPlan = null;
+    _pendingReconformDocument = null;
+    ApplyPostSyncButton.IsEnabled = false;
+    ApplyPostReconformButton.IsEnabled = false;
+  }
+
+  private void RefreshPostProductionEditor()
+  {
+    if (_timelineDocument is null || _canonicalProject is null)
     {
-        if (_isAutomationBusy)
-        {
-            return;
-        }
-
-        CancellationToken pageToken = _pageCancellation?.Token ?? CancellationToken.None;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(pageToken);
-        _automationCancellation = cancellation;
-        _isAutomationBusy = true;
-        _revisionConflictInterruptedOperation = false;
-        AutomationProgressBar.IsIndeterminate = true;
-        AutomationProgressBar.Visibility = Visibility.Visible;
-        ShowAutomationInfo(progressMessage, InfoBarSeverity.Informational);
-        UpdateCommandState();
-
-        try
-        {
-            string result = await operation(cancellation.Token);
-            if (!_revisionConflictInterruptedOperation)
-            {
-                ShowAutomationInfo(result, InfoBarSeverity.Success);
-            }
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        {
-            if (!pageToken.IsCancellationRequested)
-            {
-                ShowAutomationInfo("The Timeline workflow was canceled.", InfoBarSeverity.Warning);
-            }
-        }
-        catch (ProjectRevisionConflictException conflict)
-        {
-            await HandleProjectRevisionConflictAsync(conflict);
-        }
-        catch (Exception ex)
-        {
-            ShowAutomationInfo(ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            if (ReferenceEquals(_automationCancellation, cancellation))
-            {
-                _automationCancellation = null;
-            }
-
-            cancellation.Dispose();
-            _isAutomationBusy = false;
-            AutomationProgressBar.IsIndeterminate = false;
-            AutomationProgressBar.Visibility = Visibility.Collapsed;
-            UpdateCommandState();
-        }
+      ResetPostProductionEditor("Load a project to use post-production tools.");
+      return;
     }
 
-    private void ShowAutomationInfo(string message, InfoBarSeverity severity)
+    try
     {
-        AutomationInfoBar.Title = severity switch
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument);
+      ProjectTimebase timebase = _canonicalProject.Timebase;
+      string rate = timebase.FrameRate.Denominator == 1
+          ? timebase.FrameRate.Numerator.ToString(CultureInfo.InvariantCulture)
+          : $"{timebase.FrameRate.Numerator}/{timebase.FrameRate.Denominator} ({timebase.FrameRate.FramesPerSecond:0.###})";
+      string timecodeMode = Timecode.Supports(timebase.FrameRate)
+          ? $"Start {timebase.StartTimecode}  •  {(timebase.DropFrame ? "drop-frame" : "non-drop-frame")}"
+          : "Professional timecode unavailable for this legacy frame rate";
+      PostTimebaseText.Text = $"{timecodeMode}  •  {rate} fps  •  {timebase.SampleRate:N0} Hz";
+      PostPlayheadTimecodeText.Text = $"Playhead: {FormatTimecode(_positionSeconds)}";
+
+      List<ProfessionalListItem> assets = _canonicalProject.MediaAssets
+          .Select(asset => new ProfessionalListItem(asset.Id, string.IsNullOrWhiteSpace(asset.Path) ? asset.Id : System.IO.Path.GetFileName(asset.Path), asset.Kind))
+          .ToList();
+      string? syncReferenceAsset = (PostSyncReferenceMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
+      string? syncAsset = (PostSyncMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
+      string? adrAsset = (PostAdrMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
+      string? layoutAsset = (PostAudioLayoutMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
+      PostSyncReferenceMediaComboBox.ItemsSource = assets;
+      PostSyncMediaComboBox.ItemsSource = assets;
+      PostAdrMediaComboBox.ItemsSource = assets;
+      PostAudioLayoutMediaComboBox.ItemsSource = new[] { new ProfessionalListItem(string.Empty, "None") }.Concat(assets).ToList();
+      SelectListItem(PostSyncReferenceMediaComboBox, syncReferenceAsset);
+      SelectListItem(PostSyncMediaComboBox, syncAsset);
+      SelectListItem(PostAdrMediaComboBox, adrAsset);
+      SelectListItem(PostAudioLayoutMediaComboBox, layoutAsset ?? string.Empty);
+
+      string? cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id;
+      PostAdrCueListView.ItemsSource = post.AdrCues.Select(cue => new ProfessionalListItem(
+          cue.Id, $"{cue.Id}: {cue.Text}", $"{cue.StartSample}–{cue.EndSample} • {cue.Takes.Length} takes")).ToList();
+      SelectListItem(PostAdrCueListView, cueId);
+      RefreshPostAdrTakes(post);
+      PostAudioLayoutsText.Text = post.AudioLayouts.IsEmpty
+          ? "No layout metadata. Native playback/render/export is stereo-only."
+          : string.Join(Environment.NewLine, post.AudioLayouts.Select(layout => $"{layout.Id}: {layout.Layout}, {layout.Channels} channel(s), media {layout.MediaAssetId ?? "none"}"));
+      PostStatusText.Text = $"Post document v{post.SchemaVersion}: {post.SyncAnchors.Length} sync anchors, {post.AdrCues.Length} ADR cues, {post.ReconformHistory.Length} reconforms.";
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException)
+    {
+      PostStatusText.Text = $"Post data is invalid: {ex.Message}";
+      ShowInfo(PostStatusText.Text, InfoBarSeverity.Error);
+    }
+  }
+
+  private static void SelectListItem(Selector selector, string? id)
+  {
+    if (id is null)
+    {
+      return;
+    }
+
+    selector.SelectedItem = selector.Items.OfType<ProfessionalListItem>().FirstOrDefault(item => item.Id == id);
+  }
+
+  private void RefreshPostAdrTakes(PostProductionDocument? supplied = null)
+  {
+    if (_timelineDocument is null)
+    {
+      return;
+    }
+
+    PostProductionDocument post = supplied ?? PostProductionContracts.Read(_timelineDocument);
+    string? cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id;
+    AdrCue? cue = post.AdrCues.FirstOrDefault(value => value.Id == cueId);
+    PostAdrTakeListView.ItemsSource = cue?.Takes.Select(take => new ProfessionalListItem(
+        take.Id, $"{take.Id}: {take.MediaAssetId}", $"{take.ReviewStatus}{(take.Preferred ? " • preferred" : string.Empty)}")).ToList() ?? [];
+  }
+
+  private void PostAdrCue_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_isXamlInitialized)
+    {
+      RefreshPostAdrTakes();
+    }
+  }
+
+  private void PostSyncMethod_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (PostReferenceTimecodeTextBox is null || PostCandidateTimecodeTextBox is null || PostSyncLimitationText is null)
+    {
+      return;
+    }
+
+    bool timecode = GetSelectedTag(PostSyncMethodComboBox) == "timecode";
+    PostReferenceTimecodeTextBox.IsEnabled = timecode;
+    PostCandidateTimecodeTextBox.IsEnabled = timecode;
+    PostSyncReferenceMediaComboBox.IsEnabled = !timecode;
+    PostSyncLimitationText.Text = timecode
+        ? "Timecode alignment uses the canonical project timebase and requires explicit acceptance."
+        : $"Native WAVE analysis uses authorized project media, matching the project sample rate, and is bounded to {WaveAlignmentService.MaximumSamplesPerSource:N0} frames per source.";
+    CancelPostAlignment();
+    _pendingPostAlignment = null;
+    ApplyPostSyncButton.IsEnabled = false;
+  }
+
+  private async void PlanPostSync_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      string methodTag = GetSelectedTag(PostSyncMethodComboBox) ?? "timecode";
+      ProfessionalListItem candidate = PostSyncMediaComboBox.SelectedItem as ProfessionalListItem
+          ?? throw new InvalidDataException("Select candidate project media.");
+      ProjectTimebase timebase = _canonicalProject!.Timebase;
+      AlignmentResult result;
+      SyncMethod method;
+      if (methodTag == "timecode")
+      {
+        Timecode reference = Timecode.Parse(PostReferenceTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
+        Timecode candidateTimecode = Timecode.Parse(PostCandidateTimecodeTextBox.Text.Trim(), timebase.FrameRate, timebase.DropFrame);
+        result = PostAlignment.FromTimecode(reference, candidateTimecode, timebase);
+        method = SyncMethod.Timecode;
+      }
+      else
+      {
+        ProfessionalListItem reference = PostSyncReferenceMediaComboBox.SelectedItem as ProfessionalListItem
+            ?? throw new InvalidDataException("Select reference project media.");
+        if (reference.Id == candidate.Id)
         {
-            InfoBarSeverity.Success => "Workflow completed",
-            InfoBarSeverity.Warning => "Workflow attention",
-            InfoBarSeverity.Error => "Workflow failed",
-            _ => "Workflow running",
-        };
-        AutomationInfoBar.Message = message;
-        AutomationInfoBar.Severity = severity;
-        AutomationInfoBar.IsOpen = true;
-    }
-
-    private void SetAutomationResult(JsonObject result)
-    {
-        AutomationResultTextBox.Text = result.ToJsonString(new JsonSerializerOptions
-        {
-            WriteIndented = true,
-        });
-    }
-
-    private async Task NavigateWithSaveAsync(string destination)
-    {
-        if (_isAutomationBusy)
-        {
-            ShowAutomationInfo("Wait for or cancel the active Timeline workflow before navigating.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (_isDirty)
-        {
-            bool saved = false;
-            await RunAutomationAsync(
-                "Saving Timeline before handoff...",
-                async token =>
-                {
-                    await SaveTimelineDocumentAsync(token);
-                    saved = true;
-                    return "Timeline saved for the next Studio workflow.";
-                });
-            if (!saved)
-            {
-                return;
-            }
-        }
-
-        App.Navigate(destination);
-    }
-
-    private void UpdateCommandState()
-    {
-        bool hasTimeline = _timelineDocument is not null && !_isBusy;
-        bool hasLaneSelection = SelectedLane is not null && !_isBusy;
-        bool hasEditableLaneSelection = hasLaneSelection && !IsLaneLocked(SelectedLane);
-        bool hasCameraSelection = SelectedCameraKeyframe is not null && !_isBusy;
-        bool hasSelection = hasLaneSelection || hasCameraSelection;
-        bool canRunAutomation = hasTimeline && !_isAutomationBusy;
-        bool hasProject = !string.IsNullOrWhiteSpace(_loadedProjectId);
-        bool hasSource = !string.IsNullOrWhiteSpace(_selectedSourcePath);
-        UndoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanUndo;
-        EditorTrackCommands.IsEnabled = hasTimeline && !_isDirty;
-        bool exactEnabled = hasTimeline && !_isDirty && SelectedLane is { IsLayer: false } exactLane && !IsLaneLocked(exactLane);
-        MoveExactButton.IsEnabled = exactEnabled;
-        SplitExactButton.IsEnabled = exactEnabled;
-        ExactSampleTextBox.IsEnabled = exactEnabled;
-        bool hasMarkerSelection = _selectedMarkerId is not null && !_isBusy;
-        MarkerComboBox.IsEnabled = hasTimeline;
-        MarkerNameTextBox.IsEnabled = hasTimeline;
-        MoveMarkerButton.IsEnabled = hasMarkerSelection;
-        DeleteMarkerButton.IsEnabled = hasMarkerSelection;
-        RedoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanRedo;
-        ToolTipService.SetToolTip(UndoButton, _editorHistory.UndoLabel ?? "No saved edit to undo");
-        ToolTipService.SetToolTip(RedoButton, _editorHistory.RedoLabel ?? "No saved edit to redo");
-        SaveButton.IsEnabled = hasTimeline;
-        PlayPauseButton.IsEnabled = hasTimeline;
-        ApplyInspectorButton.IsEnabled = hasEditableLaneSelection;
-        DuplicateClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
-        DeleteClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
-        MoveClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
-        QuantizeClipButton.IsEnabled =
-            (hasCameraSelection || hasEditableLaneSelection) &&
-            CanQuantizeToCurrentGrid();
-        AddCameraButton.IsEnabled = hasTimeline;
-        CameraKeyframeListView.IsEnabled = hasTimeline;
-        SetCameraEditorEnabled(hasCameraSelection);
-        RenderMasterButton.IsEnabled = hasTimeline;
-        ApplyRawButton.IsEnabled = hasTimeline;
-        RevertRawButton.IsEnabled = hasTimeline;
-        RefreshMixerEditor();
-        RefreshWorkflowButton.IsEnabled = hasProject && !_isAutomationBusy;
-        AppendPlanButton.IsEnabled = canRunAutomation && hasProject;
-        OverwritePlanButton.IsEnabled = canRunAutomation && hasProject;
-        GenerateAiEditButton.IsEnabled = canRunAutomation && hasProject;
-        AppendAiEditButton.IsEnabled = canRunAutomation && hasProject && _hasAiEditProposal;
-        ReplaceWithAiEditButton.IsEnabled = canRunAutomation && hasProject && _hasAiEditProposal;
-        SourceAssetComboBox.IsEnabled = !_isAutomationBusy;
-        BrowseSourceButton.IsEnabled = !_isAutomationBusy;
-        AssignSourceButton.IsEnabled = canRunAutomation && hasEditableLaneSelection && hasSource;
-        AddSourceClipButton.IsEnabled = canRunAutomation && hasSource;
-        SequenceTrackButton.IsEnabled = canRunAutomation;
-        ApplyMotionButton.IsEnabled = canRunAutomation && hasProject;
-        CancelAutomationButton.IsEnabled = _isAutomationBusy;
-        OpenWorkspaceButton.IsEnabled = !_isAutomationBusy;
-        OpenRenderButton.IsEnabled = !_isAutomationBusy;
-        OpenReviewButton.IsEnabled = !_isAutomationBusy;
-        OpenOutputsButton.IsEnabled = !_isAutomationBusy;
-        OpenQueueButton.IsEnabled = !_isAutomationBusy;
-        OpenPlannerButton.IsEnabled = !_isAutomationBusy;
-        OpenReactiveButton.IsEnabled = !_isAutomationBusy;
-        UpdateSplitCommandState();
-        RefreshRecoverySummary();
-        App.Services.Commands.NotifyStateChanged();
-    }
-
-    private void UpdateSplitCommandState()
-    {
-        if (SelectedLane is not TimelineLaneDocument lane ||
-            _isBusy ||
-            IsLaneLocked(lane))
-        {
-            SplitClipButton.IsEnabled = false;
-            return;
-        }
-
-        SplitClipButton.IsEnabled = TimelineProjection.CanSplitAt(lane, _positionSeconds);
-    }
-
-    private void SetBusy(bool busy)
-    {
-        _isBusy = busy;
-        UpdateCommandState();
-    }
-
-    private void ShowInfo(string message, InfoBarSeverity severity)
-    {
-        PageInfoBar.Message = message;
-        PageInfoBar.Severity = severity;
-        PageInfoBar.IsOpen = true;
-    }
-
-    private async Task<bool> ConfirmAsync(
-        string title,
-        string message,
-        string primaryButtonText)
-    {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = title,
-            Content = message,
-            PrimaryButtonText = primaryButtonText,
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
-    }
-
-    private static bool TryReadFinite(NumberBox numberBox, out double value)
-    {
-        value = numberBox.Value;
-        return double.IsFinite(value);
-    }
-
-    private static double ReadFiniteOrDefault(NumberBox numberBox, double fallback) =>
-        double.IsFinite(numberBox.Value) ? numberBox.Value : fallback;
-
-    private static string? GetSelectedTag(ComboBox comboBox) =>
-        (comboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-
-    private static void SelectComboByTag(ComboBox comboBox, string tag)
-    {
-        ComboBoxItem? match = comboBox.Items
-            .OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(
-                item.Tag?.ToString(),
-                tag,
-                StringComparison.OrdinalIgnoreCase));
-        comboBox.SelectedItem = match ?? comboBox.Items.OfType<ComboBoxItem>().FirstOrDefault();
-    }
-
-    private void RestoreViewState(string projectId)
-    {
-        TimelineEditorViewState fallback = new(0, 80, 0, 0, null, null);
-        TimelineEditorViewState restored = fallback;
-        if (_settings?.Values[$"{ViewStateSettingPrefix}{projectId}"] is string json)
-        {
-            try
-            {
-                restored = JsonSerializer.Deserialize<TimelineEditorViewState>(json) ?? fallback;
-            }
-            catch (JsonException ex)
-            {
-                CrashLogger.Write($"Unable to read Timeline view state for project '{projectId}'.", ex);
-            }
+          throw new InvalidDataException("Reference and candidate media must be different assets.");
         }
 
-        restored = restored.Normalize(
-            _durationSeconds,
-            MinimumPixelsPerSecond,
-            MaximumPixelsPerSecond,
-            TimelineScroll.ViewportWidth,
-            VisualTrackCount * TrackHeight,
-            TimelineScroll.ViewportHeight,
-            _lanes.Select(lane => lane.StableId),
-            _canonicalProject?.Tracks.Select(track => track.Id));
-        _positionSeconds = restored.PositionSeconds;
-        _pixelsPerSecond = restored.PixelsPerSecond;
-        _selectedLaneId = restored.SelectedLaneId;
-        _selectedTrackId = restored.SelectedTrackId;
-        _restoredHorizontalOffset = restored.HorizontalOffset;
-        _restoredVerticalOffset = restored.VerticalOffset;
+        method = PostProductionContracts.ParseSyncSelection(methodTag);
+
+        CancelPostAlignment();
+        _postAlignmentCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation?.Token ?? CancellationToken.None);
+        CancellationToken cancellationToken = _postAlignmentCancellation.Token;
+        string projectId = _loadedProjectId!;
+        long revision = _editorRevision;
+        JsonObject document = _timelineDocument!;
+        SetPostAlignmentBusy(true, "Materializing authorized project media…");
+        string referencePath = await MaterializePostAlignmentAssetAsync(_canonicalProject!, projectId, reference.Id, cancellationToken);
+        string candidatePath = await MaterializePostAlignmentAssetAsync(_canonicalProject!, projectId, candidate.Id, cancellationToken);
+        EnsurePostPreviewCurrent(projectId, revision, document);
+        SetPostStatus("Analyzing bounded waveform windows…");
+        await using FileStream referenceStream = File.OpenRead(referencePath);
+        await using FileStream candidateStream = File.OpenRead(candidatePath);
+        int maximumShift = Math.Min(timebase.SampleRate * 10, WaveAlignmentService.MaximumShiftSamples);
+        result = await new WaveAlignmentService().AlignAsync(referenceStream, candidateStream, method,
+            maximumShift, cancellationToken: cancellationToken, requiredSampleRate: timebase.SampleRate);
+        EnsurePostPreviewCurrent(projectId, revision, document);
+      }
+
+      _pendingPostAlignment = result;
+      _pendingPostAlignmentMediaId = candidate.Id;
+      _pendingPostAlignmentMethod = method;
+      _pendingPostAlignmentProjectId = _loadedProjectId;
+      _pendingPostAlignmentRevision = _editorRevision;
+      _pendingPostAlignmentDocument = _timelineDocument;
+      ApplyPostSyncButton.IsEnabled = result.Acceptable;
+      PostSyncPreviewText.Text = $"Offset {result.OffsetSamples} samples • confidence {result.Confidence:P0} • {result.Diagnostics} Explicit acceptance is required.";
+      SetPostStatus("Alignment plan ready; no timeline changes were made.");
+    }
+    catch (OperationCanceledException)
+    {
+      SetPostStatus("Alignment canceled; no timeline changes were made.");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or IOException or ArgumentException or InvalidOperationException or NotSupportedException or OverflowException)
+    {
+      PostMutationFailed(ex);
+    }
+    finally
+    {
+      SetPostAlignmentBusy(false);
+      _postAlignmentCancellation?.Dispose();
+      _postAlignmentCancellation = null;
+    }
+  }
+
+  private void CancelPostSync_Click(object sender, RoutedEventArgs e)
+  {
+    CancelPostAlignment();
+  }
+
+  private void CancelPostAlignment()
+  {
+    _postAlignmentCancellation?.Cancel();
+  }
+
+  private void SetPostAlignmentBusy(bool busy, string? status = null)
+  {
+    if (PostSyncProgressBar is null)
+    {
+      return;
     }
 
-    private double _restoredHorizontalOffset;
-    private double _restoredVerticalOffset;
-
-    private void ApplyRestoredViewport()
+    PostSyncProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+    PlanPostSyncButton.IsEnabled = !busy;
+    CancelPostSyncButton.IsEnabled = busy;
+    if (status is not null)
     {
-        _updatingZoom = true;
-        ZoomSlider.Value = _pixelsPerSecond;
-        _updatingZoom = false;
-        TimelineScroll.ChangeView(_restoredHorizontalOffset, _restoredVerticalOffset, null, true);
-        _restoredHorizontalOffset = 0;
-        _restoredVerticalOffset = 0;
+      SetPostStatus(status);
+    }
+  }
+
+  private static async Task<string> MaterializePostAlignmentAssetAsync(CanonicalProject project, string projectId,
+      string assetId, CancellationToken cancellationToken)
+  {
+    MediaAsset asset = project.MediaAssets.FirstOrDefault(value => value.Id == assetId)
+        ?? throw new InvalidDataException($"Project media asset '{assetId}' no longer exists.");
+    string contentHash = ReadAssetContentHash(asset);
+    string cacheIdentity = CreateStableHash($"{projectId}\n{asset.Id}\n{asset.Path}\n{contentHash}");
+    string extension = System.IO.Path.GetExtension(asset.Path);
+    if (extension.Length is 0 or > 16 || extension.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
+    {
+      extension = ".media";
     }
 
-    private void PersistViewState(double? horizontalOffset = null)
+    string cacheRoot = ResolveTimelineCacheRoot("post-alignment-media");
+    string destination = System.IO.Path.Combine(cacheRoot, cacheIdentity + extension.ToLowerInvariant());
+    if (contentHash.Length == 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
     {
-        if (_settings is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+      _ = await App.Services.ProjectMediaClient.MaterializeProjectMediaAsync(projectId, asset.Path, destination, cancellationToken);
+    }
+
+    return destination;
+  }
+
+  private static string ResolveTimelineCacheRoot(string leaf)
+  {
+    string? packagedPath = WindowsPackageIdentity.IsPackaged
+        ? ApplicationData.Current.LocalCacheFolder.Path
+        : null;
+    return StudioStoragePaths.ResolveRoot(
+        WindowsPackageIdentity.IsPackaged,
+        packagedPath,
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        WindowsPackageIdentity.IsPackaged ? leaf : System.IO.Path.Combine("cache", leaf));
+  }
+
+  private async void ApplyPostSync_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      AlignmentResult result = _pendingPostAlignment ?? throw new InvalidOperationException("Plan alignment before applying it.");
+      EnsurePostPreviewCurrent(_pendingPostAlignmentProjectId, _pendingPostAlignmentRevision, _pendingPostAlignmentDocument);
+      if (!result.Acceptable)
+      {
+        throw new InvalidOperationException("This alignment is not acceptable and cannot be applied.");
+      }
+
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      SyncAnchor anchor = new(NewPostId("sync"), _pendingPostAlignmentMethod, null, _pendingPostAlignmentMediaId,
+          result.OffsetSamples, result.Confidence, new JsonObject { ["diagnostics"] = result.Diagnostics });
+      await CommitPostAsync(post with { SyncAnchors = post.SyncAnchors.Add(anchor) }, "post sync alignment accepted");
+      _pendingPostAlignment = null;
+      _pendingPostAlignmentDocument = null;
+      ApplyPostSyncButton.IsEnabled = false;
+      SetPostStatus("Alignment accepted and saved.");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async void AddPostAdrCue_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      long start = ReadPostSample(PostAdrStartTextBox, "ADR start");
+      long end = ReadPostSample(PostAdrEndTextBox, "ADR end");
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      AdrCue cue = new(NewPostId("adr"), null, start, end, PostAdrTextTextBox.Text.Trim(),
+          NullIfEmpty(PostAdrPerformerTextBox.Text), [], []);
+      await CommitPostAsync(AdrOperations.AddCue(post, cue), "ADR cue added");
+      SetPostStatus($"ADR cue {cue.Id} added.");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async void RegisterPostAdrTake_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      string cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select an ADR cue.");
+      string mediaId = (PostAdrMediaComboBox.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select imported or pre-recorded project media.");
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      AdrTake take = new(NewPostId("take"), cueId, mediaId, AdrReviewStatus.Unreviewed, false,
+          new AdrRecordingMetadata(null, null, "imported project media", null, _canonicalProject!.Timebase.SampleRate, 2, []), []);
+      await CommitPostAsync(AdrOperations.RegisterTake(post, cueId, take), "ADR take registered");
+      SetPostStatus($"Pre-recorded take {take.Id} registered; no native recording was performed.");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or KeyNotFoundException)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async void ReviewPostAdrTake_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      string cueId = (PostAdrCueListView.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select an ADR cue.");
+      string takeId = (PostAdrTakeListView.SelectedItem as ProfessionalListItem)?.Id ?? throw new InvalidDataException("Select an ADR take.");
+      AdrReviewStatus status = GetSelectedTag(PostAdrReviewComboBox) switch
+      {
+        "approved" => AdrReviewStatus.Approved,
+        "rejected" => AdrReviewStatus.Rejected,
+        _ => AdrReviewStatus.Unreviewed
+      };
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      await CommitPostAsync(AdrOperations.ReviewTake(post, cueId, takeId, status, PostAdrPreferredToggle.IsOn), "ADR take reviewed");
+      SetPostStatus($"ADR take {takeId} review saved.");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or KeyNotFoundException)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private void PreviewPostReconform_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      ReconformEdit edit = new(GetSelectedTag(PostReconformKindComboBox) switch
+      {
+        "delete" => ReconformEditKind.Delete,
+        "move" => ReconformEditKind.Move,
+        _ => ReconformEditKind.Insert
+      }, ReadPostSample(PostOldStartTextBox, "old start"), ReadPostSample(PostOldEndTextBox, "old end"),
+          ReadPostSample(PostNewStartTextBox, "new start"), ReadPostSample(PostNewEndTextBox, "new end"));
+      SetReconformPreview(ReconformService.Plan([edit]), "Manual preview");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private void SetReconformPreview(ReconformPlan plan, string source)
+  {
+    _pendingReconformPlan = plan;
+    _pendingReconformProjectId = _loadedProjectId;
+    _pendingReconformRevision = _editorRevision;
+    _pendingReconformDocument = _timelineDocument;
+    ApplyPostReconformButton.IsEnabled = plan.CanApply && !plan.Edits.IsEmpty;
+    PostReconformPreviewText.Text = plan.Conflicts.IsEmpty
+        ? $"{source}: {plan.Edits.Length} edit(s), no conflicts. Review and explicitly apply."
+        : $"{source}: {string.Join(" | ", plan.Conflicts.Select(conflict => $"{conflict.Code}: {conflict.Message}"))}";
+    SetPostStatus("Reconform preview updated; no timeline changes were made.");
+  }
+
+  private async void ApplyPostReconform_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      ReconformPlan plan = _pendingReconformPlan ?? throw new InvalidOperationException("Preview a reconform before applying it.");
+      EnsurePostPreviewCurrent(_pendingReconformProjectId, _pendingReconformRevision, _pendingReconformDocument);
+      ReconformResult result = ReconformService.Apply(_canonicalProject!, PostProductionContracts.Read(_timelineDocument!), plan);
+      PostProductionDocument post = result.Post;
+      PostProductionContracts.ValidateAgainstProject(result.Project, post);
+      JsonObject before = CloneDocument(_timelineDocument!);
+      JsonObject baseDocument = CloneDocument(result.Project.Timeline);
+      JsonObject updated = PostProductionContracts.Write(baseDocument, post);
+      await CommitDocumentAsync(before, updated, "post reconform applied", _selectedLaneId, _selectedCameraKeyframeIdentity);
+      _pendingReconformPlan = null;
+      _pendingReconformDocument = null;
+      ApplyPostReconformButton.IsEnabled = false;
+      SetPostStatus("Reconform applied and saved to history.");
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException or OverflowException)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async void ImportPostJson_Click(object sender, RoutedEventArgs e)
+  {
+    await ImportPostTextAsync(".json", async (text, fileName) =>
+    {
+      InterchangeResult<PostProductionDocument> result = PostProductionInterchange.ImportCanonical(text);
+      PostProductionDocument imported = PostProductionHistory.AppendInterchange(result.Value, "canonical-json", "import", result.Compatibility, fileName);
+      PostProductionContracts.ValidateAgainstProject(_canonicalProject!, imported);
+      await CommitPostAsync(imported, "canonical post JSON imported");
+      ShowPostCompatibility("Canonical JSON import", result.Compatibility);
+    });
+  }
+
+  private async void ExportPostJson_Click(object sender, RoutedEventArgs e)
+  {
+    await ExportPostTextAsync("JSON document", ".json", "post", () =>
+        PostProductionInterchange.ExportCanonical(PostProductionContracts.Read(_timelineDocument!)), "Canonical JSON export", "canonical-json");
+  }
+
+  private async void ImportPostCmx_Click(object sender, RoutedEventArgs e)
+  {
+    await ImportPostTextAsync(".edl", async (text, fileName) =>
+    {
+      InterchangeResult<ImmutableArray<ReconformEdit>> result = PostProductionInterchange.ImportCmx3600(text, _canonicalProject!.Timebase);
+      ShowPostCompatibility("CMX3600 import", result.Compatibility);
+      if (!result.Compatibility.IsCompatible)
+      {
+        throw new InvalidDataException("CMX3600 import contains errors. Review the compatibility report; no reconform preview was created.");
+      }
+
+      PostProductionDocument post = PostProductionHistory.AppendInterchange(PostProductionContracts.Read(_timelineDocument!),
+            "cmx3600", "import", result.Compatibility, fileName);
+      await CommitPostAsync(post, "CMX3600 imported for reconform preview");
+      SetReconformPreview(ReconformService.Plan(result.Value), "CMX3600 preview");
+    });
+  }
+
+  private async void ExportPostCmx_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      EnsurePostProject();
+      string? projectId = _loadedProjectId;
+      long revision = _editorRevision;
+      JsonObject document = _timelineDocument!;
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      InterchangeResult<string> result;
+      try
+      {
+        result = PostProductionInterchange.ExportCmx3600(_canonicalProject!, post);
+      }
+      catch (InvalidOperationException)
+      {
+        bool consent = await ConfirmAsync("Lossy CMX3600 export?",
+            "CMX3600 omits ADR, sync, channel-layout, and object metadata. Export only after accepting these omissions.", "Export with omissions");
+        if (!consent) { SetPostStatus("CMX3600 export canceled; no file was written."); return; }
+        EnsurePostPreviewCurrent(projectId, revision, document);
+        result = PostProductionInterchange.ExportCmx3600(_canonicalProject!, post, allowOmissions: true);
+      }
+      StorageFile? file = await SavePostTextAsync("CMX3600 EDL", ".edl", "timeline", result.Value);
+      if (file is null) { SetPostStatus("CMX3600 export canceled; no file was written."); return; }
+      EnsurePostPreviewCurrent(projectId, revision, document);
+      await RecordPostInterchangeAsync("cmx3600", "export", result.Compatibility, file.Name);
+      ShowPostCompatibility("CMX3600 export", result.Compatibility);
+    }
+    catch (Exception ex)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async void ImportPostAdrCsv_Click(object sender, RoutedEventArgs e)
+  {
+    await ImportPostTextAsync(".csv", async (text, fileName) =>
+    {
+      InterchangeResult<ImmutableArray<AdrCue>> result = PostProductionInterchange.ImportAdrCsv(text);
+      if (!result.Compatibility.IsCompatible)
+      {
+        throw new InvalidDataException(FormatCompatibility(result.Compatibility));
+      }
+
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      HashSet<string> used = post.AdrCues.Select(cue => cue.Id).ToHashSet(StringComparer.Ordinal);
+      foreach (AdrCue imported in result.Value)
+      {
+        string baseId = string.IsNullOrWhiteSpace(imported.Id) ? "adr-import" : imported.Id;
+        string id = baseId;
+        for (int suffix = 2; !used.Add(id); suffix++)
         {
-            return;
+          id = $"{baseId}-{suffix}";
         }
 
-        var state = new TimelineEditorViewState(
-            _positionSeconds,
-            _pixelsPerSecond,
-            horizontalOffset ?? TimelineScroll.HorizontalOffset,
-            TimelineScroll.VerticalOffset,
-            _selectedLaneId,
-            _selectedTrackId);
-        try
-        {
-            _settings.Values[$"{ViewStateSettingPrefix}{_loadedProjectId}"] = JsonSerializer.Serialize(state);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
-        {
-            CrashLogger.Write($"Unable to persist Timeline view state for project '{_loadedProjectId}'.", ex);
-        }
-    }
+        post = AdrOperations.AddCue(post, imported with { Id = id });
+      }
+      post = PostProductionHistory.AppendInterchange(post, "adr-csv", "import", result.Compatibility, fileName);
+      PostProductionContracts.ValidateAgainstProject(_canonicalProject!, post);
+      await CommitPostAsync(post, "ADR CSV imported");
+      ShowPostCompatibility("ADR CSV import", result.Compatibility);
+    });
+  }
 
-    private static bool IsVisualLane(TimelineLaneDocument lane) =>
-        lane.IsLayer
-            ? IsVisualSourcePath(lane.SourcePath)
-            : lane.Type.Contains("video", StringComparison.OrdinalIgnoreCase)
-              || lane.Type.Contains("visual", StringComparison.OrdinalIgnoreCase)
-              || lane.Type.Contains("image", StringComparison.OrdinalIgnoreCase)
-              || IsVisualSourcePath(lane.SourcePath);
-
-    private static bool IsVisualSourcePath(string? sourcePath) =>
-        System.IO.Path.GetExtension(sourcePath ?? string.Empty).ToLowerInvariant() is
-            ".avi" or ".bmp" or ".jpeg" or ".jpg" or ".m4v" or ".mkv" or ".mov" or
-            ".mp4" or ".mpeg" or ".mpg" or ".png" or ".webm" or ".webp";
-
-    private static string FormatClock(double seconds)
+  private async void ExportPostAdrCsv_Click(object sender, RoutedEventArgs e)
+  {
+    try
     {
-        TimeSpan time = TimeSpan.FromSeconds(Math.Max(0, seconds));
-        return time.TotalHours >= 1
-            ? $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}"
-            : $"{time.Minutes:00}:{time.Seconds:00}";
+      EnsurePostProject();
+      string? projectId = _loadedProjectId;
+      long revision = _editorRevision;
+      JsonObject document = _timelineDocument!;
+      InterchangeResult<string> result = PostProductionInterchange.ExportAdrCsv(PostProductionContracts.Read(document));
+      ShowPostCompatibility("ADR CSV export", result.Compatibility);
+      if (PostProductionInterchangeConsent.RequiresExplicitConsent(result.Compatibility))
+      {
+        bool consent = await ConfirmAsync("Lossy ADR CSV export?",
+            FormatCompatibility(result.Compatibility) + Environment.NewLine + "Export only after accepting these omissions.",
+            "Export with omissions");
+        if (!consent) { SetPostStatus("ADR CSV export canceled; no file was written."); return; }
+        EnsurePostPreviewCurrent(projectId, revision, document);
+      }
+      StorageFile? file = await SavePostTextAsync("CSV document", ".csv", "adr-cues", result.Value);
+      if (file is null) { SetPostStatus("ADR CSV export canceled; no file was written."); return; }
+      EnsurePostPreviewCurrent(projectId, revision, document);
+      await RecordPostInterchangeAsync("adr-csv", "export", result.Compatibility, file.Name);
     }
-
-    private static string FormatRulerTime(double seconds)
+    catch (Exception ex)
     {
-        TimeSpan time = TimeSpan.FromSeconds(Math.Max(0, seconds));
-        return time.TotalHours >= 1
-            ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}"
-            : $"{time.Minutes}:{time.Seconds:00}";
+      PostMutationFailed(ex);
     }
+  }
 
-    private double CurrentFramesPerSecond => _canonicalProject?.Timebase.FrameRate.FramesPerSecond ?? FallbackFps;
-
-    private double StepByFrames(long delta)
+  private void PostAudioLayout_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (PostAudioCapabilityText is null)
     {
-        if (_canonicalProject is null)
-            return _positionSeconds + (delta / FallbackFps);
-        ProjectTimebase timebase = _canonicalProject.Timebase;
-        long frame = Math.Max(0, timebase.ToFrame(timebase.FromSeconds(_positionSeconds)) + delta);
-        return timebase.ToSeconds(timebase.FromFrame(frame));
+      return;
     }
 
-    private string FormatTimecode(double seconds)
+    AudioChannelLayout layout = ParsePostLayout();
+    AudioLayoutCapability capability = PostProductionCapabilities.Native.First(value => value.Layout == layout);
+    PostAudioCapabilityText.Text = capability.Detail;
+  }
+
+  private async void AddPostAudioLayout_Click(object sender, RoutedEventArgs e)
+  {
+    try
     {
-        double clamped = Math.Max(0, seconds);
-        if (_canonicalProject is not null && Timecode.Supports(_canonicalProject.Timebase.FrameRate))
-        {
-            return _canonicalProject.Timebase.ToTimecode(_canonicalProject.Timebase.FromSeconds(clamped)).ToString();
-        }
-        double framesPerSecond = CurrentFramesPerSecond;
-        int nominalFramesPerSecond = Math.Max(1, (int)Math.Ceiling(framesPerSecond));
-        long totalSeconds = checked((long)Math.Floor(clamped));
-        int frames = Math.Min(nominalFramesPerSecond - 1,
-            (int)Math.Floor((clamped - totalSeconds) * framesPerSecond));
-        long hours = totalSeconds / 3600;
-        int minutes = (int)(totalSeconds / 60) % 60;
-        int remainingSeconds = (int)(totalSeconds % 60);
-        int frameDigits = Math.Max(2, (nominalFramesPerSecond - 1).ToString(CultureInfo.InvariantCulture).Length);
-        return $"{hours:00}:{minutes:00}:{remainingSeconds:00}:{frames.ToString($"D{frameDigits}", CultureInfo.InvariantCulture)}";
+      EnsurePostProject();
+      AudioChannelLayout layout = ParsePostLayout();
+      int channels = layout switch { AudioChannelLayout.Mono => 1, AudioChannelLayout.Stereo => 2, AudioChannelLayout.Surround51 => 6, AudioChannelLayout.Surround71 => 8, _ => 1 };
+      string? mediaId = (PostAudioLayoutMediaComboBox.SelectedItem as ProfessionalListItem)?.Id;
+      mediaId = NullIfEmpty(mediaId);
+      PostProductionDocument post = PostProductionContracts.Read(_timelineDocument!);
+      AudioLayoutDescriptor descriptor = new(NewPostId("layout"), layout, channels, mediaId, [], []);
+      await CommitPostAsync(post with { AudioLayouts = post.AudioLayouts.Add(descriptor) }, "post audio layout metadata added");
+      SetPostStatus($"{layout} metadata added. {PostProductionCapabilities.Native.First(value => value.Layout == layout).Detail}");
     }
-
-    private enum DragMode
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or InvalidOperationException)
     {
-        None,
-        Move,
-        TrimStart,
-        TrimEnd
+      PostMutationFailed(ex);
     }
+  }
 
-    private enum TimelinePointerTool
+  private async Task CommitPostAsync(PostProductionDocument post, string reason)
+  {
+    EnsurePostProject();
+    PostProductionContracts.ValidateAgainstProject(_canonicalProject!, post);
+    JsonObject before = CloneDocument(_timelineDocument!);
+    JsonObject working = CloneDocument(_timelineDocument!);
+    JsonObject updated = PostProductionContracts.Write(working, post);
+    await CommitDocumentAsync(before, updated, reason, _selectedLaneId, _selectedCameraKeyframeIdentity);
+  }
+
+  private void EnsurePostProject()
+  {
+    if (_timelineDocument is null || _canonicalProject is null)
     {
-        Select,
-        Blade
+      throw new InvalidOperationException("Load an active canonical project first.");
+    }
+  }
+
+  private void EnsurePostPreviewCurrent(string? projectId, long revision, JsonObject? document)
+  {
+    if (projectId != _loadedProjectId || revision != _editorRevision || !ReferenceEquals(document, _timelineDocument))
+    {
+      throw new InvalidOperationException("The timeline changed after this preview was created. Preview the operation again before applying it.");
+    }
+  }
+
+  private static long ReadPostSample(TextBox box, string label)
+  {
+    return long.TryParse(box.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out long value) && value >= 0
+          ? value : throw new InvalidDataException($"{label} must be a canonical nonnegative whole sample value.");
+  }
+
+  private static string NewPostId(string prefix)
+  {
+    return $"{prefix}-{Guid.NewGuid():N}";
+  }
+
+  private static string? NullIfEmpty(string? value)
+  {
+    return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  }
+
+  private AudioChannelLayout ParsePostLayout()
+  {
+    return GetSelectedTag(PostAudioLayoutComboBox) switch
+    {
+      "mono" => AudioChannelLayout.Mono,
+      "5.1" => AudioChannelLayout.Surround51,
+      "7.1" => AudioChannelLayout.Surround71,
+      "object" => AudioChannelLayout.Object,
+      _ => AudioChannelLayout.Stereo
+    };
+  }
+
+  private async Task ImportPostTextAsync(string extension, Func<string, string, Task> import)
+  {
+    try
+    {
+      EnsurePostProject();
+      string? projectId = _loadedProjectId;
+      long revision = _editorRevision;
+      JsonObject document = _timelineDocument!;
+      if (App.MainWindowInstance is null)
+      {
+        throw new InvalidOperationException("The Studio window is not ready for file selection.");
+      }
+
+      FileOpenPicker picker = new() { SuggestedStartLocation = PickerLocationId.DocumentsLibrary, ViewMode = PickerViewMode.List };
+      picker.FileTypeFilter.Add(extension);
+      WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
+      StorageFile? file = await picker.PickSingleFileAsync();
+      if (file is null)
+      {
+        return;
+      }
+
+      string text = await FileIO.ReadTextAsync(file);
+      EnsurePostPreviewCurrent(projectId, revision, document);
+      await import(text, file.Name);
+      SetPostStatus($"Imported {file.Name}.");
+    }
+    catch (Exception ex)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async Task ExportPostTextAsync(string description, string extension, string suggestedName,
+      Func<InterchangeResult<string>> create, string reportTitle, string format)
+  {
+    try
+    {
+      EnsurePostProject();
+      string? projectId = _loadedProjectId;
+      long revision = _editorRevision;
+      JsonObject document = _timelineDocument!;
+      InterchangeResult<string> result = create();
+      StorageFile? file = await SavePostTextAsync(description, extension, suggestedName, result.Value);
+      if (file is null) { SetPostStatus($"{reportTitle} canceled; no file was written."); return; }
+      EnsurePostPreviewCurrent(projectId, revision, document);
+      await RecordPostInterchangeAsync(format, "export", result.Compatibility, file.Name);
+      ShowPostCompatibility(reportTitle, result.Compatibility);
+    }
+    catch (Exception ex)
+    {
+      PostMutationFailed(ex);
+    }
+  }
+
+  private async Task RecordPostInterchangeAsync(string format, string direction, CompatibilityReport compatibility, string fileName)
+  {
+    PostProductionDocument post = PostProductionHistory.AppendInterchange(
+        PostProductionContracts.Read(_timelineDocument!), format, direction, compatibility, fileName);
+    await CommitPostAsync(post, $"{format} {direction} recorded");
+  }
+
+  private async Task<StorageFile?> SavePostTextAsync(string description, string extension, string suggestedName, string text)
+  {
+    if (App.MainWindowInstance is null)
+    {
+      throw new InvalidOperationException("The Studio window is not ready for file selection.");
     }
 
-    private sealed record ClipMenuAction(string Action, string StableId);
-    private sealed record Vst3CatalogItem(string Label, string PluginId, string ModulePath, string ModuleSha256);
-    private sealed record Vst3InsertItem(string Id, string Label, string Detail);
-    private sealed record ProfessionalListItem(string Id, string Label, string Detail = "");
+    FileSavePicker picker = new() { SuggestedStartLocation = PickerLocationId.DocumentsLibrary, SuggestedFileName = suggestedName };
+    picker.FileTypeChoices.Add(description, [extension]);
+    WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
+    StorageFile? file = await picker.PickSaveFileAsync();
+    if (file is null)
+    {
+      return null;
+    }
+
+    await FileIO.WriteTextAsync(file, text);
+    SetPostStatus($"Exported {file.Name}.");
+    return file;
+  }
+
+  private void ShowPostCompatibility(string operation, CompatibilityReport report)
+  {
+    PostCompatibilityText.Text = $"{operation}: {FormatCompatibility(report)}";
+  }
+
+  private static string FormatCompatibility(CompatibilityReport report)
+  {
+    return report.Issues.IsEmpty
+      ? "compatible and lossless."
+      : string.Join(Environment.NewLine, report.Issues.Select(issue => $"{issue.Severity}: {issue.Code} — {issue.Message}"));
+  }
+
+  private void SetPostStatus(string message)
+  {
+    PostStatusText.Text = message;
+  }
+
+  private void PostMutationFailed(Exception exception)
+  {
+    SetPostStatus($"Post operation failed: {exception.Message}");
+    ShowInfo(PostStatusText.Text, InfoBarSeverity.Error);
+  }
+
+  private void RefreshWorkflowPlanSummary()
+  {
+    if (string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      WorkspacePlanText.Text =
+          "Select a project in Workspace to apply its plan on this Timeline.";
+      return;
+    }
+
+    WorkspacePlanText.Text =
+        $"Workspace plan variant {_loadedVariantIndex + 1} is selected for " +
+        $"{_project?.Name ?? _loadedProjectId}. Append preserves current clips; overwrite replaces them.";
+  }
+
+  private async Task LoadWorkflowAssetsAsync(CancellationToken cancellationToken)
+  {
+    if (string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      throw new InvalidOperationException("Select a project before refreshing sources.");
+    }
+
+    WorkspaceAssetsResponse response =
+        await App.Services.ApiClient.GetProjectAssetsAsync(_loadedProjectId, cancellationToken);
+    string[] paths = response.Assets.Audio
+        .Concat(response.Assets.References)
+        .Select(asset => asset.Path)
+        .Where(path => !string.IsNullOrWhiteSpace(path))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    SourceAssetComboBox.ItemsSource = paths;
+
+    if (paths.Contains(_selectedSourcePath, StringComparer.OrdinalIgnoreCase))
+    {
+      SourceAssetComboBox.SelectedItem = paths.First(
+          path => string.Equals(path, _selectedSourcePath, StringComparison.OrdinalIgnoreCase));
+    }
+  }
+
+  private void SelectSource(string sourcePath)
+  {
+    _selectedSourcePath = sourcePath;
+    SelectedSourceText.Text = string.IsNullOrWhiteSpace(sourcePath)
+        ? "No source selected."
+        : sourcePath;
+    UpdateCommandState();
+  }
+
+  private bool TryGetAutomationContext(bool requireSelection, out JsonObject timeline)
+  {
+    timeline = null!;
+    if (_timelineDocument is null)
+    {
+      ShowAutomationInfo("Load a Timeline before changing its sources.", InfoBarSeverity.Warning);
+      return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(_selectedSourcePath))
+    {
+      ShowAutomationInfo("Select a project source or browse to a local file first.", InfoBarSeverity.Warning);
+      return false;
+    }
+
+    if (requireSelection && string.IsNullOrWhiteSpace(_selectedLaneId))
+    {
+      ShowAutomationInfo("Select a Timeline clip before assigning its source.", InfoBarSeverity.Warning);
+      return false;
+    }
+
+    timeline = CloneDocument(_timelineDocument);
+    return true;
+  }
+
+  private async Task RefreshProjectRevisionAsync(
+      string projectId,
+      CancellationToken cancellationToken)
+  {
+    ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+    if (string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+    {
+      _project = refreshed.Project;
+    }
+  }
+
+  private async Task HandleProjectRevisionConflictAsync(ProjectRevisionConflictException conflict)
+  {
+    _revisionConflictInterruptedOperation = true;
+    if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+    {
+      ShowInfo(
+          "The failed change was not applied. Your local Timeline edits remain open; reload the project before retrying.",
+          InfoBarSeverity.Warning);
+      return;
+    }
+
+    string? projectId = _loadedProjectId;
+    await LoadActiveProjectAsync(forceReload: true);
+    if (_project is not null &&
+        string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+    {
+      ShowInfo(
+          "The latest project revision is loaded. Review the Timeline, then retry your change.",
+          InfoBarSeverity.Informational);
+    }
+  }
+
+  private async Task RunAutomationAsync(
+      string progressMessage,
+      Func<CancellationToken, Task<string>> operation)
+  {
+    if (_isAutomationBusy)
+    {
+      return;
+    }
+
+    CancellationToken pageToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(pageToken);
+    _automationCancellation = cancellation;
+    _isAutomationBusy = true;
+    _revisionConflictInterruptedOperation = false;
+    AutomationProgressBar.IsIndeterminate = true;
+    AutomationProgressBar.Visibility = Visibility.Visible;
+    ShowAutomationInfo(progressMessage, InfoBarSeverity.Informational);
+    UpdateCommandState();
+
+    try
+    {
+      string result = await operation(cancellation.Token);
+      if (!_revisionConflictInterruptedOperation)
+      {
+        ShowAutomationInfo(result, InfoBarSeverity.Success);
+      }
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+      if (!pageToken.IsCancellationRequested)
+      {
+        ShowAutomationInfo("The Timeline workflow was canceled.", InfoBarSeverity.Warning);
+      }
+    }
+    catch (ProjectRevisionConflictException conflict)
+    {
+      await HandleProjectRevisionConflictAsync(conflict);
+    }
+    catch (Exception ex)
+    {
+      ShowAutomationInfo(ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      if (ReferenceEquals(_automationCancellation, cancellation))
+      {
+        _automationCancellation = null;
+      }
+
+      cancellation.Dispose();
+      _isAutomationBusy = false;
+      AutomationProgressBar.IsIndeterminate = false;
+      AutomationProgressBar.Visibility = Visibility.Collapsed;
+      UpdateCommandState();
+    }
+  }
+
+  private void ShowAutomationInfo(string message, InfoBarSeverity severity)
+  {
+    AutomationInfoBar.Title = severity switch
+    {
+      InfoBarSeverity.Success => "Workflow completed",
+      InfoBarSeverity.Warning => "Workflow attention",
+      InfoBarSeverity.Error => "Workflow failed",
+      _ => "Workflow running",
+    };
+    AutomationInfoBar.Message = message;
+    AutomationInfoBar.Severity = severity;
+    AutomationInfoBar.IsOpen = true;
+  }
+
+  private void SetAutomationResult(JsonObject result)
+  {
+    AutomationResultTextBox.Text = result.ToJsonString(new JsonSerializerOptions
+    {
+      WriteIndented = true,
+    });
+  }
+
+  private async Task NavigateWithSaveAsync(string destination)
+  {
+    if (_isAutomationBusy)
+    {
+      ShowAutomationInfo("Wait for or cancel the active Timeline workflow before navigating.", InfoBarSeverity.Warning);
+      return;
+    }
+
+    if (_isDirty)
+    {
+      bool saved = false;
+      await RunAutomationAsync(
+          "Saving Timeline before handoff...",
+          async token =>
+          {
+            await SaveTimelineDocumentAsync(token);
+            saved = true;
+            return "Timeline saved for the next Studio workflow.";
+          });
+      if (!saved)
+      {
+        return;
+      }
+    }
+
+    App.Navigate(destination);
+  }
+
+  private void UpdateCommandState()
+  {
+    bool hasTimeline = _timelineDocument is not null && !_isBusy;
+    bool hasLaneSelection = SelectedLane is not null && !_isBusy;
+    bool hasEditableLaneSelection = hasLaneSelection && !IsLaneLocked(SelectedLane);
+    bool hasCameraSelection = SelectedCameraKeyframe is not null && !_isBusy;
+    _ = hasLaneSelection || hasCameraSelection;
+    bool canRunAutomation = hasTimeline && !_isAutomationBusy;
+    bool hasProject = !string.IsNullOrWhiteSpace(_loadedProjectId);
+    bool hasSource = !string.IsNullOrWhiteSpace(_selectedSourcePath);
+    UndoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanUndo;
+    EditorTrackCommands.IsEnabled = hasTimeline && !_isDirty;
+    bool exactEnabled = hasTimeline && !_isDirty && SelectedLane is { IsLayer: false } exactLane && !IsLaneLocked(exactLane);
+    MoveExactButton.IsEnabled = exactEnabled;
+    SplitExactButton.IsEnabled = exactEnabled;
+    ExactSampleTextBox.IsEnabled = exactEnabled;
+    bool hasMarkerSelection = _selectedMarkerId is not null && !_isBusy;
+    MarkerComboBox.IsEnabled = hasTimeline;
+    MarkerNameTextBox.IsEnabled = hasTimeline;
+    MoveMarkerButton.IsEnabled = hasMarkerSelection;
+    DeleteMarkerButton.IsEnabled = hasMarkerSelection;
+    RedoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanRedo;
+    ToolTipService.SetToolTip(UndoButton, _editorHistory.UndoLabel ?? "No saved edit to undo");
+    ToolTipService.SetToolTip(RedoButton, _editorHistory.RedoLabel ?? "No saved edit to redo");
+    SaveButton.IsEnabled = hasTimeline;
+    PlayPauseButton.IsEnabled = hasTimeline;
+    ApplyInspectorButton.IsEnabled = hasEditableLaneSelection;
+    DuplicateClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
+    DeleteClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
+    MoveClipButton.IsEnabled = hasCameraSelection || hasEditableLaneSelection;
+    QuantizeClipButton.IsEnabled =
+        (hasCameraSelection || hasEditableLaneSelection) &&
+        CanQuantizeToCurrentGrid();
+    AddCameraButton.IsEnabled = hasTimeline;
+    CameraKeyframeListView.IsEnabled = hasTimeline;
+    SetCameraEditorEnabled(hasCameraSelection);
+    RenderMasterButton.IsEnabled = hasTimeline;
+    ApplyRawButton.IsEnabled = hasTimeline;
+    RevertRawButton.IsEnabled = hasTimeline;
+    RefreshMixerEditor();
+    RefreshWorkflowButton.IsEnabled = hasProject && !_isAutomationBusy;
+    AppendPlanButton.IsEnabled = canRunAutomation && hasProject;
+    OverwritePlanButton.IsEnabled = canRunAutomation && hasProject;
+    GenerateAiEditButton.IsEnabled = canRunAutomation && hasProject;
+    AppendAiEditButton.IsEnabled = canRunAutomation && hasProject && _hasAiEditProposal;
+    ReplaceWithAiEditButton.IsEnabled = canRunAutomation && hasProject && _hasAiEditProposal;
+    SourceAssetComboBox.IsEnabled = !_isAutomationBusy;
+    BrowseSourceButton.IsEnabled = !_isAutomationBusy;
+    AssignSourceButton.IsEnabled = canRunAutomation && hasEditableLaneSelection && hasSource;
+    AddSourceClipButton.IsEnabled = canRunAutomation && hasSource;
+    SequenceTrackButton.IsEnabled = canRunAutomation;
+    ApplyMotionButton.IsEnabled = canRunAutomation && hasProject;
+    CancelAutomationButton.IsEnabled = _isAutomationBusy;
+    OpenWorkspaceButton.IsEnabled = !_isAutomationBusy;
+    OpenRenderButton.IsEnabled = !_isAutomationBusy;
+    OpenReviewButton.IsEnabled = !_isAutomationBusy;
+    OpenOutputsButton.IsEnabled = !_isAutomationBusy;
+    OpenQueueButton.IsEnabled = !_isAutomationBusy;
+    OpenPlannerButton.IsEnabled = !_isAutomationBusy;
+    OpenReactiveButton.IsEnabled = !_isAutomationBusy;
+    UpdateSplitCommandState();
+    RefreshRecoverySummary();
+    App.Services.Commands.NotifyStateChanged();
+  }
+
+  private void UpdateSplitCommandState()
+  {
+    if (SelectedLane is not TimelineLaneDocument lane ||
+        _isBusy ||
+        IsLaneLocked(lane))
+    {
+      SplitClipButton.IsEnabled = false;
+      return;
+    }
+
+    SplitClipButton.IsEnabled = TimelineProjection.CanSplitAt(lane, _positionSeconds);
+  }
+
+  private void SetBusy(bool busy)
+  {
+    _isBusy = busy;
+    UpdateCommandState();
+  }
+
+  private void ShowInfo(string message, InfoBarSeverity severity)
+  {
+    PageInfoBar.Message = message;
+    PageInfoBar.Severity = severity;
+    PageInfoBar.IsOpen = true;
+  }
+
+  private async Task<bool> ConfirmAsync(
+      string title,
+      string message,
+      string primaryButtonText)
+  {
+    ContentDialog dialog = new()
+    {
+      XamlRoot = XamlRoot,
+      Title = title,
+      Content = message,
+      PrimaryButtonText = primaryButtonText,
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
+    };
+    return await dialog.ShowAsync() == ContentDialogResult.Primary;
+  }
+
+  private static bool TryReadFinite(NumberBox numberBox, out double value)
+  {
+    value = numberBox.Value;
+    return double.IsFinite(value);
+  }
+
+  private static double ReadFiniteOrDefault(NumberBox numberBox, double fallback)
+  {
+    return double.IsFinite(numberBox.Value) ? numberBox.Value : fallback;
+  }
+
+  private static string? GetSelectedTag(ComboBox comboBox)
+  {
+    return (comboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+  }
+
+  private static void SelectComboByTag(ComboBox comboBox, string tag)
+  {
+    ComboBoxItem? match = comboBox.Items
+        .OfType<ComboBoxItem>()
+        .FirstOrDefault(item => string.Equals(
+            item.Tag?.ToString(),
+            tag,
+            StringComparison.OrdinalIgnoreCase));
+    comboBox.SelectedItem = match ?? comboBox.Items.OfType<ComboBoxItem>().FirstOrDefault();
+  }
+
+  private void RestoreViewState(string projectId)
+  {
+    TimelineEditorViewState fallback = new(0, 80, 0, 0, null, null);
+    TimelineEditorViewState restored = fallback;
+    if (_settings?.Values[$"{ViewStateSettingPrefix}{projectId}"] is string json)
+    {
+      try
+      {
+        restored = JsonSerializer.Deserialize<TimelineEditorViewState>(json) ?? fallback;
+      }
+      catch (JsonException ex)
+      {
+        CrashLogger.Write($"Unable to read Timeline view state for project '{projectId}'.", ex);
+      }
+    }
+
+    restored = restored.Normalize(
+        _durationSeconds,
+        MinimumPixelsPerSecond,
+        MaximumPixelsPerSecond,
+        TimelineScroll.ViewportWidth,
+        VisualTrackCount * TrackHeight,
+        TimelineScroll.ViewportHeight,
+        _lanes.Select(lane => lane.StableId),
+        _canonicalProject?.Tracks.Select(track => track.Id));
+    _positionSeconds = restored.PositionSeconds;
+    _pixelsPerSecond = restored.PixelsPerSecond;
+    _selectedLaneId = restored.SelectedLaneId;
+    _selectedTrackId = restored.SelectedTrackId;
+    _restoredHorizontalOffset = restored.HorizontalOffset;
+    _restoredVerticalOffset = restored.VerticalOffset;
+  }
+
+  private double _restoredHorizontalOffset;
+  private double _restoredVerticalOffset;
+
+  private void ApplyRestoredViewport()
+  {
+    _updatingZoom = true;
+    ZoomSlider.Value = _pixelsPerSecond;
+    _updatingZoom = false;
+    _ = TimelineScroll.ChangeView(_restoredHorizontalOffset, _restoredVerticalOffset, null, true);
+    _restoredHorizontalOffset = 0;
+    _restoredVerticalOffset = 0;
+  }
+
+  private void PersistViewState(double? horizontalOffset = null)
+  {
+    if (_settings is null || string.IsNullOrWhiteSpace(_loadedProjectId))
+    {
+      return;
+    }
+
+    TimelineEditorViewState state = new(
+        _positionSeconds,
+        _pixelsPerSecond,
+        horizontalOffset ?? TimelineScroll.HorizontalOffset,
+        TimelineScroll.VerticalOffset,
+        _selectedLaneId,
+        _selectedTrackId);
+    try
+    {
+      _settings.Values[$"{ViewStateSettingPrefix}{_loadedProjectId}"] = JsonSerializer.Serialize(state);
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+    {
+      CrashLogger.Write($"Unable to persist Timeline view state for project '{_loadedProjectId}'.", ex);
+    }
+  }
+
+  private static bool IsVisualLane(TimelineLaneDocument lane)
+  {
+    return lane.IsLayer
+          ? IsVisualSourcePath(lane.SourcePath)
+          : lane.Type.Contains("video", StringComparison.OrdinalIgnoreCase)
+            || lane.Type.Contains("visual", StringComparison.OrdinalIgnoreCase)
+            || lane.Type.Contains("image", StringComparison.OrdinalIgnoreCase)
+            || IsVisualSourcePath(lane.SourcePath);
+  }
+
+  private static bool IsVisualSourcePath(string? sourcePath)
+  {
+    return System.IO.Path.GetExtension(sourcePath ?? string.Empty).ToLowerInvariant() is
+          ".avi" or ".bmp" or ".jpeg" or ".jpg" or ".m4v" or ".mkv" or ".mov" or
+          ".mp4" or ".mpeg" or ".mpg" or ".png" or ".webm" or ".webp";
+  }
+
+  private static string FormatClock(double seconds)
+  {
+    TimeSpan time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+    return time.TotalHours >= 1
+        ? $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}"
+        : $"{time.Minutes:00}:{time.Seconds:00}";
+  }
+
+  private static string FormatRulerTime(double seconds)
+  {
+    TimeSpan time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+    return time.TotalHours >= 1
+        ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}"
+        : $"{time.Minutes}:{time.Seconds:00}";
+  }
+
+  private double CurrentFramesPerSecond => _canonicalProject?.Timebase.FrameRate.FramesPerSecond ?? FallbackFps;
+
+  private double StepByFrames(long delta)
+  {
+    if (_canonicalProject is null)
+    {
+      return _positionSeconds + (delta / FallbackFps);
+    }
+
+    ProjectTimebase timebase = _canonicalProject.Timebase;
+    long frame = Math.Max(0, timebase.ToFrame(timebase.FromSeconds(_positionSeconds)) + delta);
+    return timebase.ToSeconds(timebase.FromFrame(frame));
+  }
+
+  private string FormatTimecode(double seconds)
+  {
+    double clamped = Math.Max(0, seconds);
+    if (_canonicalProject is not null && Timecode.Supports(_canonicalProject.Timebase.FrameRate))
+    {
+      return _canonicalProject.Timebase.ToTimecode(_canonicalProject.Timebase.FromSeconds(clamped)).ToString();
+    }
+    double framesPerSecond = CurrentFramesPerSecond;
+    int nominalFramesPerSecond = Math.Max(1, (int)Math.Ceiling(framesPerSecond));
+    long totalSeconds = checked((long)Math.Floor(clamped));
+    int frames = Math.Min(nominalFramesPerSecond - 1,
+        (int)Math.Floor((clamped - totalSeconds) * framesPerSecond));
+    long hours = totalSeconds / 3600;
+    int minutes = (int)(totalSeconds / 60) % 60;
+    int remainingSeconds = (int)(totalSeconds % 60);
+    int frameDigits = Math.Max(2, (nominalFramesPerSecond - 1).ToString(CultureInfo.InvariantCulture).Length);
+    return $"{hours:00}:{minutes:00}:{remainingSeconds:00}:{frames.ToString($"D{frameDigits}", CultureInfo.InvariantCulture)}";
+  }
+
+  private enum DragMode
+  {
+    None,
+    Move,
+    TrimStart,
+    TrimEnd
+  }
+
+  private enum TimelinePointerTool
+  {
+    Select,
+    Blade
+  }
+
+  private sealed record ClipMenuAction(string Action, string StableId);
+  private sealed record Vst3CatalogItem(string Label, string PluginId, string ModulePath, string ModuleSha256);
+  private sealed record Vst3InsertItem(string Id, string Label, string Detail);
+  private sealed record ProfessionalListItem(string Id, string Label, string Detail = "");
 }
 
 public sealed class CameraKeyframeListItem
 {
-    public string StableId { get; set; } = string.Empty;
-    public string Summary { get; set; } = string.Empty;
-    public string Detail { get; set; } = string.Empty;
+  public string StableId { get; set; } = string.Empty;
+  public string Summary { get; set; } = string.Empty;
+  public string Detail { get; set; } = string.Empty;
 }

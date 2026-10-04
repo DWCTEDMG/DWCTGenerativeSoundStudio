@@ -1,1293 +1,1334 @@
-using System.Collections.ObjectModel;
-using System.Text.Json;
 using EdmgStudio.Core.Models;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Collections.ObjectModel;
+using System.Text.Json;
 using Windows.Storage.Pickers;
 
 namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class ModelsPage : Page, IStudioRefreshable
 {
-    private const string TensorRtModelId = "local_sd15_tensorrt_bundle";
-    private const string QwenModelId = "hf_qwen3_vl_8b_gguf_director";
-    private const string WhisperModelId = "hf_whisper_large_v3_turbo_internal";
-    private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
-    private readonly DispatcherQueueTimer _pollTimer;
-    private readonly ObservableCollection<ModelPresentation> _visibleModels = [];
-    private readonly ObservableCollection<ModelPackPresentation> _packs = [];
-    private readonly ObservableCollection<ModelTaskPresentation> _tasks = [];
-    private CancellationTokenSource? _pageCancellation;
-    private ModelCatalogueResponse? _catalogue;
-    private ModelPresentation? _selectedModel;
-    private TensorRtMigrationStatus? _tensorRtStatus;
-    private RuntimeStatusResponse? _runtimeStatus;
-    private string? _taskFingerprint;
-    private bool _isInitialized;
-    private bool _isRefreshing;
-    private bool _isPolling;
-    private bool _isCommandRunning;
+  private const string TensorRtModelId = "local_sd15_tensorrt_bundle";
+  private const string QwenModelId = "hf_qwen3_vl_8b_gguf_director";
+  private const string WhisperModelId = "hf_whisper_large_v3_turbo_internal";
+  private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
+  private readonly DispatcherQueueTimer _pollTimer;
+  private readonly ObservableCollection<ModelPresentation> _visibleModels = [];
+  private readonly ObservableCollection<ModelPackPresentation> _packs = [];
+  private readonly ObservableCollection<ModelTaskPresentation> _tasks = [];
+  private CancellationTokenSource? _pageCancellation;
+  private ModelCatalogueResponse? _catalogue;
+  private ModelPresentation? _selectedModel;
+  private TensorRtMigrationStatus? _tensorRtStatus;
+  private RuntimeStatusResponse? _runtimeStatus;
+  private string? _taskFingerprint;
+  private readonly bool _isInitialized;
+  private bool _isRefreshing;
+  private bool _isPolling;
+  private bool _isCommandRunning;
 
-    public ModelsPage()
+  public ModelsPage()
+  {
+    InitializeComponent();
+    _isInitialized = true;
+    ModelList.ItemsSource = _visibleModels;
+    PackCombo.ItemsSource = _packs;
+    TaskItems.ItemsSource = _tasks;
+    _pollTimer = DispatcherQueue.CreateTimer();
+    _pollTimer.Interval = TimeSpan.FromSeconds(15);
+    _pollTimer.Tick += PollTimer_Tick;
+  }
+
+  public async Task RefreshAsync(CancellationToken cancellationToken = default)
+  {
+    if (_isRefreshing)
     {
-        InitializeComponent();
-        _isInitialized = true;
-        ModelList.ItemsSource = _visibleModels;
-        PackCombo.ItemsSource = _packs;
-        TaskItems.ItemsSource = _tasks;
-        _pollTimer = DispatcherQueue.CreateTimer();
-        _pollTimer.Interval = TimeSpan.FromSeconds(15);
-        _pollTimer.Tick += PollTimer_Tick;
+      return;
     }
 
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    _isRefreshing = true;
+    try
     {
-        if (_isRefreshing)
-        {
-            return;
-        }
+      ModelCatalogueResponse response = await _apiClient.GetTypedModelCatalogueAsync(cancellationToken);
+      _catalogue = response;
+      _tensorRtStatus = response.TensorRtMigration;
+      RebuildModels();
+      RebuildPacks();
+      UpdateStorage(response);
+      await Task.WhenAll(
+          LoadHunyuanConfigAsync(cancellationToken),
+          LoadLtxConfigAsync(cancellationToken),
+          LoadQwenConfigAsync(cancellationToken),
+          LoadWhisperConfigAsync(cancellationToken));
+      _tensorRtStatus ??= await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
+      _runtimeStatus = await _apiClient.GetRuntimeStatusAsync(cancellationToken);
+      ExecutionInventory execution = await _apiClient.GetExecutionInventoryAsync(cancellationToken);
+      ExecutionReadinessPresentation executionView = ExecutionPlanePresentation.Describe(execution);
+      ExecutionPlaneDiagnosticsText.Text = $"{executionView.Title} — {executionView.Detail} Distro: {execution.Wsl.Distribution ?? "not configured"}; physical GPU mappings: {execution.PhysicalGpus.Length}.";
+      UpdateTensorRt();
+      UpdateComponentAcceleration();
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception exception)
+    {
+      ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+    }
+    finally
+    {
+      _isRefreshing = false;
+    }
+  }
 
-        _isRefreshing = true;
-        try
-        {
-            ModelCatalogueResponse response = await _apiClient.GetTypedModelCatalogueAsync(cancellationToken);
-            _catalogue = response;
-            _tensorRtStatus = response.TensorRtMigration;
-            RebuildModels();
-            RebuildPacks();
-            UpdateStorage(response);
-            await Task.WhenAll(
-                LoadHunyuanConfigAsync(cancellationToken),
-                LoadLtxConfigAsync(cancellationToken),
-                LoadQwenConfigAsync(cancellationToken),
-                LoadWhisperConfigAsync(cancellationToken));
-            if (_tensorRtStatus is null)
-            {
-                _tensorRtStatus = await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
-            }
-            _runtimeStatus = await _apiClient.GetRuntimeStatusAsync(cancellationToken);
-            ExecutionInventory execution = await _apiClient.GetExecutionInventoryAsync(cancellationToken);
-            ExecutionReadinessPresentation executionView = ExecutionPlanePresentation.Describe(execution);
-            ExecutionPlaneDiagnosticsText.Text = $"{executionView.Title} — {executionView.Detail} Distro: {execution.Wsl.Distribution ?? "not configured"}; physical GPU mappings: {execution.PhysicalGpus.Length}.";
-            UpdateTensorRt();
-            UpdateComponentAcceleration();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
-        }
-        finally
-        {
-            _isRefreshing = false;
-        }
+  private async void OnLoaded(object sender, RoutedEventArgs e)
+  {
+    _pageCancellation?.Cancel();
+    _pageCancellation?.Dispose();
+    _pageCancellation = new CancellationTokenSource();
+    CancellationToken cancellationToken = _pageCancellation.Token;
+    await RefreshAsync(cancellationToken);
+    await PollTasksAsync(cancellationToken);
+    if (!cancellationToken.IsCancellationRequested)
+    {
+      _pollTimer.Start();
+    }
+  }
+
+  private void OnUnloaded(object sender, RoutedEventArgs e)
+  {
+    _pollTimer.Stop();
+    _pageCancellation?.Cancel();
+  }
+
+  private async void PollTimer_Tick(DispatcherQueueTimer sender, object args)
+  {
+    if (_pageCancellation is { IsCancellationRequested: false } cancellation)
+    {
+      await PollTasksAsync(cancellation.Token);
+    }
+  }
+
+  private async Task PollTasksAsync(CancellationToken cancellationToken)
+  {
+    if (_isPolling)
+    {
+      return;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    _isPolling = true;
+    try
     {
-        _pageCancellation?.Cancel();
-        _pageCancellation?.Dispose();
-        _pageCancellation = new CancellationTokenSource();
-        CancellationToken cancellationToken = _pageCancellation.Token;
+      ModelTaskListResponse response = await _apiClient.GetModelTasksAsync(cancellationToken);
+      IReadOnlyList<ModelTask> tasks = response.Tasks ?? [];
+      string fingerprint = ModelTask.Fingerprint(tasks);
+      bool catalogueChanged = _taskFingerprint is not null
+          && !string.Equals(_taskFingerprint, fingerprint, StringComparison.Ordinal);
+      _taskFingerprint = fingerprint;
+
+      _tasks.Clear();
+      foreach (ModelTask task in tasks.Take(12))
+      {
+        _tasks.Add(new ModelTaskPresentation(task));
+      }
+
+      bool hasActiveTasks = tasks.Any(task => task.IsActive);
+      _pollTimer.Interval = hasActiveTasks ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(15);
+      TaskCountText.Text = tasks.Count == 0 ? string.Empty : $"{tasks.Count} total";
+      NoTasksText.Visibility = tasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+      UpdateTensorRt();
+
+      if (catalogueChanged)
+      {
         await RefreshAsync(cancellationToken);
-        await PollTasksAsync(cancellationToken);
-        if (!cancellationToken.IsCancellationRequested)
-        {
-            _pollTimer.Start();
-        }
+      }
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception exception)
+    {
+      ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+      _pollTimer.Interval = TimeSpan.FromSeconds(15);
+    }
+    finally
+    {
+      _isPolling = false;
+    }
+  }
+
+  private void RebuildModels()
+  {
+    string? selectedId = _selectedModel?.Entry.Id;
+    _visibleModels.Clear();
+    if (_catalogue is null)
+    {
+      ClearSelection();
+      return;
     }
 
-    private void OnUnloaded(object sender, RoutedEventArgs e)
+    IEnumerable<ModelPresentation> models =
+        (_catalogue.Catalog ?? []).Select(entry => CreatePresentation(entry, false))
+        .Concat((_catalogue.User ?? []).Select(entry => CreatePresentation(entry, true)));
+    string query = SearchBox.Text.Trim();
+    string filter = ModelFilterComboBox.SelectedItem is ComboBoxItem { Tag: string tag } ? tag : "all";
+    List<ModelPresentation> allModels = models.ToList();
+    foreach (ModelPresentation model in allModels
+        .Where(model => model.Matches(query))
+        .Where(model => model.MatchesFilter(filter))
+        .OrderByDescending(model => model.IsInstalled)
+        .ThenBy(model => model.DisplayName, StringComparer.OrdinalIgnoreCase))
     {
-        _pollTimer.Stop();
-        _pageCancellation?.Cancel();
+      _visibleModels.Add(model);
     }
 
-    private async void PollTimer_Tick(DispatcherQueueTimer sender, object args)
+    ModelPresentation? selected = _visibleModels.FirstOrDefault(model => model.Entry.Id == selectedId);
+    if (selected is not null)
     {
-        if (_pageCancellation is { IsCancellationRequested: false } cancellation)
-        {
-            await PollTasksAsync(cancellation.Token);
-        }
+      SelectModel(selected);
+    }
+    else if (_visibleModels.Count > 0)
+    {
+      SelectModel(_visibleModels[0]);
+    }
+    else
+    {
+      ClearSelection();
     }
 
-    private async Task PollTasksAsync(CancellationToken cancellationToken)
+    int installed = allModels.Count(model => model.IsInstalled);
+    int ready = allModels.Count(model => model.RuntimeStatus is { } status && (status.ExecutionReady || status.RuntimeReady));
+    int video = allModels.Count(model => model.IsVideoModel);
+    CatalogueSummaryText.Text =
+        $"{_visibleModels.Count} shown | {installed} installed | {ready} runtime ready | {video} video/motion";
+  }
+
+  private void ModelFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_catalogue is not null)
     {
-        if (_isPolling)
-        {
-            return;
-        }
+      RebuildModels();
+    }
+  }
 
-        _isPolling = true;
-        try
-        {
-            ModelTaskListResponse response = await _apiClient.GetModelTasksAsync(cancellationToken);
-            IReadOnlyList<ModelTask> tasks = response.Tasks ?? [];
-            string fingerprint = ModelTask.Fingerprint(tasks);
-            bool catalogueChanged = _taskFingerprint is not null
-                && !string.Equals(_taskFingerprint, fingerprint, StringComparison.Ordinal);
-            _taskFingerprint = fingerprint;
+  private ModelPresentation CreatePresentation(ModelCatalogueEntry entry, bool isUserModel)
+  {
+    bool accepted = _catalogue?.Accepted?.ContainsKey(entry.Id) == true;
+    bool installed = entry.Installed
+                     || (_catalogue?.Installed?.TryGetValue(entry.Id, out JsonElement installedValue) == true
+                         && installedValue.ValueKind == JsonValueKind.True);
+    return new ModelPresentation(entry, isUserModel, accepted, installed);
+  }
 
-            _tasks.Clear();
-            foreach (ModelTask task in tasks.Take(12))
-            {
-                _tasks.Add(new ModelTaskPresentation(task));
-            }
-
-            bool hasActiveTasks = tasks.Any(task => task.IsActive);
-            _pollTimer.Interval = hasActiveTasks ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(15);
-            TaskCountText.Text = tasks.Count == 0 ? string.Empty : $"{tasks.Count} total";
-            NoTasksText.Visibility = tasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            UpdateTensorRt();
-
-            if (catalogueChanged)
-            {
-                await RefreshAsync(cancellationToken);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
-            _pollTimer.Interval = TimeSpan.FromSeconds(15);
-        }
-        finally
-        {
-            _isPolling = false;
-        }
+  private void RebuildPacks()
+  {
+    string? selectedId = (PackCombo.SelectedItem as ModelPackPresentation)?.Pack.Id;
+    _packs.Clear();
+    foreach (ModelPackEntry pack in _catalogue?.Packs ?? [])
+    {
+      _packs.Add(new ModelPackPresentation(pack));
     }
 
-    private void RebuildModels()
+    PackCombo.SelectedItem = _packs.FirstOrDefault(pack => pack.Pack.Id == selectedId);
+    if (PackCombo.SelectedItem is null && _packs.Count > 0)
     {
-        string? selectedId = _selectedModel?.Entry.Id;
-        _visibleModels.Clear();
-        if (_catalogue is null)
-        {
-            ClearSelection();
-            return;
-        }
+      PackCombo.SelectedIndex = 0;
+    }
+    UpdatePackSelection();
+  }
 
-        IEnumerable<ModelPresentation> models =
-            (_catalogue.Catalog ?? []).Select(entry => CreatePresentation(entry, false))
-            .Concat((_catalogue.User ?? []).Select(entry => CreatePresentation(entry, true)));
-        string query = SearchBox.Text.Trim();
-        string filter = ModelFilterComboBox.SelectedItem is ComboBoxItem { Tag: string tag } ? tag : "all";
-        List<ModelPresentation> allModels = models.ToList();
-        foreach (ModelPresentation model in allModels
-            .Where(model => model.Matches(query))
-            .Where(model => model.MatchesFilter(filter))
-            .OrderByDescending(model => model.IsInstalled)
-            .ThenBy(model => model.DisplayName, StringComparer.OrdinalIgnoreCase))
-        {
-            _visibleModels.Add(model);
-        }
+  private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+  {
+    if (_catalogue is not null)
+    {
+      RebuildModels();
+    }
+  }
 
-        ModelPresentation? selected = _visibleModels.FirstOrDefault(model => model.Entry.Id == selectedId);
-        if (selected is not null)
-        {
-            SelectModel(selected);
-        }
-        else if (_visibleModels.Count > 0)
-        {
-            SelectModel(_visibleModels[0]);
-        }
-        else
-        {
-            ClearSelection();
-        }
+  private void ModelList_ItemClick(object sender, ItemClickEventArgs e)
+  {
+    if (e.ClickedItem is ModelPresentation model)
+    {
+      SelectModel(model);
+    }
+  }
 
-        int installed = allModels.Count(model => model.IsInstalled);
-        int ready = allModels.Count(model => model.RuntimeStatus is { } status && (status.ExecutionReady || status.RuntimeReady));
-        int video = allModels.Count(model => model.IsVideoModel);
-        CatalogueSummaryText.Text =
-            $"{_visibleModels.Count} shown | {installed} installed | {ready} runtime ready | {video} video/motion";
+  private async Task LoadHunyuanConfigAsync(CancellationToken cancellationToken)
+  {
+    bool available = (_catalogue?.Catalog ?? []).Any(entry => entry.Id == "hf_hunyuan_video15_internal");
+    HunyuanCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+    if (!available)
+    {
+      return;
     }
 
-    private void ModelFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    JsonElement response = await _apiClient.GetHunyuanRuntimeConfigAsync(cancellationToken);
+    if (!response.TryGetProperty("config", out JsonElement config))
     {
-        if (_catalogue is not null)
+      throw new InvalidOperationException("Hunyuan runtime configuration response was missing its config object.");
+    }
+
+    SetHunyuanText(HunyuanDistroBox, config, "distro");
+    SetHunyuanText(HunyuanPythonBox, config, "python");
+    SetHunyuanText(HunyuanRepoBox, config, "repo");
+    SetHunyuanText(HunyuanModelPathBox, config, "model_path");
+    HunyuanTimeoutBox.Value = config.TryGetProperty("timeout_s", out JsonElement timeout) && timeout.TryGetDouble(out double timeoutSeconds)
+        ? timeoutSeconds
+        : 7200;
+    SetHunyuanText(HunyuanLlmBox, config, "llm");
+    SetHunyuanText(HunyuanByt5Box, config, "byt5");
+    SetHunyuanText(HunyuanGlyphBox, config, "glyph");
+    SetHunyuanText(HunyuanVisionBox, config, "vision");
+    string mode = config.TryGetProperty("mode", out JsonElement modeValue) ? modeValue.GetString() ?? "wsl" : "wsl";
+    HunyuanModeCombo.SelectedIndex = string.Equals(mode, "external", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+    HunyuanStatusText.Text = "Settings loaded. Probe the Linux environment to check Python, CUDA modules, repository, and companion assets.";
+  }
+
+  private static void SetHunyuanText(TextBox box, JsonElement config, string propertyName)
+  {
+    box.Text = config.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
+        ? value.GetString() ?? string.Empty
+        : string.Empty;
+  }
+
+  private async void HunyuanSave_Click(object sender, RoutedEventArgs e)
+  {
+    if (HunyuanModeCombo.SelectedItem is not ComboBoxItem { Tag: string mode })
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        async token =>
         {
-            RebuildModels();
-        }
-    }
+          JsonElement request = JsonSerializer.SerializeToElement(new
+          {
+            mode,
+            distro = HunyuanDistroBox.Text,
+            python = HunyuanPythonBox.Text,
+            repo = HunyuanRepoBox.Text,
+            model_path = HunyuanModelPathBox.Text,
+            timeout_s = HunyuanTimeoutBox.Value,
+            llm = HunyuanLlmBox.Text,
+            byt5 = HunyuanByt5Box.Text,
+            glyph = HunyuanGlyphBox.Text,
+            vision = HunyuanVisionBox.Text
+          });
+          _ = await _apiClient.SaveHunyuanRuntimeConfigAsync(request, token);
+        },
+        "Hunyuan runtime settings saved locally. Probe before rendering.");
+  }
 
-    private ModelPresentation CreatePresentation(ModelCatalogueEntry entry, bool isUserModel)
-    {
-        bool accepted = _catalogue?.Accepted?.ContainsKey(entry.Id) == true;
-        bool installed = entry.Installed
-                         || (_catalogue?.Installed?.TryGetValue(entry.Id, out JsonElement installedValue) == true
-                             && installedValue.ValueKind == JsonValueKind.True);
-        return new ModelPresentation(entry, isUserModel, accepted, installed);
-    }
-
-    private void RebuildPacks()
-    {
-        string? selectedId = (PackCombo.SelectedItem as ModelPackPresentation)?.Pack.Id;
-        _packs.Clear();
-        foreach (ModelPackEntry pack in _catalogue?.Packs ?? [])
+  private async void HunyuanProbe_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(
+        async token =>
         {
-            _packs.Add(new ModelPackPresentation(pack));
-        }
+          JsonElement response = await _apiClient.ProbeHunyuanRuntimeAsync(token);
+          bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
+          HunyuanStatusText.Text = ready
+                  ? "Hunyuan Linux environment is reachable and configured. Rendering is admitted after package validation; a Level-5 inference smoke receipt remains optional qualification evidence."
+                  : FormatHunyuanIssues(response);
+        },
+        "Hunyuan Linux runtime probe completed.");
+  }
 
-        PackCombo.SelectedItem = _packs.FirstOrDefault(pack => pack.Pack.Id == selectedId);
-        if (PackCombo.SelectedItem is null && _packs.Count > 0)
+  private static string FormatHunyuanIssues(JsonElement response)
+  {
+    if (!response.TryGetProperty("issues", out JsonElement issues) || issues.ValueKind != JsonValueKind.Array)
+    {
+      return "Hunyuan runtime probe did not return issue details.";
+    }
+
+    string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
+    return string.IsNullOrWhiteSpace(detail) ? "Hunyuan runtime is not ready." : detail;
+  }
+
+  private async Task LoadLtxConfigAsync(CancellationToken cancellationToken)
+  {
+    bool available = (_catalogue?.Catalog ?? []).Any(entry => entry.Id == "hf_ltx_25_distilled_internal");
+    LtxCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+    if (!available)
+    {
+      return;
+    }
+
+    JsonElement response = await _apiClient.GetLtxRuntimeConfigAsync(cancellationToken);
+    if (!response.TryGetProperty("config", out JsonElement config))
+    {
+      throw new InvalidOperationException("LTX runtime configuration response was missing its config object.");
+    }
+
+    SetHunyuanText(LtxPythonBox, config, "python");
+    LtxTimeoutBox.Value = JsonNumber(config, "timeout_s", 3600);
+    LtxSmokeTimeoutBox.Value = JsonNumber(config, "smoke_timeout_s", 600);
+    LtxStatusText.Text = "Settings loaded. Probe to verify the isolated Python environment contains exactly ltx-pipelines 1.3.0.";
+  }
+
+  private static double JsonNumber(JsonElement value, string propertyName, double fallback)
+  {
+    return value.TryGetProperty(propertyName, out JsonElement property) && property.TryGetDouble(out double number)
+          ? number
+          : fallback;
+  }
+
+  private async void LtxSave_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(
+        async token =>
         {
-            PackCombo.SelectedIndex = 0;
-        }
-        UpdatePackSelection();
-    }
+          JsonElement request = JsonSerializer.SerializeToElement(new
+          {
+            python = LtxPythonBox.Text,
+            timeout_s = LtxTimeoutBox.Value,
+            smoke_timeout_s = LtxSmokeTimeoutBox.Value,
+          });
+          _ = await _apiClient.SaveLtxRuntimeConfigAsync(request, token);
+        },
+        "LTX runtime settings saved locally. Probe before smoke testing or rendering.");
+  }
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_catalogue is not null)
+  private async void LtxProbe_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(
+        async token =>
         {
-            RebuildModels();
-        }
+          JsonElement response = await _apiClient.ProbeLtxRuntimeAsync(token);
+          bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
+          LtxStatusText.Text = ready
+                  ? "LTX isolated runtime passed the exact ltx-pipelines 1.3.0 probe. Validate and smoke-test the model package to complete readiness."
+                  : FormatLtxIssues(response);
+        },
+        "LTX isolated runtime probe completed.");
+  }
+
+  private static string FormatLtxIssues(JsonElement response)
+  {
+    if (!response.TryGetProperty("issues", out JsonElement issues) || issues.ValueKind != JsonValueKind.Array)
+    {
+      return "LTX runtime probe did not return issue details.";
     }
 
-    private void ModelList_ItemClick(object sender, ItemClickEventArgs e)
+    string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
+    return string.IsNullOrWhiteSpace(detail) ? "LTX runtime is not ready." : detail;
+  }
+
+  private async Task LoadQwenConfigAsync(CancellationToken cancellationToken)
+  {
+    JsonElement response = await _apiClient.GetDirectorRuntimeSettingsAsync(cancellationToken);
+    JsonElement settings = response.GetProperty("settings");
+    SetHunyuanText(QwenRuntimePathBox, settings, "runtime_path");
+    QwenGpuDevicesBox.Text = settings.TryGetProperty("gpu_devices", out JsonElement devices) ? devices.ToString() : "auto";
+    SelectTag(QwenDensePlacementCombo, settings.TryGetProperty("dense_device_map", out JsonElement placement) ? placement.GetString() : "balanced_low_0");
+    QwenGpuLayersBox.Text = settings.TryGetProperty("gpu_layers", out JsonElement layers) ? layers.ToString() : "auto";
+    QwenTensorSplitBox.Text = settings.TryGetProperty("tensor_split", out JsonElement split) ? split.ToString() : "auto";
+    QwenContextBox.Value = JsonNumber(settings, "context_length", 8192);
+    await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, cancellationToken);
+  }
+
+  private async Task LoadWhisperConfigAsync(CancellationToken cancellationToken)
+  {
+    JsonElement response = await _apiClient.GetTranscriptionSettingsAsync(cancellationToken);
+    JsonElement settings = response.GetProperty("settings");
+    SelectTag(WhisperDeviceCombo, settings.TryGetProperty("device", out JsonElement device) ? device.GetString() : "auto");
+    SelectTag(WhisperComputeCombo, settings.TryGetProperty("compute_type", out JsonElement compute) ? compute.GetString() : "auto");
+    await UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, cancellationToken);
+  }
+
+  private static void SelectTag(ComboBox combo, string? tag)
+  {
+    combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(item => string.Equals(item.Tag as string, tag, StringComparison.OrdinalIgnoreCase));
+  }
+
+  private async Task UpdateRuntimeStatusAsync(string modelId, TextBlock target, CancellationToken cancellationToken)
+  {
+    ModelRuntimeStatus status = await _apiClient.GetModelRuntimeReadinessAsync(modelId, cancellationToken);
+    string details = string.Join("\n", (status.Blockers ?? []).Concat(status.Warnings ?? []));
+    target.Text = $"Installed: {status.Installed} | Configured: {status.ValidationLevel >= 3} | Reachable: {status.AdapterReady} | Execution ready: {status.ExecutionReady || status.RuntimeReady} | Level-5 qualified: {status.RuntimeReady}\nDevice: {status.Device ?? "unknown"} | Capability level: {status.ValidationLevel}\n{details}";
+  }
+
+  private async void QwenSave_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(async token =>
+  {
+    string denseDeviceMap = (QwenDensePlacementCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "balanced_low_0";
+    _ = await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(new
     {
-        if (e.ClickedItem is ModelPresentation model)
+      runtime_path = QwenRuntimePathBox.Text,
+      gpu_devices = QwenGpuDevicesBox.Text,
+      dense_device_map = denseDeviceMap,
+      gpu_layers = QwenGpuLayersBox.Text,
+      tensor_split = QwenTensorSplitBox.Text,
+      context_length = QwenContextBox.Value,
+    }), token);
+    await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token);
+  }, "Qwen Director runtime settings saved.");
+  }
+
+  private async void QwenProbe_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(token => UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token), "Qwen readiness refreshed.");
+  }
+
+  private async void QwenSmoke_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(async token =>
+  {
+    ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(QwenModelId, token);
+    UpsertTask(response.Task);
+  }, "Qwen genuine inference smoke test queued.");
+  }
+
+  private async void WhisperSave_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(async token =>
+  {
+    string device = (WhisperDeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+    string computeType = (WhisperComputeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+    _ = await _apiClient.SaveTranscriptionSettingsAsync(JsonSerializer.SerializeToElement(new { provider = "transformers_whisper", model = WhisperModelId, device, compute_type = computeType }), token);
+    await UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, token);
+  }, "Whisper runtime settings saved.");
+  }
+
+  private async void WhisperProbe_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(token => UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, token), "Whisper readiness refreshed.");
+  }
+
+  private async void WhisperSmoke_Click(object sender, RoutedEventArgs e)
+  {
+    await RunCommandAsync(async token =>
+  {
+    ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(WhisperModelId, token);
+    UpsertTask(response.Task);
+  }, "Whisper genuine transcription smoke test queued.");
+  }
+
+  private void SelectModel(ModelPresentation model)
+  {
+    _selectedModel = model;
+    ModelList.SelectedItem = model;
+    ModelNameText.Text = model.DisplayName;
+    ModelDescriptionText.Text = string.IsNullOrWhiteSpace(model.Entry.Description)
+        ? "No model description was supplied."
+        : model.Entry.Description;
+    ModelMetadataText.Text =
+        $"{model.Entry.Id}\nKind: {model.Kind}  |  Source: {model.Source}  |  Lane: {model.Lane}\n"
+        + $"State: {model.StateLabel}{model.RuntimeDetail}";
+    LicenseText.Text = model.RequiresLicense
+        ? $"{model.Entry.LicenseName ?? model.Entry.LicenseId ?? "Model license"}"
+            + (model.IsAccepted ? " - accepted" : " - acceptance required before installation")
+        : "No separate license acceptance is required.";
+    UpdateActionState();
+  }
+
+  private void ClearSelection()
+  {
+    _selectedModel = null;
+    ModelList.SelectedItem = null;
+    ModelNameText.Text = "Select a model";
+    ModelDescriptionText.Text = "Choose a catalogue or imported model to view its controls.";
+    ModelMetadataText.Text = string.Empty;
+    LicenseText.Text = string.Empty;
+    UpdateActionState();
+  }
+
+  private void UpdateActionState()
+  {
+    ModelPresentation? model = _selectedModel;
+    bool available = model is not null && !_isCommandRunning;
+    bool canInstall = available && !model!.IsInstalled;
+    PrimaryActionButton.IsEnabled = canInstall;
+    PrimaryActionButton.Content = model switch
+    {
+      null => "Install",
+      { IsInstalled: true } => "Installed",
+      { IsUserModel: true } => "Restore local model",
+      { RequiresLicense: true, IsAccepted: false } => "Accept and install",
+      _ => "Install"
+    };
+    AcceptLicenseButton.IsEnabled = available && model!.RequiresLicense && !model.IsAccepted;
+    BenchmarkButton.IsEnabled = available;
+    SmokeTestButton.IsEnabled = available && model!.CanSmokeTest;
+    SmokeTestButton.Content = "Run Level-5 inference smoke test";
+    RevalidateButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
+    UninstallButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
+    RemoveButton.IsEnabled = available && model!.IsUserModel;
+    PromoteButton.IsEnabled = available;
+    RefreshButton.IsEnabled = !_isCommandRunning;
+    CivitaiImportButton.IsEnabled = !_isCommandRunning && !string.IsNullOrWhiteSpace(CivitaiUrlBox.Text);
+    UpdatePackSelection();
+    UpdateTensorRt();
+    UpdateComponentAcceleration();
+  }
+
+  private async void Revalidate_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is not { IsManagedPackage: true, IsInstalled: true } model)
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        async token =>
         {
-            SelectModel(model);
-        }
+          ModelTaskActionResponse response = await _apiClient.ValidateModelPackageAsync(model.Entry.Id, token);
+          UpsertTask(response.Task);
+        },
+        "Package validation queued.");
+  }
+
+  private async void Uninstall_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is not { IsManagedPackage: true, IsInstalled: true } model)
+    {
+      return;
     }
 
-    private async Task LoadHunyuanConfigAsync(CancellationToken cancellationToken)
+    ContentDialog dialog = new()
     {
-        bool available = (_catalogue?.Catalog ?? []).Any(entry => entry.Id == "hf_hunyuan_video15_internal");
-        HunyuanCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
-        if (!available)
+      XamlRoot = XamlRoot,
+      Title = "Uninstall managed package?",
+      Content = $"Remove the downloaded files for {model.DisplayName}? The catalogue entry remains available for reinstall.",
+      PrimaryButtonText = "Uninstall",
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
+    };
+    if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        async token =>
         {
-            return;
-        }
+          ModelTaskActionResponse response = await _apiClient.UninstallModelPackageAsync(model.Entry.Id, token);
+          UpsertTask(response.Task);
+        },
+        "Package uninstall queued.");
+  }
 
-        JsonElement response = await _apiClient.GetHunyuanRuntimeConfigAsync(cancellationToken);
-        if (!response.TryGetProperty("config", out JsonElement config))
+  private async void Refresh_Click(object sender, RoutedEventArgs e)
+  {
+    if (_pageCancellation is { IsCancellationRequested: false } cancellation)
+    {
+      await RefreshAsync(cancellation.Token);
+      await PollTasksAsync(cancellation.Token);
+    }
+  }
+
+  private async void CancelTask_Click(object sender, RoutedEventArgs e)
+  {
+    if (sender is not Button { CommandParameter: string taskId } || string.IsNullOrWhiteSpace(taskId))
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        async token =>
         {
-            throw new InvalidOperationException("Hunyuan runtime configuration response was missing its config object.");
-        }
+          ModelTaskActionResponse response = await _apiClient.CancelModelTaskAsync(taskId, token);
+          UpsertTask(response.Task);
+        },
+        "Task cancellation requested.");
+  }
 
-        SetHunyuanText(HunyuanDistroBox, config, "distro");
-        SetHunyuanText(HunyuanPythonBox, config, "python");
-        SetHunyuanText(HunyuanRepoBox, config, "repo");
-        SetHunyuanText(HunyuanModelPathBox, config, "model_path");
-        HunyuanTimeoutBox.Value = config.TryGetProperty("timeout_s", out JsonElement timeout) && timeout.TryGetDouble(out double timeoutSeconds)
-            ? timeoutSeconds
-            : 7200;
-        SetHunyuanText(HunyuanLlmBox, config, "llm");
-        SetHunyuanText(HunyuanByt5Box, config, "byt5");
-        SetHunyuanText(HunyuanGlyphBox, config, "glyph");
-        SetHunyuanText(HunyuanVisionBox, config, "vision");
-        string mode = config.TryGetProperty("mode", out JsonElement modeValue) ? modeValue.GetString() ?? "wsl" : "wsl";
-        HunyuanModeCombo.SelectedIndex = string.Equals(mode, "external", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
-        HunyuanStatusText.Text = "Settings loaded. Probe the Linux environment to check Python, CUDA modules, repository, and companion assets.";
+  private async void PrimaryAction_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is not { } model)
+    {
+      return;
     }
 
-    private static void SetHunyuanText(TextBox box, JsonElement config, string propertyName)
+    if (model.IsUserModel)
     {
-        box.Text = config.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? string.Empty
-            : string.Empty;
+      await RunCommandAsync(
+          token => _apiClient.RestoreLocalModelAsync(model.Entry.Id, token),
+          "Local model restore queued.");
+      return;
     }
 
-    private async void HunyuanSave_Click(object sender, RoutedEventArgs e)
+    if (model.RequiresLicense && !model.IsAccepted)
     {
-        if (HunyuanModeCombo.SelectedItem is not ComboBoxItem { Tag: string mode })
+      ContentDialogResult result = await ShowLicenseDialogAsync(
+          model,
+          "Accept and install",
+          $"Review and accept the license for {model.DisplayName}, then queue installation.");
+      if (result != ContentDialogResult.Primary)
+      {
+        return;
+      }
+    }
+
+    await RunCommandAsync(
+        async token =>
         {
-            return;
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                JsonElement request = JsonSerializer.SerializeToElement(new
-                {
-                    mode,
-                    distro = HunyuanDistroBox.Text,
-                    python = HunyuanPythonBox.Text,
-                    repo = HunyuanRepoBox.Text,
-                    model_path = HunyuanModelPathBox.Text,
-                    timeout_s = HunyuanTimeoutBox.Value,
-                    llm = HunyuanLlmBox.Text,
-                    byt5 = HunyuanByt5Box.Text,
-                    glyph = HunyuanGlyphBox.Text,
-                    vision = HunyuanVisionBox.Text
-                });
-                await _apiClient.SaveHunyuanRuntimeConfigAsync(request, token);
-            },
-            "Hunyuan runtime settings saved locally. Probe before rendering.");
-    }
-
-    private async void HunyuanProbe_Click(object sender, RoutedEventArgs e)
-    {
-        await RunCommandAsync(
-            async token =>
-            {
-                JsonElement response = await _apiClient.ProbeHunyuanRuntimeAsync(token);
-                bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
-                HunyuanStatusText.Text = ready
-                    ? "Hunyuan Linux environment is reachable and configured. Rendering is admitted after package validation; a Level-5 inference smoke receipt remains optional qualification evidence."
-                    : FormatHunyuanIssues(response);
-            },
-            "Hunyuan Linux runtime probe completed.");
-    }
-
-    private static string FormatHunyuanIssues(JsonElement response)
-    {
-        if (!response.TryGetProperty("issues", out JsonElement issues) || issues.ValueKind != JsonValueKind.Array)
-        {
-            return "Hunyuan runtime probe did not return issue details.";
-        }
-
-        string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
-        return string.IsNullOrWhiteSpace(detail) ? "Hunyuan runtime is not ready." : detail;
-    }
-
-    private async Task LoadLtxConfigAsync(CancellationToken cancellationToken)
-    {
-        bool available = (_catalogue?.Catalog ?? []).Any(entry => entry.Id == "hf_ltx_25_distilled_internal");
-        LtxCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
-        if (!available)
-        {
-            return;
-        }
-
-        JsonElement response = await _apiClient.GetLtxRuntimeConfigAsync(cancellationToken);
-        if (!response.TryGetProperty("config", out JsonElement config))
-        {
-            throw new InvalidOperationException("LTX runtime configuration response was missing its config object.");
-        }
-
-        SetHunyuanText(LtxPythonBox, config, "python");
-        LtxTimeoutBox.Value = JsonNumber(config, "timeout_s", 3600);
-        LtxSmokeTimeoutBox.Value = JsonNumber(config, "smoke_timeout_s", 600);
-        LtxStatusText.Text = "Settings loaded. Probe to verify the isolated Python environment contains exactly ltx-pipelines 1.3.0.";
-    }
-
-    private static double JsonNumber(JsonElement value, string propertyName, double fallback) =>
-        value.TryGetProperty(propertyName, out JsonElement property) && property.TryGetDouble(out double number)
-            ? number
-            : fallback;
-
-    private async void LtxSave_Click(object sender, RoutedEventArgs e)
-    {
-        await RunCommandAsync(
-            async token =>
-            {
-                JsonElement request = JsonSerializer.SerializeToElement(new
-                {
-                    python = LtxPythonBox.Text,
-                    timeout_s = LtxTimeoutBox.Value,
-                    smoke_timeout_s = LtxSmokeTimeoutBox.Value,
-                });
-                await _apiClient.SaveLtxRuntimeConfigAsync(request, token);
-            },
-            "LTX runtime settings saved locally. Probe before smoke testing or rendering.");
-    }
-
-    private async void LtxProbe_Click(object sender, RoutedEventArgs e)
-    {
-        await RunCommandAsync(
-            async token =>
-            {
-                JsonElement response = await _apiClient.ProbeLtxRuntimeAsync(token);
-                bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
-                LtxStatusText.Text = ready
-                    ? "LTX isolated runtime passed the exact ltx-pipelines 1.3.0 probe. Validate and smoke-test the model package to complete readiness."
-                    : FormatLtxIssues(response);
-            },
-            "LTX isolated runtime probe completed.");
-    }
-
-    private static string FormatLtxIssues(JsonElement response)
-    {
-        if (!response.TryGetProperty("issues", out JsonElement issues) || issues.ValueKind != JsonValueKind.Array)
-        {
-            return "LTX runtime probe did not return issue details.";
-        }
-
-        string detail = string.Join("\n", issues.EnumerateArray().Select(issue => issue.GetString()).Where(issue => !string.IsNullOrWhiteSpace(issue)));
-        return string.IsNullOrWhiteSpace(detail) ? "LTX runtime is not ready." : detail;
-    }
-
-    private async Task LoadQwenConfigAsync(CancellationToken cancellationToken)
-    {
-        JsonElement response = await _apiClient.GetDirectorRuntimeSettingsAsync(cancellationToken);
-        JsonElement settings = response.GetProperty("settings");
-        SetHunyuanText(QwenRuntimePathBox, settings, "runtime_path");
-        QwenGpuDevicesBox.Text = settings.TryGetProperty("gpu_devices", out JsonElement devices) ? devices.ToString() : "auto";
-        SelectTag(QwenDensePlacementCombo, settings.TryGetProperty("dense_device_map", out JsonElement placement) ? placement.GetString() : "balanced_low_0");
-        QwenGpuLayersBox.Text = settings.TryGetProperty("gpu_layers", out JsonElement layers) ? layers.ToString() : "auto";
-        QwenTensorSplitBox.Text = settings.TryGetProperty("tensor_split", out JsonElement split) ? split.ToString() : "auto";
-        QwenContextBox.Value = JsonNumber(settings, "context_length", 8192);
-        await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, cancellationToken);
-    }
-
-    private async Task LoadWhisperConfigAsync(CancellationToken cancellationToken)
-    {
-        JsonElement response = await _apiClient.GetTranscriptionSettingsAsync(cancellationToken);
-        JsonElement settings = response.GetProperty("settings");
-        SelectTag(WhisperDeviceCombo, settings.TryGetProperty("device", out JsonElement device) ? device.GetString() : "auto");
-        SelectTag(WhisperComputeCombo, settings.TryGetProperty("compute_type", out JsonElement compute) ? compute.GetString() : "auto");
-        await UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, cancellationToken);
-    }
-
-    private static void SelectTag(ComboBox combo, string? tag)
-    {
-        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(item => string.Equals(item.Tag as string, tag, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private async Task UpdateRuntimeStatusAsync(string modelId, TextBlock target, CancellationToken cancellationToken)
-    {
-        ModelRuntimeStatus status = await _apiClient.GetModelRuntimeReadinessAsync(modelId, cancellationToken);
-        string details = string.Join("\n", (status.Blockers ?? []).Concat(status.Warnings ?? []));
-        target.Text = $"Installed: {status.Installed} | Configured: {status.ValidationLevel >= 3} | Reachable: {status.AdapterReady} | Execution ready: {status.ExecutionReady || status.RuntimeReady} | Level-5 qualified: {status.RuntimeReady}\nDevice: {status.Device ?? "unknown"} | Capability level: {status.ValidationLevel}\n{details}";
-    }
-
-    private async void QwenSave_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
-    {
-        string denseDeviceMap = (QwenDensePlacementCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "balanced_low_0";
-        await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(new
-        {
-            runtime_path = QwenRuntimePathBox.Text,
-            gpu_devices = QwenGpuDevicesBox.Text,
-            dense_device_map = denseDeviceMap,
-            gpu_layers = QwenGpuLayersBox.Text,
-            tensor_split = QwenTensorSplitBox.Text,
-            context_length = QwenContextBox.Value,
-        }), token);
-        await UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token);
-    }, "Qwen Director runtime settings saved.");
-
-    private async void QwenProbe_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(token => UpdateRuntimeStatusAsync(QwenModelId, QwenStatusText, token), "Qwen readiness refreshed.");
-
-    private async void QwenSmoke_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
-    {
-        ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(QwenModelId, token);
-        UpsertTask(response.Task);
-    }, "Qwen genuine inference smoke test queued.");
-
-    private async void WhisperSave_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
-    {
-        string device = (WhisperDeviceCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
-        string computeType = (WhisperComputeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
-        await _apiClient.SaveTranscriptionSettingsAsync(JsonSerializer.SerializeToElement(new { provider = "transformers_whisper", model = WhisperModelId, device, compute_type = computeType }), token);
-        await UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, token);
-    }, "Whisper runtime settings saved.");
-
-    private async void WhisperProbe_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(token => UpdateRuntimeStatusAsync(WhisperModelId, WhisperStatusText, token), "Whisper readiness refreshed.");
-
-    private async void WhisperSmoke_Click(object sender, RoutedEventArgs e) => await RunCommandAsync(async token =>
-    {
-        ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(WhisperModelId, token);
-        UpsertTask(response.Task);
-    }, "Whisper genuine transcription smoke test queued.");
-
-    private void SelectModel(ModelPresentation model)
-    {
-        _selectedModel = model;
-        ModelList.SelectedItem = model;
-        ModelNameText.Text = model.DisplayName;
-        ModelDescriptionText.Text = string.IsNullOrWhiteSpace(model.Entry.Description)
-            ? "No model description was supplied."
-            : model.Entry.Description;
-        ModelMetadataText.Text =
-            $"{model.Entry.Id}\nKind: {model.Kind}  |  Source: {model.Source}  |  Lane: {model.Lane}\n"
-            + $"State: {model.StateLabel}{model.RuntimeDetail}";
-        LicenseText.Text = model.RequiresLicense
-            ? $"{model.Entry.LicenseName ?? model.Entry.LicenseId ?? "Model license"}"
-                + (model.IsAccepted ? " - accepted" : " - acceptance required before installation")
-            : "No separate license acceptance is required.";
-        UpdateActionState();
-    }
-
-    private void ClearSelection()
-    {
-        _selectedModel = null;
-        ModelList.SelectedItem = null;
-        ModelNameText.Text = "Select a model";
-        ModelDescriptionText.Text = "Choose a catalogue or imported model to view its controls.";
-        ModelMetadataText.Text = string.Empty;
-        LicenseText.Text = string.Empty;
-        UpdateActionState();
-    }
-
-    private void UpdateActionState()
-    {
-        ModelPresentation? model = _selectedModel;
-        bool available = model is not null && !_isCommandRunning;
-        bool canInstall = available && !model!.IsInstalled;
-        PrimaryActionButton.IsEnabled = canInstall;
-        PrimaryActionButton.Content = model switch
-        {
-            null => "Install",
-            { IsInstalled: true } => "Installed",
-            { IsUserModel: true } => "Restore local model",
-            { RequiresLicense: true, IsAccepted: false } => "Accept and install",
-            _ => "Install"
-        };
-        AcceptLicenseButton.IsEnabled = available && model!.RequiresLicense && !model.IsAccepted;
-        BenchmarkButton.IsEnabled = available;
-        SmokeTestButton.IsEnabled = available && model!.CanSmokeTest;
-        SmokeTestButton.Content = "Run Level-5 inference smoke test";
-        RevalidateButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
-        UninstallButton.IsEnabled = available && model!.IsManagedPackage && model.IsInstalled;
-        RemoveButton.IsEnabled = available && model!.IsUserModel;
-        PromoteButton.IsEnabled = available;
-        RefreshButton.IsEnabled = !_isCommandRunning;
-        CivitaiImportButton.IsEnabled = !_isCommandRunning && !string.IsNullOrWhiteSpace(CivitaiUrlBox.Text);
-        UpdatePackSelection();
-        UpdateTensorRt();
-        UpdateComponentAcceleration();
-    }
-
-    private async void Revalidate_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedModel is not { IsManagedPackage: true, IsInstalled: true } model)
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                ModelTaskActionResponse response = await _apiClient.ValidateModelPackageAsync(model.Entry.Id, token);
-                UpsertTask(response.Task);
-            },
-            "Package validation queued.");
-    }
-
-    private async void Uninstall_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedModel is not { IsManagedPackage: true, IsInstalled: true } model)
-        {
-            return;
-        }
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Uninstall managed package?",
-            Content = $"Remove the downloaded files for {model.DisplayName}? The catalogue entry remains available for reinstall.",
-            PrimaryButtonText = "Uninstall",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                ModelTaskActionResponse response = await _apiClient.UninstallModelPackageAsync(model.Entry.Id, token);
-                UpsertTask(response.Task);
-            },
-            "Package uninstall queued.");
-    }
-
-    private async void Refresh_Click(object sender, RoutedEventArgs e)
-    {
-        if (_pageCancellation is { IsCancellationRequested: false } cancellation)
-        {
-            await RefreshAsync(cancellation.Token);
-            await PollTasksAsync(cancellation.Token);
-        }
-    }
-
-    private async void CancelTask_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { CommandParameter: string taskId } || string.IsNullOrWhiteSpace(taskId))
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                ModelTaskActionResponse response = await _apiClient.CancelModelTaskAsync(taskId, token);
-                UpsertTask(response.Task);
-            },
-            "Task cancellation requested.");
-    }
-
-    private async void PrimaryAction_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedModel is not { } model)
-        {
-            return;
-        }
-
-        if (model.IsUserModel)
-        {
-            await RunCommandAsync(
-                token => _apiClient.RestoreLocalModelAsync(model.Entry.Id, token),
-                "Local model restore queued.");
-            return;
-        }
-
-        if (model.RequiresLicense && !model.IsAccepted)
-        {
-            ContentDialogResult result = await ShowLicenseDialogAsync(
-                model,
-                "Accept and install",
-                $"Review and accept the license for {model.DisplayName}, then queue installation.");
-            if (result != ContentDialogResult.Primary)
-            {
-                return;
-            }
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                if (model.RequiresLicense && !model.IsAccepted)
-                {
-                    await _apiClient.AcceptModelLicenseAsync(
-                        model.Entry.Id,
-                        model.Entry.LicenseId ?? "unknown",
-                        token);
-                }
-                await _apiClient.InstallModelAsync(model.Entry.Id, token);
-            },
-            "Model installation queued.");
-    }
-
-    private async void AcceptLicense_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedModel is not { RequiresLicense: true } model)
-        {
-            return;
-        }
-
-        if (await ShowLicenseDialogAsync(
-            model,
-            "Accept license",
-            $"Accept the license for {model.DisplayName}?") != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            token => _apiClient.AcceptModelLicenseAsync(
+          if (model.RequiresLicense && !model.IsAccepted)
+          {
+            _ = await _apiClient.AcceptModelLicenseAsync(
                 model.Entry.Id,
                 model.Entry.LicenseId ?? "unknown",
-                token),
-            "Model license accepted.");
+                token);
+          }
+          _ = await _apiClient.InstallModelAsync(model.Entry.Id, token);
+        },
+        "Model installation queued.");
+  }
+
+  private async void AcceptLicense_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is not { RequiresLicense: true } model)
+    {
+      return;
     }
 
-    private async Task<ContentDialogResult> ShowLicenseDialogAsync(
-        ModelPresentation model,
-        string primaryButtonText,
-        string prompt)
+    if (await ShowLicenseDialogAsync(
+        model,
+        "Accept license",
+        $"Accept the license for {model.DisplayName}?") != ContentDialogResult.Primary)
     {
-        var content = new StackPanel { Spacing = 10 };
-        content.Children.Add(new TextBlock { Text = prompt, TextWrapping = TextWrapping.Wrap });
-        content.Children.Add(new TextBlock
-        {
-            Text = model.Entry.LicenseName ?? model.Entry.LicenseId ?? "Model license",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            TextWrapping = TextWrapping.Wrap
-        });
-        if (Uri.TryCreate(model.Entry.LicenseUrl, UriKind.Absolute, out Uri? licenseUri))
-        {
-            content.Children.Add(new HyperlinkButton
-            {
-                Content = "Open license terms",
-                NavigateUri = licenseUri,
-                HorizontalAlignment = HorizontalAlignment.Left
-            });
-        }
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Model license",
-            Content = content,
-            PrimaryButtonText = primaryButtonText,
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        return await dialog.ShowAsync();
+      return;
     }
 
-    private async void Benchmark_Click(object sender, RoutedEventArgs e)
+    await RunCommandAsync(
+        token => _apiClient.AcceptModelLicenseAsync(
+            model.Entry.Id,
+            model.Entry.LicenseId ?? "unknown",
+            token),
+        "Model license accepted.");
+  }
+
+  private async Task<ContentDialogResult> ShowLicenseDialogAsync(
+      ModelPresentation model,
+      string primaryButtonText,
+      string prompt)
+  {
+    StackPanel content = new() { Spacing = 10 };
+    content.Children.Add(new TextBlock { Text = prompt, TextWrapping = TextWrapping.Wrap });
+    content.Children.Add(new TextBlock
     {
-        if (_selectedModel is { } model)
-        {
-            await RunCommandAsync(
-                token => _apiClient.RecordModelBenchmarkAsync(model.Entry.Id, token),
-                "Benchmark record saved.");
-        }
+      Text = model.Entry.LicenseName ?? model.Entry.LicenseId ?? "Model license",
+      FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+      TextWrapping = TextWrapping.Wrap
+    });
+    if (Uri.TryCreate(model.Entry.LicenseUrl, UriKind.Absolute, out Uri? licenseUri))
+    {
+      content.Children.Add(new HyperlinkButton
+      {
+        Content = "Open license terms",
+        NavigateUri = licenseUri,
+        HorizontalAlignment = HorizontalAlignment.Left
+      });
     }
 
-    private async void SmokeTest_Click(object sender, RoutedEventArgs e)
+    ContentDialog dialog = new()
     {
-        if (_selectedModel is not { CanSmokeTest: true } model)
-        {
-            return;
-        }
+      XamlRoot = XamlRoot,
+      Title = "Model license",
+      Content = content,
+      PrimaryButtonText = primaryButtonText,
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
+    };
+    return await dialog.ShowAsync();
+  }
 
-        await RunCommandAsync(
-            async token =>
-            {
-                ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(model.Entry.Id, token);
-                UpsertTask(response.Task);
-            },
-            "Optional runtime test queued.");
+  private async void Benchmark_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is { } model)
+    {
+      await RunCommandAsync(
+          token => _apiClient.RecordModelBenchmarkAsync(model.Entry.Id, token),
+          "Benchmark record saved.");
+    }
+  }
+
+  private async void SmokeTest_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is not { CanSmokeTest: true } model)
+    {
+      return;
     }
 
-    private async void Remove_Click(object sender, RoutedEventArgs e)
+    await RunCommandAsync(
+        async token =>
+        {
+          ModelTaskActionResponse response = await _apiClient.SmokeTestModelRuntimeAsync(model.Entry.Id, token);
+          UpsertTask(response.Task);
+        },
+        "Optional runtime test queued.");
+  }
+
+  private async void Remove_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is not { IsUserModel: true } model)
     {
-        if (_selectedModel is not { IsUserModel: true } model)
-        {
-            return;
-        }
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Remove user model?",
-            Content = $"Remove {model.DisplayName} from this Studio Home? You can import it again later.",
-            PrimaryButtonText = "Remove",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            token => _apiClient.RemoveUserModelAsync(model.Entry.Id, token),
-            "User model removed.");
+      return;
     }
 
-    private async void Promote_Click(object sender, RoutedEventArgs e)
+    ContentDialog dialog = new()
     {
-        if (_selectedModel is null || LaneCombo.SelectedItem is not ComboBoxItem { Tag: string lane })
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            token => _apiClient.PromoteModelAsync(_selectedModel.Entry.Id, lane, token),
-            $"Model promoted to {lane}.");
+      XamlRoot = XamlRoot,
+      Title = "Remove user model?",
+      Content = $"Remove {model.DisplayName} from this Studio Home? You can import it again later.",
+      PrimaryButtonText = "Remove",
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
+    };
+    if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+    {
+      return;
     }
 
-    private void PackCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdatePackSelection();
+    await RunCommandAsync(
+        token => _apiClient.RemoveUserModelAsync(model.Entry.Id, token),
+        "User model removed.");
+  }
 
-    private void UpdatePackSelection()
+  private async void Promote_Click(object sender, RoutedEventArgs e)
+  {
+    if (_selectedModel is null || LaneCombo.SelectedItem is not ComboBoxItem { Tag: string lane })
     {
-        if (PackCombo.SelectedItem is not ModelPackPresentation pack)
-        {
-            PackDescriptionText.Text = "No model packs are available.";
-            PackStatusText.Text = string.Empty;
-            InstallPackButton.Content = "Install pack";
-            InstallPackButton.IsEnabled = false;
-            return;
-        }
-
-        PackDescriptionText.Text = pack.Description;
-        PackStatusText.Text = pack.StatusDetail;
-        InstallPackButton.Content = pack.ActionLabel;
-        InstallPackButton.IsEnabled = !_isCommandRunning && !pack.Pack.RuntimeReady;
+      return;
     }
 
-    private async void InstallPack_Click(object sender, RoutedEventArgs e)
+    await RunCommandAsync(
+        token => _apiClient.PromoteModelAsync(_selectedModel.Entry.Id, lane, token),
+        $"Model promoted to {lane}.");
+  }
+
+  private void PackCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    UpdatePackSelection();
+  }
+
+  private void UpdatePackSelection()
+  {
+    if (PackCombo.SelectedItem is not ModelPackPresentation pack)
     {
-        if (PackCombo.SelectedItem is not ModelPackPresentation pack || _catalogue is null)
-        {
-            return;
-        }
+      PackDescriptionText.Text = "No model packs are available.";
+      PackStatusText.Text = string.Empty;
+      InstallPackButton.Content = "Install pack";
+      InstallPackButton.IsEnabled = false;
+      return;
+    }
 
-        Dictionary<string, ModelCatalogueEntry> entries = (_catalogue.Catalog ?? [])
-            .Concat(_catalogue.User ?? [])
-            .ToDictionary(entry => entry.Id, StringComparer.Ordinal);
-        List<ModelCatalogueEntry> licenses = (pack.Pack.Models ?? [])
-            .Where(entries.ContainsKey)
-            .Select(id => entries[id])
-            .Where(entry =>
-                !string.Equals(entry.Source, "ollama", StringComparison.OrdinalIgnoreCase)
-                && _catalogue.Accepted?.ContainsKey(entry.Id) != true)
-            .ToList();
+    PackDescriptionText.Text = pack.Description;
+    PackStatusText.Text = pack.StatusDetail;
+    InstallPackButton.Content = pack.ActionLabel;
+    InstallPackButton.IsEnabled = !_isCommandRunning && !pack.Pack.RuntimeReady;
+  }
 
-        if (licenses.Count > 0)
-        {
-            var dialog = new ContentDialog
-            {
-                XamlRoot = XamlRoot,
-                Title = "Accept licenses and install pack?",
-                Content =
+  private async void InstallPack_Click(object sender, RoutedEventArgs e)
+  {
+    if (PackCombo.SelectedItem is not ModelPackPresentation pack || _catalogue is null)
+    {
+      return;
+    }
+
+    Dictionary<string, ModelCatalogueEntry> entries = (_catalogue.Catalog ?? [])
+        .Concat(_catalogue.User ?? [])
+        .ToDictionary(entry => entry.Id, StringComparer.Ordinal);
+    List<ModelCatalogueEntry> licenses = (pack.Pack.Models ?? [])
+        .Where(entries.ContainsKey)
+        .Select(id => entries[id])
+        .Where(entry =>
+            !string.Equals(entry.Source, "ollama", StringComparison.OrdinalIgnoreCase)
+            && _catalogue.Accepted?.ContainsKey(entry.Id) != true)
+        .ToList();
+
+    if (licenses.Count > 0)
+    {
+      ContentDialog dialog = new()
+      {
+        XamlRoot = XamlRoot,
+        Title = "Accept licenses and install pack?",
+        Content =
                     $"{pack.DisplayName} requires acceptance for {licenses.Count} model license(s): "
                     + string.Join(", ", licenses.Select(entry => entry.Name ?? entry.Id))
                     + ". Studio will record each acceptance before queuing the pack.",
-                PrimaryButtonText = "Accept and install",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Close
-            };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-            {
-                return;
-            }
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                foreach (ModelCatalogueEntry entry in licenses)
-                {
-                    await _apiClient.AcceptModelLicenseAsync(
-                        entry.Id,
-                        entry.LicenseId ?? "unknown",
-                        token);
-                }
-                ModelPackInstallResponse response = await _apiClient.InstallModelPackAsync(pack.Pack.Id, token);
-                ModelTask? task = response.Task ?? response.Tasks?.FirstOrDefault();
-                if (task is not null)
-                {
-                    UpsertTask(task);
-                }
-            },
-            "Model pack installation queued.");
+        PrimaryButtonText = "Accept and install",
+        CloseButtonText = "Cancel",
+        DefaultButton = ContentDialogButton.Close
+      };
+      if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+      {
+        return;
+      }
     }
 
-    private void CivitaiUrlBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateActionState();
-
-    private async void CivitaiImport_Click(object sender, RoutedEventArgs e)
-    {
-        string url = CivitaiUrlBox.Text.Trim();
-        if (url.Length == 0)
+    await RunCommandAsync(
+        async token =>
         {
-            return;
-        }
+          foreach (ModelCatalogueEntry entry in licenses)
+          {
+            _ = await _apiClient.AcceptModelLicenseAsync(
+                entry.Id,
+                entry.LicenseId ?? "unknown",
+                token);
+          }
+          ModelPackInstallResponse response = await _apiClient.InstallModelPackAsync(pack.Pack.Id, token);
+          ModelTask? task = response.Task ?? response.Tasks?.FirstOrDefault();
+          if (task is not null)
+          {
+            UpsertTask(task);
+          }
+        },
+        "Model pack installation queued.");
+  }
 
-        await RunCommandAsync(
-            token => _apiClient.ImportCivitaiModelAsync(url, token),
-            "Civitai model imported.");
-        CivitaiUrlBox.Text = string.Empty;
+  private void CivitaiUrlBox_TextChanged(object sender, TextChangedEventArgs e)
+  {
+    UpdateActionState();
+  }
+
+  private async void CivitaiImport_Click(object sender, RoutedEventArgs e)
+  {
+    string url = CivitaiUrlBox.Text.Trim();
+    if (url.Length == 0)
+    {
+      return;
     }
 
-    private async void LocalImport_Click(object sender, RoutedEventArgs e)
+    await RunCommandAsync(
+        token => _apiClient.ImportCivitaiModelAsync(url, token),
+        "Civitai model imported.");
+    CivitaiUrlBox.Text = string.Empty;
+  }
+
+  private async void LocalImport_Click(object sender, RoutedEventArgs e)
+  {
+    if (App.MainWindowInstance is null)
     {
-        if (App.MainWindowInstance is null)
-        {
-            ShowStatus("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
-            return;
-        }
-
-        var picker = new FileOpenPicker
-        {
-            SuggestedStartLocation = PickerLocationId.Downloads,
-            ViewMode = PickerViewMode.List
-        };
-        foreach (string extension in new[] { ".safetensors", ".ckpt", ".pt", ".bin" })
-        {
-            picker.FileTypeFilter.Add(extension);
-        }
-
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
-        Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
-        if (file is null || LocalFolderCombo.SelectedItem is not ComboBoxItem { Tag: string folder })
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            token => _apiClient.ImportLocalModelAsync(file.Path, folder, cancellationToken: token),
-            $"Imported {file.Name}.");
+      ShowStatus("The Studio window is not ready for file selection.", InfoBarSeverity.Error);
+      return;
     }
 
-    private async void TensorRtImport_Click(object sender, RoutedEventArgs e)
+    FileOpenPicker picker = new()
     {
-        if (_tensorRtStatus?.Migration.Available != true)
-        {
-            return;
-        }
+      SuggestedStartLocation = PickerLocationId.Downloads,
+      ViewMode = PickerViewMode.List
+    };
+    foreach (string extension in new[] { ".safetensors", ".ckpt", ".pt", ".bin" })
+    {
+      picker.FileTypeFilter.Add(extension);
+    }
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "Verify and copy TensorRT engines?",
-            Content =
+    WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance.WindowHandle);
+    Windows.Storage.StorageFile? file = await picker.PickSingleFileAsync();
+    if (file is null || LocalFolderCombo.SelectedItem is not ComboBoxItem { Tag: string folder })
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        token => _apiClient.ImportLocalModelAsync(file.Path, folder, cancellationToken: token),
+        $"Imported {file.Name}.");
+  }
+
+  private async void TensorRtImport_Click(object sender, RoutedEventArgs e)
+  {
+    if (_tensorRtStatus?.Migration.Available != true)
+    {
+      return;
+    }
+
+    ContentDialog dialog = new()
+    {
+      XamlRoot = XamlRoot,
+      Title = "Verify and copy TensorRT engines?",
+      Content =
                 "Studio will create a complete second copy of the four legacy TensorRT engines in the canonical managed bundle. "
                 + "The operation can take several minutes, requires the reported free disk space, and verifies every copied file by SHA-256 before publishing it. "
                 + "The original legacy files remain unchanged.",
-            PrimaryButtonText = "Verify and copy",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                ModelTaskActionResponse response = await _apiClient.ImportLegacyTensorRtAsync(token);
-                UpsertTask(response.Task);
-            },
-            "Verification and safe copy started. The legacy source will remain in place.");
-    }
-
-    private async void TensorRtCancel_Click(object sender, RoutedEventArgs e)
-    {
-        ModelTaskPresentation? active = _tasks.FirstOrDefault(
-            task => task.Task.ModelId == TensorRtModelId && task.Task.IsActive);
-        if (active is null)
-        {
-            return;
-        }
-
-        await RunCommandAsync(
-            async token =>
-            {
-                ModelTaskActionResponse response =
-                    await _apiClient.CancelLegacyTensorRtImportAsync(active.Task.Id, token);
-                UpsertTask(response.Task);
-            },
-            "Cancellation requested. Temporary copies will be removed; legacy engines remain unchanged.");
-    }
-
-    private void UpsertTask(ModelTask task)
-    {
-        ModelTaskPresentation? existing = _tasks.FirstOrDefault(item => item.Task.Id == task.Id);
-        if (existing is not null)
-        {
-            _tasks.Remove(existing);
-        }
-        _tasks.Insert(0, new ModelTaskPresentation(task));
-        UpdateTensorRt();
-    }
-
-    private void UpdateTensorRt()
-    {
-        ModelTaskPresentation? active = _tasks.FirstOrDefault(
-            task => task.Task.ModelId == TensorRtModelId && task.Task.IsActive);
-        TensorRtCancelButton.IsEnabled = !_isCommandRunning && active is not null;
-        TensorRtImportButton.IsEnabled =
-            !_isCommandRunning && active is null && _tensorRtStatus?.Migration.Available == true;
-
-        if (_tensorRtStatus is null)
-        {
-            TensorRtSummaryText.Text = "Checking legacy TensorRT bundle status...";
-            TensorRtDiskText.Text = string.Empty;
-            return;
-        }
-
-        TensorRtLegacyStatus legacy = _tensorRtStatus.Legacy;
-        TensorRtMigrationAvailability migration = _tensorRtStatus.Migration;
-        TensorRtSummaryText.Text = active is not null
-            ? $"Migration {active.Task.Status}: {active.Task.DisplayStage}"
-            : legacy.Status switch
-            {
-                "absent" => "No root-level legacy TensorRT engine set was detected.",
-                "partial" => "A partial legacy engine set was found. All expected safe, non-empty engines are required.",
-                "ready_to_import" =>
-                    $"Found {legacy.UsableFileCount} safe engine files ({FormatBytes(legacy.TotalBytes)}).",
-                _ when _tensorRtStatus.Canonical.RendererReady => "The canonical TensorRT bundle is ready.",
-                _ => $"Legacy status: {legacy.Status}"
-            };
-        TensorRtDiskStatus disk = migration.Disk;
-        TensorRtDiskText.Text =
-            $"Required free space: {FormatBytes(disk.RequiredFreeBytes)}  |  Available: "
-            + (disk.AvailableFreeBytes.HasValue ? FormatBytes(disk.AvailableFreeBytes.Value) : "unknown")
-            + (migration.Available
-                ? "\nCopy-only migration is available; source files will be preserved."
-                : $"\nMigration unavailable: {FormatBlockedReason(migration.BlockedReason)}");
-    }
-
-    private void UpdateComponentAcceleration()
-    {
-        string selectedComponent = SelectedTensorRtComponent();
-        RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
-            value.ModelFamily == "sd15" && value.Component == selectedComponent);
-        bool canOptimize = !_isCommandRunning && component?.OptimizationEligible == true;
-        bool hasEngineRecord = !string.IsNullOrWhiteSpace(component?.LastEngineId)
-            && !string.Equals(component.LastEngineState, "missing", StringComparison.OrdinalIgnoreCase);
-        ComponentOptimizeButton.IsEnabled = canOptimize;
-        ComponentOptimizeAllButton.IsEnabled = !_isCommandRunning
-            && _runtimeStatus?.Components.Any(value => value.ModelFamily == "sd15" && value.OptimizationEligible) == true;
-        ComponentRebuildButton.IsEnabled = canOptimize && hasEngineRecord;
-        ComponentValidateButton.IsEnabled = canOptimize
-            && component?.ValidatedEngineCount > 0
-            && string.Equals(component.LastEngineState, "ready", StringComparison.OrdinalIgnoreCase);
-        ComponentDeleteButton.IsEnabled = !_isCommandRunning && hasEngineRecord;
-        ComponentAccelerationText.Text = component is null
-            ? "Component acceleration status is unavailable."
-            : $"SD1.5 {component.Component}: {TensorRtRoutePresentation.From(component).RouteLabel}; "
-              + $"{TensorRtRoutePresentation.From(component).State}; {component.ValidatedEngineCount} validated engine(s); "
-              + $"{component.ProfileCoverage.Count} profile(s); fallback {component.FallbackRuntime}.";
-        ComponentAccelerationReasonText.Text = component?.OptimizationEligible == true
-            ? $"{TensorRtRoutePresentation.From(component).Detail} Eligible for an explicit 512 x 512 optimization job."
-            : $"Optimize unavailable: {component?.RouteReason ?? FormatBlockedReason(component?.OptimizationReason)}.";
-    }
-
-    private string SelectedTensorRtComponent() =>
-        (ComponentSelector.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "unet";
-
-    private void ComponentSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isInitialized)
-        {
-            UpdateComponentAcceleration();
-        }
-    }
-
-    private async void ComponentOptimize_Click(object sender, RoutedEventArgs e)
-    {
-        await QueueComponentJobAsync("optimize", "Component optimization queued in Render Queue.");
-    }
-
-    private async void ComponentOptimizeAll_Click(object sender, RoutedEventArgs e)
-    {
-        await QueueComponentJobAsync("optimize_all", "Compatible component optimization queued in Render Queue.");
-    }
-
-    private async void ComponentRebuild_Click(object sender, RoutedEventArgs e)
-    {
-        await QueueComponentJobAsync("rebuild", "Component rebuild queued in Render Queue.");
-    }
-
-    private async void ComponentValidate_Click(object sender, RoutedEventArgs e)
-    {
-        await QueueComponentJobAsync("validate", "Cached component validation queued in Render Queue.");
-    }
-
-    private async void ComponentDelete_Click(object sender, RoutedEventArgs e)
-    {
-        RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
-            value.ModelFamily == "sd15" && value.Component == SelectedTensorRtComponent());
-        if (string.IsNullOrWhiteSpace(component?.LastEngineId))
-        {
-            return;
-        }
-        await RunCommandAsync(
-            async token =>
-            {
-                await _apiClient.ClearRuntimeEngineAsync(component.LastEngineId, token);
-                await RefreshAsync(token);
-            },
-            "Selected component engine deleted.");
-    }
-
-    private async Task QueueComponentJobAsync(string operation, string message)
-    {
-        await RunCommandAsync(
-            async token =>
-            {
-                int device = double.IsFinite(ComponentDevice.Value) ? (int)ComponentDevice.Value : 0;
-                string precision = ComponentPrecision.SelectedItem?.ToString() == "fp32" ? "fp32" : "fp16";
-                await _apiClient.StartRuntimeJobAsync(
-                    new RuntimeJobRequest(operation, device, precision, Component: SelectedTensorRtComponent()), token);
-                await App.Services.JobsActivity.RefreshAsync(token);
-            },
-            message);
-    }
-
-    private void UpdateStorage(ModelCatalogueResponse response)
-    {
-        StorageText.Text =
-            $"Mode: {response.StorageMode ?? "local_cache"}\n"
-            + $"Cache: {response.ModelCache ?? "Backend managed"}\n"
-            + $"{(response.Catalog?.Count ?? 0) + (response.User?.Count ?? 0)} models, "
-            + $"{response.Packs?.Count ?? 0} packs";
-    }
-
-    private async Task RunCommandAsync(Func<CancellationToken, Task> command, string successMessage)
-    {
-        if (_isCommandRunning)
-        {
-            return;
-        }
-
-        _isCommandRunning = true;
-        CommandProgress.Visibility = Visibility.Visible;
-        UpdateActionState();
-        try
-        {
-            CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
-            await command(token);
-            ShowStatus(successMessage, InfoBarSeverity.Success);
-            await RefreshAsync(token);
-            await PollTasksAsync(token);
-        }
-        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
-        {
-        }
-        catch (Exception exception)
-        {
-            ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
-        }
-        finally
-        {
-            _isCommandRunning = false;
-            CommandProgress.Visibility = Visibility.Collapsed;
-            UpdateActionState();
-        }
-    }
-
-    private void ShowStatus(string message, InfoBarSeverity severity)
-    {
-        StatusBar.Message = message;
-        StatusBar.Severity = severity;
-        StatusBar.IsOpen = true;
-    }
-
-    internal static string FormatBytes(long bytes)
-    {
-        string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
-        double value = Math.Max(0, bytes);
-        int unit = 0;
-        while (value >= 1024 && unit < units.Length - 1)
-        {
-            value /= 1024;
-            unit++;
-        }
-        return $"{value:N1} {units[unit]}";
-    }
-
-    private static string FormatBlockedReason(string? reason) => reason switch
-    {
-        "canonical_ready" => "the canonical bundle is already ready",
-        "canonical_exists" => "a canonical bundle already exists",
-        "legacy_not_detected" => "legacy engines were not detected",
-        "legacy_incomplete" => "the legacy engine set is incomplete",
-        "insufficient_disk_space" => "insufficient free disk space",
-        null or "" => "not currently available",
-        _ => reason.Replace('_', ' ')
+      PrimaryButtonText = "Verify and copy",
+      CloseButtonText = "Cancel",
+      DefaultButton = ContentDialogButton.Close
     };
+    if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        async token =>
+        {
+          ModelTaskActionResponse response = await _apiClient.ImportLegacyTensorRtAsync(token);
+          UpsertTask(response.Task);
+        },
+        "Verification and safe copy started. The legacy source will remain in place.");
+  }
+
+  private async void TensorRtCancel_Click(object sender, RoutedEventArgs e)
+  {
+    ModelTaskPresentation? active = _tasks.FirstOrDefault(
+        task => task.Task.ModelId == TensorRtModelId && task.Task.IsActive);
+    if (active is null)
+    {
+      return;
+    }
+
+    await RunCommandAsync(
+        async token =>
+        {
+          ModelTaskActionResponse response =
+                  await _apiClient.CancelLegacyTensorRtImportAsync(active.Task.Id, token);
+          UpsertTask(response.Task);
+        },
+        "Cancellation requested. Temporary copies will be removed; legacy engines remain unchanged.");
+  }
+
+  private void UpsertTask(ModelTask task)
+  {
+    ModelTaskPresentation? existing = _tasks.FirstOrDefault(item => item.Task.Id == task.Id);
+    if (existing is not null)
+    {
+      _ = _tasks.Remove(existing);
+    }
+    _tasks.Insert(0, new ModelTaskPresentation(task));
+    UpdateTensorRt();
+  }
+
+  private void UpdateTensorRt()
+  {
+    ModelTaskPresentation? active = _tasks.FirstOrDefault(
+        task => task.Task.ModelId == TensorRtModelId && task.Task.IsActive);
+    TensorRtCancelButton.IsEnabled = !_isCommandRunning && active is not null;
+    TensorRtImportButton.IsEnabled =
+        !_isCommandRunning && active is null && _tensorRtStatus?.Migration.Available == true;
+
+    if (_tensorRtStatus is null)
+    {
+      TensorRtSummaryText.Text = "Checking legacy TensorRT bundle status...";
+      TensorRtDiskText.Text = string.Empty;
+      return;
+    }
+
+    TensorRtLegacyStatus legacy = _tensorRtStatus.Legacy;
+    TensorRtMigrationAvailability migration = _tensorRtStatus.Migration;
+    TensorRtSummaryText.Text = active is not null
+        ? $"Migration {active.Task.Status}: {active.Task.DisplayStage}"
+        : legacy.Status switch
+        {
+          "absent" => "No root-level legacy TensorRT engine set was detected.",
+          "partial" => "A partial legacy engine set was found. All expected safe, non-empty engines are required.",
+          "ready_to_import" =>
+                  $"Found {legacy.UsableFileCount} safe engine files ({FormatBytes(legacy.TotalBytes)}).",
+          _ when _tensorRtStatus.Canonical.RendererReady => "The canonical TensorRT bundle is ready.",
+          _ => $"Legacy status: {legacy.Status}"
+        };
+    TensorRtDiskStatus disk = migration.Disk;
+    TensorRtDiskText.Text =
+        $"Required free space: {FormatBytes(disk.RequiredFreeBytes)}  |  Available: "
+        + (disk.AvailableFreeBytes.HasValue ? FormatBytes(disk.AvailableFreeBytes.Value) : "unknown")
+        + (migration.Available
+            ? "\nCopy-only migration is available; source files will be preserved."
+            : $"\nMigration unavailable: {FormatBlockedReason(migration.BlockedReason)}");
+  }
+
+  private void UpdateComponentAcceleration()
+  {
+    string selectedComponent = SelectedTensorRtComponent();
+    RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
+        value.ModelFamily == "sd15" && value.Component == selectedComponent);
+    bool canOptimize = !_isCommandRunning && component?.OptimizationEligible == true;
+    bool hasEngineRecord = !string.IsNullOrWhiteSpace(component?.LastEngineId)
+        && !string.Equals(component.LastEngineState, "missing", StringComparison.OrdinalIgnoreCase);
+    ComponentOptimizeButton.IsEnabled = canOptimize;
+    ComponentOptimizeAllButton.IsEnabled = !_isCommandRunning
+        && _runtimeStatus?.Components.Any(value => value.ModelFamily == "sd15" && value.OptimizationEligible) == true;
+    ComponentRebuildButton.IsEnabled = canOptimize && hasEngineRecord;
+    ComponentValidateButton.IsEnabled = canOptimize
+        && component?.ValidatedEngineCount > 0
+        && string.Equals(component.LastEngineState, "ready", StringComparison.OrdinalIgnoreCase);
+    ComponentDeleteButton.IsEnabled = !_isCommandRunning && hasEngineRecord;
+    ComponentAccelerationText.Text = component is null
+        ? "Component acceleration status is unavailable."
+        : $"SD1.5 {component.Component}: {TensorRtRoutePresentation.From(component).RouteLabel}; "
+          + $"{TensorRtRoutePresentation.From(component).State}; {component.ValidatedEngineCount} validated engine(s); "
+          + $"{component.ProfileCoverage.Count} profile(s); fallback {component.FallbackRuntime}.";
+    ComponentAccelerationReasonText.Text = component?.OptimizationEligible == true
+        ? $"{TensorRtRoutePresentation.From(component).Detail} Eligible for an explicit 512 x 512 optimization job."
+        : $"Optimize unavailable: {component?.RouteReason ?? FormatBlockedReason(component?.OptimizationReason)}.";
+  }
+
+  private string SelectedTensorRtComponent()
+  {
+    return (ComponentSelector.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "unet";
+  }
+
+  private void ComponentSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_isInitialized)
+    {
+      UpdateComponentAcceleration();
+    }
+  }
+
+  private async void ComponentOptimize_Click(object sender, RoutedEventArgs e)
+  {
+    await QueueComponentJobAsync("optimize", "Component optimization queued in Render Queue.");
+  }
+
+  private async void ComponentOptimizeAll_Click(object sender, RoutedEventArgs e)
+  {
+    await QueueComponentJobAsync("optimize_all", "Compatible component optimization queued in Render Queue.");
+  }
+
+  private async void ComponentRebuild_Click(object sender, RoutedEventArgs e)
+  {
+    await QueueComponentJobAsync("rebuild", "Component rebuild queued in Render Queue.");
+  }
+
+  private async void ComponentValidate_Click(object sender, RoutedEventArgs e)
+  {
+    await QueueComponentJobAsync("validate", "Cached component validation queued in Render Queue.");
+  }
+
+  private async void ComponentDelete_Click(object sender, RoutedEventArgs e)
+  {
+    RuntimeComponentStatus? component = _runtimeStatus?.Components.FirstOrDefault(value =>
+        value.ModelFamily == "sd15" && value.Component == SelectedTensorRtComponent());
+    if (string.IsNullOrWhiteSpace(component?.LastEngineId))
+    {
+      return;
+    }
+    await RunCommandAsync(
+        async token =>
+        {
+          _ = await _apiClient.ClearRuntimeEngineAsync(component.LastEngineId, token);
+          await RefreshAsync(token);
+        },
+        "Selected component engine deleted.");
+  }
+
+  private async Task QueueComponentJobAsync(string operation, string message)
+  {
+    await RunCommandAsync(
+        async token =>
+        {
+          int device = double.IsFinite(ComponentDevice.Value) ? (int)ComponentDevice.Value : 0;
+          string precision = ComponentPrecision.SelectedItem?.ToString() == "fp32" ? "fp32" : "fp16";
+          _ = await _apiClient.StartRuntimeJobAsync(
+              new RuntimeJobRequest(operation, device, precision, Component: SelectedTensorRtComponent()), token);
+          await App.Services.JobsActivity.RefreshAsync(token);
+        },
+        message);
+  }
+
+  private void UpdateStorage(ModelCatalogueResponse response)
+  {
+    StorageText.Text =
+        $"Mode: {response.StorageMode ?? "local_cache"}\n"
+        + $"Cache: {response.ModelCache ?? "Backend managed"}\n"
+        + $"{(response.Catalog?.Count ?? 0) + (response.User?.Count ?? 0)} models, "
+        + $"{response.Packs?.Count ?? 0} packs";
+  }
+
+  private async Task RunCommandAsync(Func<CancellationToken, Task> command, string successMessage)
+  {
+    if (_isCommandRunning)
+    {
+      return;
+    }
+
+    _isCommandRunning = true;
+    CommandProgress.Visibility = Visibility.Visible;
+    UpdateActionState();
+    try
+    {
+      CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
+      await command(token);
+      ShowStatus(successMessage, InfoBarSeverity.Success);
+      await RefreshAsync(token);
+      await PollTasksAsync(token);
+    }
+    catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
+    {
+    }
+    catch (Exception exception)
+    {
+      ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+    }
+    finally
+    {
+      _isCommandRunning = false;
+      CommandProgress.Visibility = Visibility.Collapsed;
+      UpdateActionState();
+    }
+  }
+
+  private void ShowStatus(string message, InfoBarSeverity severity)
+  {
+    StatusBar.Message = message;
+    StatusBar.Severity = severity;
+    StatusBar.IsOpen = true;
+  }
+
+  internal static string FormatBytes(long bytes)
+  {
+    string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    double value = Math.Max(0, bytes);
+    int unit = 0;
+    while (value >= 1024 && unit < units.Length - 1)
+    {
+      value /= 1024;
+      unit++;
+    }
+    return $"{value:N1} {units[unit]}";
+  }
+
+  private static string FormatBlockedReason(string? reason)
+  {
+    return reason switch
+    {
+      "canonical_ready" => "the canonical bundle is already ready",
+      "canonical_exists" => "a canonical bundle already exists",
+      "legacy_not_detected" => "legacy engines were not detected",
+      "legacy_incomplete" => "the legacy engine set is incomplete",
+      "insufficient_disk_space" => "insufficient free disk space",
+      null or "" => "not currently available",
+      _ => reason.Replace('_', ' ')
+    };
+  }
 }
 
 public sealed class ModelPresentation
 {
-    public ModelPresentation(
-        ModelCatalogueEntry entry,
-        bool isUserModel,
-        bool isAccepted,
-        bool isInstalled)
-    {
-        Entry = entry;
-        IsUserModel = isUserModel;
-        IsAccepted = isAccepted;
-        IsInstalled = isInstalled;
-    }
+  public ModelPresentation(
+      ModelCatalogueEntry entry,
+      bool isUserModel,
+      bool isAccepted,
+      bool isInstalled)
+  {
+    Entry = entry;
+    IsUserModel = isUserModel;
+    IsAccepted = isAccepted;
+    IsInstalled = isInstalled;
+  }
 
-    public ModelCatalogueEntry Entry { get; }
-    public bool IsUserModel { get; }
-    public bool IsAccepted { get; }
-    public bool IsInstalled { get; }
-    public string DisplayName => Entry.Name ?? Entry.Id;
-    public string Kind => Entry.Kind ?? ReadString("type") ?? "model";
-    public string Source => Entry.Source ?? (IsUserModel ? "local" : "catalogue");
-    public string Lane => ReadString("lane") ?? "recommended";
-    public bool RequiresLicense => !string.Equals(Source, "ollama", StringComparison.OrdinalIgnoreCase);
-    public ModelRuntimeStatus? RuntimeStatus => Entry.PackageStatus;
-    public bool IsManagedPackage => RuntimeStatus is not null;
-    public bool IsVideoModel =>
-        Kind.Contains("video", StringComparison.OrdinalIgnoreCase)
-        || Kind.Contains("motion", StringComparison.OrdinalIgnoreCase)
-        || Entry.Id.Contains("svd", StringComparison.OrdinalIgnoreCase)
-        || Entry.Id.Contains("animatediff", StringComparison.OrdinalIgnoreCase)
-        || Entry.Id.Contains("hunyuan", StringComparison.OrdinalIgnoreCase)
-        || Entry.Id.Contains("ltx", StringComparison.OrdinalIgnoreCase);
-    public bool CanSmokeTest => IsInstalled && RuntimeStatus?.SmokeTestSupported == true;
-    public string StateLabel => RuntimeStatus?.RuntimeState switch
+  public ModelCatalogueEntry Entry { get; }
+  public bool IsUserModel { get; }
+  public bool IsAccepted { get; }
+  public bool IsInstalled { get; }
+  public string DisplayName => Entry.Name ?? Entry.Id;
+  public string Kind => Entry.Kind ?? ReadString("type") ?? "model";
+  public string Source => Entry.Source ?? (IsUserModel ? "local" : "catalogue");
+  public string Lane => ReadString("lane") ?? "recommended";
+  public bool RequiresLicense => !string.Equals(Source, "ollama", StringComparison.OrdinalIgnoreCase);
+  public ModelRuntimeStatus? RuntimeStatus => Entry.PackageStatus;
+  public bool IsManagedPackage => RuntimeStatus is not null;
+  public bool IsVideoModel =>
+      Kind.Contains("video", StringComparison.OrdinalIgnoreCase)
+      || Kind.Contains("motion", StringComparison.OrdinalIgnoreCase)
+      || Entry.Id.Contains("svd", StringComparison.OrdinalIgnoreCase)
+      || Entry.Id.Contains("animatediff", StringComparison.OrdinalIgnoreCase)
+      || Entry.Id.Contains("hunyuan", StringComparison.OrdinalIgnoreCase)
+      || Entry.Id.Contains("ltx", StringComparison.OrdinalIgnoreCase);
+  public bool CanSmokeTest => IsInstalled && RuntimeStatus?.SmokeTestSupported == true;
+  public string StateLabel => RuntimeStatus?.RuntimeState switch
+  {
+    "runtime_ready" => "Level-5 qualified",
+    "execution_ready" => "Execution ready",
+    "runtime_degraded" => "Runtime degraded",
+    "installed_runtime_unavailable" when IsInstalled => "Installed / Runtime unavailable",
+    _ when IsInstalled => "Installed",
+    _ when IsUserModel => "Imported",
+    _ => "Available"
+  };
+  public string RuntimeDetail => RuntimeStatus is null
+      ? string.Empty
+      : $"\nValidation level: {RuntimeStatus.ValidationLevel}"
+        + (string.IsNullOrWhiteSpace(RuntimeStatus.Error) ? string.Empty : $"\nReason: {RuntimeStatus.Error}")
+        + ((RuntimeStatus.Warnings?.Count ?? 0) == 0 ? string.Empty : $"\nAdvisory: {string.Join(" | ", RuntimeStatus.Warnings!)}");
+  public string Subtitle => $"{Kind} - {Source} - {Lane}";
+
+  public bool Matches(string query)
+  {
+    return query.Length == 0
+      || DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase)
+      || Entry.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
+      || Kind.Contains(query, StringComparison.OrdinalIgnoreCase)
+      || Source.Contains(query, StringComparison.OrdinalIgnoreCase)
+      || Lane.Contains(query, StringComparison.OrdinalIgnoreCase);
+  }
+
+  public bool MatchesFilter(string filter)
+  {
+    return filter switch
     {
-        "runtime_ready" => "Level-5 qualified",
-        "execution_ready" => "Execution ready",
-        "runtime_degraded" => "Runtime degraded",
-        "installed_runtime_unavailable" when IsInstalled => "Installed / Runtime unavailable",
-        _ when IsInstalled => "Installed",
-        _ when IsUserModel => "Imported",
-        _ => "Available"
+      "installed" => IsInstalled,
+      "ready" => RuntimeStatus is { } status && (status.ExecutionReady || status.RuntimeReady),
+      "video" => IsVideoModel,
+      _ => true
     };
-    public string RuntimeDetail => RuntimeStatus is null
-        ? string.Empty
-        : $"\nValidation level: {RuntimeStatus.ValidationLevel}"
-          + (string.IsNullOrWhiteSpace(RuntimeStatus.Error) ? string.Empty : $"\nReason: {RuntimeStatus.Error}")
-          + ((RuntimeStatus.Warnings?.Count ?? 0) == 0 ? string.Empty : $"\nAdvisory: {string.Join(" | ", RuntimeStatus.Warnings!)}");
-    public string Subtitle => $"{Kind} - {Source} - {Lane}";
+  }
 
-    public bool Matches(string query) =>
-        query.Length == 0
-        || DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || Entry.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || Kind.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || Source.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || Lane.Contains(query, StringComparison.OrdinalIgnoreCase);
-
-    public bool MatchesFilter(string filter) => filter switch
-    {
-        "installed" => IsInstalled,
-        "ready" => RuntimeStatus is { } status && (status.ExecutionReady || status.RuntimeReady),
-        "video" => IsVideoModel,
-        _ => true
-    };
-
-    private string? ReadString(string propertyName) =>
-        Entry.ExtensionData?.TryGetValue(propertyName, out JsonElement value) == true
-        && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+  private string? ReadString(string propertyName)
+  {
+    return Entry.ExtensionData?.TryGetValue(propertyName, out JsonElement value) == true
+      && value.ValueKind == JsonValueKind.String
+          ? value.GetString()
+          : null;
+  }
 }
 
 public sealed class ModelPackPresentation
 {
-    public ModelPackPresentation(ModelPackEntry pack) => Pack = pack;
+  public ModelPackPresentation(ModelPackEntry pack)
+  {
+    Pack = pack;
+  }
 
-    public ModelPackEntry Pack { get; }
-    public string DisplayName => Pack.Name ?? Pack.Id;
-    public string Description => Pack.Description
-        ?? $"{Pack.Models?.Count ?? 0} models: {string.Join(", ", Pack.Models ?? [])}";
-    public string ActionLabel => Pack.RuntimeReady
-        ? "Ready"
-        : Pack.Installed ? "Repair pack" : "Install pack";
-    public string StatusDetail
+  public ModelPackEntry Pack { get; }
+  public string DisplayName => Pack.Name ?? Pack.Id;
+  public string Description => Pack.Description
+      ?? $"{Pack.Models?.Count ?? 0} models: {string.Join(", ", Pack.Models ?? [])}";
+  public string ActionLabel => Pack.RuntimeReady
+      ? "Ready"
+      : Pack.Installed ? "Repair pack" : "Install pack";
+  public string StatusDetail
+  {
+    get
     {
-        get
-        {
-            var details = new List<string>();
-            if (string.Equals(Pack.PackageType, "dlc", StringComparison.OrdinalIgnoreCase))
-            {
-                details.Add("Optional DLC");
-            }
-            if (Pack.DownloadSizeBytes is long size)
-            {
-                details.Add($"Download: {ModelsPage.FormatBytes(size)}");
-            }
-            if (Pack.RuntimeComponents is { Count: > 0 })
-            {
-                details.Add("Includes: " + string.Join(", ", Pack.RuntimeComponents.Select(component =>
-                    $"{component.Name} {component.Version} {component.Build}".Trim())));
-            }
-            details.Add(Pack.RuntimeReady ? "Status: Ready" : Pack.Installed ? "Status: Repair required" : "Status: Not installed");
-            if (Pack.Blockers is { Count: > 0 })
-            {
-                details.Add("Needs: " + string.Join(" ", Pack.Blockers));
-            }
-            return string.Join("\n", details);
-        }
+      List<string> details = [];
+      if (string.Equals(Pack.PackageType, "dlc", StringComparison.OrdinalIgnoreCase))
+      {
+        details.Add("Optional DLC");
+      }
+      if (Pack.DownloadSizeBytes is long size)
+      {
+        details.Add($"Download: {ModelsPage.FormatBytes(size)}");
+      }
+      if (Pack.RuntimeComponents is { Count: > 0 })
+      {
+        details.Add("Includes: " + string.Join(", ", Pack.RuntimeComponents.Select(component =>
+            $"{component.Name} {component.Version} {component.Build}".Trim())));
+      }
+      details.Add(Pack.RuntimeReady ? "Status: Ready" : Pack.Installed ? "Status: Repair required" : "Status: Not installed");
+      if (Pack.Blockers is { Count: > 0 })
+      {
+        details.Add("Needs: " + string.Join(" ", Pack.Blockers));
+      }
+      return string.Join("\n", details);
     }
+  }
 }
 
 public sealed class ModelTaskPresentation
 {
-    public ModelTaskPresentation(ModelTask task) => Task = task;
+  public ModelTaskPresentation(ModelTask task)
+  {
+    Task = task;
+  }
 
-    public ModelTask Task { get; }
-    public string DisplayName => string.IsNullOrWhiteSpace(Task.Name) ? Task.ModelId ?? Task.Id : Task.Name;
-    public string StatusLabel => Task.Status;
-    public double Progress => Task.ClampedProgress;
-    public Visibility ProgressVisibility => Task.HasProgress ? Visibility.Visible : Visibility.Collapsed;
-    public string Detail => Task.Error ?? Task.DisplayStage;
-    public bool CanCancel => Task.IsActive && !Task.CancelRequested;
+  public ModelTask Task { get; }
+  public string DisplayName => string.IsNullOrWhiteSpace(Task.Name) ? Task.ModelId ?? Task.Id : Task.Name;
+  public string StatusLabel => Task.Status;
+  public double Progress => Task.ClampedProgress;
+  public Visibility ProgressVisibility => Task.HasProgress ? Visibility.Visible : Visibility.Collapsed;
+  public string Detail => Task.Error ?? Task.DisplayStage;
+  public bool CanCancel => Task.IsActive && !Task.CancelRequested;
 }

@@ -5,72 +5,72 @@ namespace EdmgStudio.Core.Tests;
 [TestClass]
 public sealed class WindowsBackendTokenProviderTests
 {
-    [TestMethod]
-    public void InFlightLookupCannotRepopulateAfterSave()
-    {
-        var coordinator = new ProcessWideTokenCacheCoordinator();
-        TokenCacheEntry entry = coordinator.CreateEntry();
-        long version = coordinator.CurrentVersion;
-        coordinator.Invalidate();
-        Assert.IsFalse(entry.StoreIfCurrent("stale", version));
-        Assert.IsFalse(entry.TryGet(out _));
-    }
+  [TestMethod]
+  public void InFlightLookupCannotRepopulateAfterSave()
+  {
+    ProcessWideTokenCacheCoordinator coordinator = new();
+    TokenCacheEntry entry = coordinator.CreateEntry();
+    long version = coordinator.CurrentVersion;
+    coordinator.Invalidate();
+    Assert.IsFalse(entry.StoreIfCurrent("stale", version));
+    Assert.IsFalse(entry.TryGet(out _));
+  }
 
-    [TestMethod]
-    public void InvalidateClearsCachedAbsenceAcrossEntries()
-    {
-        var coordinator = new ProcessWideTokenCacheCoordinator();
-        TokenCacheEntry first = coordinator.CreateEntry();
-        TokenCacheEntry second = coordinator.CreateEntry();
+  [TestMethod]
+  public void InvalidateClearsCachedAbsenceAcrossEntries()
+  {
+    ProcessWideTokenCacheCoordinator coordinator = new();
+    TokenCacheEntry first = coordinator.CreateEntry();
+    TokenCacheEntry second = coordinator.CreateEntry();
 
-        first.Store(null);
-        second.Store(null);
+    first.Store(null);
+    second.Store(null);
 
-        Assert.IsTrue(first.TryGet(out string? firstValue));
-        Assert.IsNull(firstValue);
-        Assert.IsTrue(second.TryGet(out string? secondValue));
-        Assert.IsNull(secondValue);
+    Assert.IsTrue(first.TryGet(out string? firstValue));
+    Assert.IsNull(firstValue);
+    Assert.IsTrue(second.TryGet(out string? secondValue));
+    Assert.IsNull(secondValue);
 
-        coordinator.Invalidate();
+    coordinator.Invalidate();
 
-        Assert.IsFalse(first.TryGet(out _));
-        Assert.IsFalse(second.TryGet(out _));
-    }
+    Assert.IsFalse(first.TryGet(out _));
+    Assert.IsFalse(second.TryGet(out _));
+  }
 
-    [TestMethod]
-    public void InvalidateClearsCachedPresenceAcrossEntries()
-    {
-        var coordinator = new ProcessWideTokenCacheCoordinator();
-        TokenCacheEntry first = coordinator.CreateEntry();
-        TokenCacheEntry second = coordinator.CreateEntry();
+  [TestMethod]
+  public void InvalidateClearsCachedPresenceAcrossEntries()
+  {
+    ProcessWideTokenCacheCoordinator coordinator = new();
+    TokenCacheEntry first = coordinator.CreateEntry();
+    TokenCacheEntry second = coordinator.CreateEntry();
 
-        first.Store("persisted-token");
-        second.Store("persisted-token");
+    first.Store("persisted-token");
+    second.Store("persisted-token");
 
-        Assert.IsTrue(first.TryGet(out string? firstValue));
-        Assert.AreEqual("persisted-token", firstValue);
-        Assert.IsTrue(second.TryGet(out string? secondValue));
-        Assert.AreEqual("persisted-token", secondValue);
+    Assert.IsTrue(first.TryGet(out string? firstValue));
+    Assert.AreEqual("persisted-token", firstValue);
+    Assert.IsTrue(second.TryGet(out string? secondValue));
+    Assert.AreEqual("persisted-token", secondValue);
 
-        coordinator.Invalidate();
+    coordinator.Invalidate();
 
-        Assert.IsFalse(first.TryGet(out _));
-        Assert.IsFalse(second.TryGet(out _));
-    }
+    Assert.IsFalse(first.TryGet(out _));
+    Assert.IsFalse(second.TryGet(out _));
+  }
 
-    [TestMethod]
-    public void StoreAfterInvalidationRefreshesTheCurrentVersion()
-    {
-        var coordinator = new ProcessWideTokenCacheCoordinator();
-        TokenCacheEntry entry = coordinator.CreateEntry();
+  [TestMethod]
+  public void StoreAfterInvalidationRefreshesTheCurrentVersion()
+  {
+    ProcessWideTokenCacheCoordinator coordinator = new();
+    TokenCacheEntry entry = coordinator.CreateEntry();
 
-        entry.Store("stale-token");
-        coordinator.Invalidate();
-        Assert.IsFalse(entry.TryGet(out _));
+    entry.Store("stale-token");
+    coordinator.Invalidate();
+    Assert.IsFalse(entry.TryGet(out _));
 
-        entry.Store("fresh-token");
+    entry.Store("fresh-token");
 
-        Assert.IsTrue(entry.TryGet(out string? refreshedValue));
-        Assert.AreEqual("fresh-token", refreshedValue);
-    }
+    Assert.IsTrue(entry.TryGet(out string? refreshedValue));
+    Assert.AreEqual("fresh-token", refreshedValue);
+  }
 }

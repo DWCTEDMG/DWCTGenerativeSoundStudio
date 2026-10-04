@@ -4,23 +4,23 @@ namespace EdmgStudio.Core.Models;
 
 public enum BackendMode
 {
-    ManagedSource,
-    ManagedPackaged,
-    External,
-    Attached
+  ManagedSource,
+  ManagedPackaged,
+  External,
+  Attached
 }
 
 public enum BackendLifecycleState
 {
-    Stopped,
-    Resolving,
-    CheckingExisting,
-    Starting,
-    WaitingForHealth,
-    Ready,
-    Unavailable,
-    Failed,
-    Stopping
+  Stopped,
+  Resolving,
+  CheckingExisting,
+  Starting,
+  WaitingForHealth,
+  Ready,
+  Unavailable,
+  Failed,
+  Stopping
 }
 
 public sealed record BackendStatus(
@@ -37,8 +37,8 @@ public sealed record BackendStatus(
     string? StdoutLogPath = null,
     string? StderrLogPath = null)
 {
-    public bool IsReady => State == BackendLifecycleState.Ready;
-    public bool OwnsProcess => OwnedProcessId is not null;
+  public bool IsReady => State == BackendLifecycleState.Ready;
+  public bool OwnsProcess => OwnedProcessId is not null;
 }
 
 public sealed record BackendLaunchSpec(
@@ -51,30 +51,30 @@ public sealed record BackendLaunchSpec(
     string StderrLogPath,
     string AcceleratorProfile)
 {
-    public ProcessStartInfo CreateProcessStartInfo()
+  public ProcessStartInfo CreateProcessStartInfo()
+  {
+    ProcessStartInfo startInfo = new()
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = FileName,
-            WorkingDirectory = WorkingDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = false
-        };
+      FileName = FileName,
+      WorkingDirectory = WorkingDirectory,
+      UseShellExecute = false,
+      CreateNoWindow = true,
+      WindowStyle = ProcessWindowStyle.Hidden,
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      RedirectStandardInput = false
+    };
 
-        foreach (var argument in Arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        foreach (var pair in Environment)
-        {
-            startInfo.Environment[pair.Key] = pair.Value;
-        }
-
-        return startInfo;
+    foreach (string argument in Arguments)
+    {
+      startInfo.ArgumentList.Add(argument);
     }
+
+    foreach (KeyValuePair<string, string> pair in Environment)
+    {
+      startInfo.Environment[pair.Key] = pair.Value;
+    }
+
+    return startInfo;
+  }
 }

@@ -1,14 +1,12 @@
-using System.Collections.ObjectModel;
-using System.Globalization;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
-using EdmgStudio.WinUI.Controls;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using System.Collections.ObjectModel;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.System;
@@ -18,732 +16,780 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class OutputsPage : Page
 {
-    private readonly StudioApiClient _apiClient = App.Services.ApiClient;
-    private readonly StudioProjectMediaClient _projectMediaClient = App.Services.ProjectMediaClient;
-    private readonly StudioSessionService _session = App.Services.Session;
-    private readonly BackendConfiguration _backendConfiguration = App.Services.Configuration;
-    private readonly LatestRequestGate _previewRequests = new();
-    private string? _previewTempPath;
-    private readonly LatestRequestGate _refreshRequests = new();
-    private ProjectDto? _activeProject;
-    private bool _isInitialized;
+  private readonly StudioApiClient _apiClient = App.Services.ApiClient;
+  private readonly StudioProjectMediaClient _projectMediaClient = App.Services.ProjectMediaClient;
+  private readonly StudioSessionService _session = App.Services.Session;
+  private readonly BackendConfiguration _backendConfiguration = App.Services.Configuration;
+  private readonly LatestRequestGate _previewRequests = new();
+  private string? _previewTempPath;
+  private readonly LatestRequestGate _refreshRequests = new();
+  private ProjectDto? _activeProject;
+  private readonly bool _isInitialized;
 
-    public OutputsPage()
+  public OutputsPage()
+  {
+    InitializeComponent();
+    _isInitialized = true;
+  }
+
+  public ObservableCollection<StudioOutputItem> Items { get; } = [];
+
+  public ObservableCollection<StudioOutputItem> VisibleItems { get; } = [];
+
+  private string ActiveProjectId => _session.ActiveProjectId;
+
+  private StudioOutputItem? SelectedOutput => OutputsList.SelectedItem as StudioOutputItem;
+
+  protected override async void OnNavigatedTo(NavigationEventArgs e)
+  {
+    base.OnNavigatedTo(e);
+    await RefreshAsync();
+  }
+
+  protected override async void OnNavigatedFrom(NavigationEventArgs e)
+  {
+    _refreshRequests.Cancel();
+    await CancelPreviewAsync(clearSurface: true);
+    base.OnNavigatedFrom(e);
+  }
+
+  private async Task RefreshAsync(string? preferredStableIdentity = null)
+  {
+    using LatestRequestGate.Request request = _refreshRequests.Begin();
+    string projectId = ActiveProjectId;
+    string? selectionIdentity = preferredStableIdentity ?? SelectedOutput?.StableIdentity;
+    if (string.IsNullOrWhiteSpace(ActiveProjectId))
     {
-        InitializeComponent();
-        _isInitialized = true;
+      Items.Clear();
+      VisibleItems.Clear();
+      await CancelPreviewAsync(clearSurface: true);
+      SetStatus("Select a project", "Open Projects and select a project before browsing outputs.", InfoBarSeverity.Informational);
+      return;
     }
 
-    public ObservableCollection<StudioOutputItem> Items { get; } = [];
-
-    public ObservableCollection<StudioOutputItem> VisibleItems { get; } = [];
-
-    private string ActiveProjectId => _session.ActiveProjectId;
-
-    private StudioOutputItem? SelectedOutput => OutputsList.SelectedItem as StudioOutputItem;
-
-    protected override async void OnNavigatedTo(NavigationEventArgs e)
+    SetBusy(true);
+    try
     {
-        base.OnNavigatedTo(e);
-        await RefreshAsync();
+      Task<ProjectResponse> projectTask = _apiClient.GetProjectAsync(projectId, request.Token);
+      JsonElement outputs = await _apiClient.GetOutputsAsync(projectId, request.Token);
+      ProjectResponse projectResponse = await projectTask;
+      if (!request.IsCurrent || projectId != ActiveProjectId)
+      {
+        return;
+      }
+
+      _activeProject = projectResponse.Project;
+      Items.Clear();
+      foreach (StudioOutputItem item in StudioOutputCatalog.Project(outputs))
+      {
+        Items.Add(item);
+      }
+
+      ApplyFilters(selectionIdentity);
+      SetStatus(
+          "Outputs refreshed",
+          $"{Items.Count} output record(s) loaded for project {ActiveProjectId}.",
+          InfoBarSeverity.Success);
+    }
+    catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+      if (request.IsCurrent && projectId == ActiveProjectId)
+      {
+        SetStatus("Unable to load outputs", ex.Message, InfoBarSeverity.Error);
+      }
+    }
+    finally
+    {
+      if (request.IsCurrent)
+      {
+        SetBusy(false);
+      }
+    }
+  }
+
+  private async void OutputsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    using LatestRequestGate.Request request = _previewRequests.Begin();
+    string projectId = ActiveProjectId;
+    StudioOutputItem? selected = SelectedOutput;
+    OutputPreview.ShowEmpty("Loading selected output…");
+    UpdateSelectionUi(selected);
+
+    if (selected is null)
+    {
+      OutputPreview.ShowEmpty("Select an output to preview.");
+      return;
     }
 
-    protected override async void OnNavigatedFrom(NavigationEventArgs e)
+    if (!selected.SupportsMediaWorkflow)
     {
-        _refreshRequests.Cancel();
-        await CancelPreviewAsync(clearSurface: true);
-        base.OnNavigatedFrom(e);
+      OutputPreview.ShowUnsupported("This Unreal bundle is a workflow artifact, not previewable media.");
+      return;
     }
 
-    private async Task RefreshAsync(string? preferredStableIdentity = null)
+    _session.SetSelectedArtifact(selected.Path);
+    try
     {
-        using var request = _refreshRequests.Begin();
-        string projectId = ActiveProjectId;
-        string? selectionIdentity = preferredStableIdentity ?? SelectedOutput?.StableIdentity;
-        if (string.IsNullOrWhiteSpace(ActiveProjectId))
-        {
-            Items.Clear();
-            VisibleItems.Clear();
-            await CancelPreviewAsync(clearSurface: true);
-            SetStatus("Select a project", "Open Projects and select a project before browsing outputs.", InfoBarSeverity.Informational);
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            Task<ProjectResponse> projectTask = _apiClient.GetProjectAsync(projectId, request.Token);
-            JsonElement outputs = await _apiClient.GetOutputsAsync(projectId, request.Token);
-            ProjectResponse projectResponse = await projectTask;
-            if (!request.IsCurrent || projectId != ActiveProjectId) return;
-            _activeProject = projectResponse.Project;
-            Items.Clear();
-            foreach (StudioOutputItem item in StudioOutputCatalog.Project(outputs))
+      EnsurePostOperationAllowed(PostProductionOperation.Preview);
+      _ = await _projectMediaClient.StreamProjectMediaAsync<bool>(
+          projectId,
+          selected.Path,
+          async (file, cancellationToken) =>
+          {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!request.IsCurrent || projectId != ActiveProjectId)
             {
-                Items.Add(item);
+              return false;
             }
 
-            ApplyFilters(selectionIdentity);
-            SetStatus(
-                "Outputs refreshed",
-                $"{Items.Count} output record(s) loaded for project {ActiveProjectId}.",
-                InfoBarSeverity.Success);
-        }
-        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            if (request.IsCurrent && projectId == ActiveProjectId)
-                SetStatus("Unable to load outputs", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            if (request.IsCurrent) SetBusy(false);
-        }
-    }
-
-    private async void OutputsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        using var request = _previewRequests.Begin();
-        string projectId = ActiveProjectId;
-        StudioOutputItem? selected = SelectedOutput;
-        OutputPreview.ShowEmpty("Loading selected output…");
-        UpdateSelectionUi(selected);
-
-        if (selected is null)
-        {
-            OutputPreview.ShowEmpty("Select an output to preview.");
-            return;
-        }
-
-        if (!selected.SupportsMediaWorkflow)
-        {
-            OutputPreview.ShowUnsupported("This Unreal bundle is a workflow artifact, not previewable media.");
-            return;
-        }
-
-        _session.SetSelectedArtifact(selected.Path);
-        try
-        {
-            EnsurePostOperationAllowed(PostProductionOperation.Preview);
-            await _projectMediaClient.StreamProjectMediaAsync<bool>(
-                projectId,
-                selected.Path,
-                async (file, cancellationToken) =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!request.IsCurrent || projectId != ActiveProjectId) return false;
-                    if (selected.IsVideo)
-                    {
-                        await OutputPreview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, cancellationToken);
-                    }
-                    else
-                    {
-                        await OutputPreview.LoadStreamAsync(
-                            file.Stream,
-                            file.ContentHeaders.ContentType?.MediaType,
-                            cancellationToken);
-                    }
-                    return true;
-                },
-                request.Token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            if (request.IsCurrent && projectId == ActiveProjectId)
+            if (selected.IsVideo)
             {
-                OutputPreview.ShowError(ex.Message);
-                SetStatus("Preview failed", ex.Message, InfoBarSeverity.Warning);
+              await OutputPreview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, cancellationToken);
             }
-        }
-    }
-
-    private void UpdateSelectionUi(StudioOutputItem? selected)
-    {
-        bool mediaWorkflow = selected?.SupportsMediaWorkflow == true;
-        bool bundleWorkflow = selected?.SupportsBundleWorkflow == true;
-
-        SelectedNameText.Text = selected?.Name ?? "Select an output";
-        SelectedPathText.Text = selected?.Path ?? string.Empty;
-        MetadataText.Text = selected?.Metadata?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? string.Empty;
-        UnrealBundlePanel.Visibility = bundleWorkflow ? Visibility.Visible : Visibility.Collapsed;
-
-        SaveButton.IsEnabled = mediaWorkflow;
-        RevealButton.IsEnabled = mediaWorkflow;
-        ReviewButton.IsEnabled = mediaWorkflow;
-        TimelineButton.IsEnabled = mediaWorkflow;
-        RenderButton.IsEnabled = mediaWorkflow;
-        BuildUnrealPlanButton.IsEnabled = bundleWorkflow;
-        ImportUnrealReturnButton.IsEnabled = bundleWorkflow;
-        RevealBundleButton.IsEnabled = bundleWorkflow;
-        SaveManifestButton.IsEnabled = bundleWorkflow && !string.IsNullOrWhiteSpace(selected?.ManifestPath);
-        SavePlanButton.IsEnabled = bundleWorkflow && !string.IsNullOrWhiteSpace(selected?.ImportPlanPath);
-        SaveZipButton.IsEnabled = bundleWorkflow && !string.IsNullOrWhiteSpace(selected?.ZipPath);
-
-        if (!mediaWorkflow)
-        {
-            _session.SetSelectedArtifact(null);
-            _session.SetSourceAsset(null);
-        }
-    }
-
-    private Task CancelPreviewAsync(bool clearSurface)
-    {
-        _previewRequests.Cancel();
-
-        if (clearSurface)
-        {
-            OutputPreview.ShowEmpty();
-        }
-
-        DeletePreviewTemp();
-        return Task.CompletedTask;
-    }
-
-    private void DeletePreviewTemp()
-    {
-        string? tempPath = Interlocked.Exchange(ref _previewTempPath, null);
-        if (string.IsNullOrWhiteSpace(tempPath))
-        {
-            return;
-        }
-
-        try
-        {
-            File.Delete(tempPath);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
-
-    private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
-
-    private async void SaveButton_Click(object sender, RoutedEventArgs e)
-    {
-        StudioOutputItem? selected = SelectedOutput;
-        if (selected?.IsDownloadable != true)
-        {
-            return;
-        }
-
-        try
-        {
-            EnsurePostOperationAllowed(PostProductionOperation.Export);
-            await SaveProjectArtifactAsync(selected.Path, selected.Name, "Output file");
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Save failed", ex.Message, InfoBarSeverity.Error);
-        }
-    }
-
-    private async void RevealButton_Click(object sender, RoutedEventArgs e)
-    {
-        StudioOutputItem? selected = SelectedOutput;
-        if (selected?.IsDownloadable != true)
-        {
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            DeletePreviewTemp();
-            string extension = Path.GetExtension(selected.Name);
-            _previewTempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}{extension}");
-            await _projectMediaClient.StreamProjectMediaAsync<bool>(
-                ActiveProjectId,
-                selected.Path,
-                async (file, cancellationToken) =>
-                {
-                    await using FileStream destination = File.Create(_previewTempPath);
-                    await file.Stream.CopyToAsync(destination, cancellationToken);
-                    return true;
-                });
-
-            using System.Diagnostics.Process? process = System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "explorer.exe",
-                    Arguments = $"/select,\"{_previewTempPath}\"",
-                    UseShellExecute = true,
-                });
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Reveal failed", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private async void ExportUnrealButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(ActiveProjectId))
-        {
-            SetStatus("Select a project", "Select a project before exporting an Unreal bundle.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            EnsurePostOperationAllowed(PostProductionOperation.Export);
-            double displayedVariant = UnrealVariantNumber.Value;
-            if (double.IsNaN(displayedVariant) ||
-                displayedVariant < 1 ||
-                displayedVariant > int.MaxValue ||
-                displayedVariant != Math.Truncate(displayedVariant))
+            else
             {
-                throw new InvalidOperationException("Plan variant must be a whole number of 1 or greater.");
+              await OutputPreview.LoadStreamAsync(
+                        file.Stream,
+                        file.ContentHeaders.ContentType?.MediaType,
+                        cancellationToken);
             }
-
-            UnrealBundleExportResponse response = await _apiClient.ExportUnrealBundleAsync(
-                ActiveProjectId,
-                new UnrealBundleExportRequest
-                {
-                    VariantIndex = checked((int)displayedVariant - 1),
-                    BundleName = OptionalText(UnrealBundleNameBox.Text),
-                    IncludeZip = UnrealIncludeZipCheckBox.IsChecked == true,
-                });
-
-            string stableIdentity = $"bundle:{StudioOutputCatalog.NormalizePath(response.Bundle.BundleDirectory)}";
-            await RefreshAsync(stableIdentity);
-            SetStatus(
-                "Unreal bundle exported",
-                $"Created {response.Bundle.BundleDirectory}.",
-                InfoBarSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Unreal export failed", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+            return true;
+          },
+          request.Token);
     }
-
-    private async void BuildUnrealPlanButton_Click(object sender, RoutedEventArgs e)
+    catch (OperationCanceledException)
     {
-        StudioOutputItem? selected = SelectedOutput;
-        if (selected?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(selected.BundleDirectory))
-        {
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            UnrealImportPlanResponse response = await _apiClient.BuildUnrealImportPlanAsync(
-                ActiveProjectId,
-                new UnrealImportPlanRequest
-                {
-                    BundleDirectory = selected.BundleDirectory,
-                    ContentPath = OptionalText(UnrealContentPathBox.Text),
-                    AssetName = OptionalText(UnrealAssetNameBox.Text),
-                });
-
-            await RefreshAsync(selected.StableIdentity);
-            SetStatus("Unreal import plan created", $"Created {response.PlanPath}.", InfoBarSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Import plan failed", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
     }
-
-    private async void ImportUnrealReturnButton_Click(object sender, RoutedEventArgs e)
+    catch (Exception ex)
     {
-        StudioOutputItem? selected = SelectedOutput;
-        if (selected?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(selected.BundleDirectory))
-        {
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            UnrealReturnImportResponse response = await _apiClient.ImportUnrealReturnsAsync(
-                ActiveProjectId,
-                new UnrealReturnImportRequest
-                {
-                    BundleDirectory = selected.BundleDirectory,
-                    SourceDirectory = OptionalText(UnrealReturnSourceBox.Text),
-                });
-
-            await RefreshAsync(selected.StableIdentity);
-            SetStatus(
-                "Unreal returns imported",
-                $"{response.Imported.Media.Count} returned media file(s) added to Studio.",
-                InfoBarSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Return import failed", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+      if (request.IsCurrent && projectId == ActiveProjectId)
+      {
+        OutputPreview.ShowError(ex.Message);
+        SetStatus("Preview failed", ex.Message, InfoBarSeverity.Warning);
+      }
     }
+  }
 
-    private async void RevealBundleButton_Click(object sender, RoutedEventArgs e)
+  private void UpdateSelectionUi(StudioOutputItem? selected)
+  {
+    bool mediaWorkflow = selected?.SupportsMediaWorkflow == true;
+    bool bundleWorkflow = selected?.SupportsBundleWorkflow == true;
+
+    SelectedNameText.Text = selected?.Name ?? "Select an output";
+    SelectedPathText.Text = selected?.Path ?? string.Empty;
+    MetadataText.Text = selected?.Metadata?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? string.Empty;
+    UnrealBundlePanel.Visibility = bundleWorkflow ? Visibility.Visible : Visibility.Collapsed;
+
+    SaveButton.IsEnabled = mediaWorkflow;
+    RevealButton.IsEnabled = mediaWorkflow;
+    ReviewButton.IsEnabled = mediaWorkflow;
+    TimelineButton.IsEnabled = mediaWorkflow;
+    RenderButton.IsEnabled = mediaWorkflow;
+    BuildUnrealPlanButton.IsEnabled = bundleWorkflow;
+    ImportUnrealReturnButton.IsEnabled = bundleWorkflow;
+    RevealBundleButton.IsEnabled = bundleWorkflow;
+    SaveManifestButton.IsEnabled = bundleWorkflow && !string.IsNullOrWhiteSpace(selected?.ManifestPath);
+    SavePlanButton.IsEnabled = bundleWorkflow && !string.IsNullOrWhiteSpace(selected?.ImportPlanPath);
+    SaveZipButton.IsEnabled = bundleWorkflow && !string.IsNullOrWhiteSpace(selected?.ZipPath);
+
+    if (!mediaWorkflow)
     {
-        StudioOutputItem? selected = SelectedOutput;
-        if (selected?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(selected.BundleDirectory))
-        {
-            return;
-        }
+      _session.SetSelectedArtifact(null);
+      _session.SetSourceAsset(null);
+    }
+  }
 
-        try
-        {
-            ManagedProjectPathResolution resolution = ManagedProjectPathResolver.Resolve(
-                _backendConfiguration.Mode,
-                _backendConfiguration.Paths.DataDirectory,
-                ActiveProjectId,
-                selected.BundleDirectory);
-            if (!resolution.IsAvailable || string.IsNullOrWhiteSpace(resolution.FullPath))
-            {
-                throw new InvalidOperationException(resolution.ErrorMessage);
-            }
+  private Task CancelPreviewAsync(bool clearSurface)
+  {
+    _previewRequests.Cancel();
 
-            if (!Directory.Exists(resolution.FullPath))
-            {
-                throw new DirectoryNotFoundException("The Unreal bundle directory does not exist locally.");
-            }
-
-            StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(resolution.FullPath);
-            if (!await Launcher.LaunchFolderAsync(folder))
-            {
-                throw new InvalidOperationException("Windows could not open the Unreal bundle folder.");
-            }
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Reveal bundle failed", ex.Message, InfoBarSeverity.Error);
-        }
+    if (clearSurface)
+    {
+      OutputPreview.ShowEmpty();
     }
 
-    private async void SaveManifestButton_Click(object sender, RoutedEventArgs e) =>
-        await SaveSelectedBundleArtifactAsync(
-            SelectedOutput?.ManifestPath,
-            "unreal-manifest.json",
-            "Unreal manifest",
-            "Manifest save failed");
+    DeletePreviewTemp();
+    return Task.CompletedTask;
+  }
 
-    private async void SavePlanButton_Click(object sender, RoutedEventArgs e) =>
-        await SaveSelectedBundleArtifactAsync(
-            SelectedOutput?.ImportPlanPath,
-            "unreal-import-plan.json",
-            "Unreal import plan",
-            "Import plan save failed");
+  private void DeletePreviewTemp()
+  {
+    string? tempPath = Interlocked.Exchange(ref _previewTempPath, null);
+    if (string.IsNullOrWhiteSpace(tempPath))
+    {
+      return;
+    }
 
-    private async void SaveZipButton_Click(object sender, RoutedEventArgs e) =>
-        await SaveSelectedBundleArtifactAsync(
-            SelectedOutput?.ZipPath,
-            "unreal-bundle.zip",
-            "Unreal bundle archive",
-            "Bundle save failed");
+    try
+    {
+      File.Delete(tempPath);
+    }
+    catch (IOException)
+    {
+    }
+    catch (UnauthorizedAccessException)
+    {
+    }
+  }
 
-    private async Task SaveSelectedBundleArtifactAsync(
+  private async void RefreshButton_Click(object sender, RoutedEventArgs e)
+  {
+    await RefreshAsync();
+  }
+
+  private async void SaveButton_Click(object sender, RoutedEventArgs e)
+  {
+    StudioOutputItem? selected = SelectedOutput;
+    if (selected?.IsDownloadable != true)
+    {
+      return;
+    }
+
+    try
+    {
+      EnsurePostOperationAllowed(PostProductionOperation.Export);
+      await SaveProjectArtifactAsync(selected.Path, selected.Name, "Output file");
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Save failed", ex.Message, InfoBarSeverity.Error);
+    }
+  }
+
+  private async void RevealButton_Click(object sender, RoutedEventArgs e)
+  {
+    StudioOutputItem? selected = SelectedOutput;
+    if (selected?.IsDownloadable != true)
+    {
+      return;
+    }
+
+    SetBusy(true);
+    try
+    {
+      DeletePreviewTemp();
+      string extension = Path.GetExtension(selected.Name);
+      _previewTempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}{extension}");
+      _ = await _projectMediaClient.StreamProjectMediaAsync<bool>(
+          ActiveProjectId,
+          selected.Path,
+          async (file, cancellationToken) =>
+          {
+            await using FileStream destination = File.Create(_previewTempPath);
+            await file.Stream.CopyToAsync(destination, cancellationToken);
+            return true;
+          });
+
+      using System.Diagnostics.Process? process = System.Diagnostics.Process.Start(
+          new System.Diagnostics.ProcessStartInfo
+          {
+            FileName = "explorer.exe",
+            Arguments = $"/select,\"{_previewTempPath}\"",
+            UseShellExecute = true,
+          });
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Reveal failed", ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private async void ExportUnrealButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (string.IsNullOrWhiteSpace(ActiveProjectId))
+    {
+      SetStatus("Select a project", "Select a project before exporting an Unreal bundle.", InfoBarSeverity.Warning);
+      return;
+    }
+
+    SetBusy(true);
+    try
+    {
+      EnsurePostOperationAllowed(PostProductionOperation.Export);
+      double displayedVariant = UnrealVariantNumber.Value;
+      if (double.IsNaN(displayedVariant) ||
+          displayedVariant < 1 ||
+          displayedVariant > int.MaxValue ||
+          displayedVariant != Math.Truncate(displayedVariant))
+      {
+        throw new InvalidOperationException("Plan variant must be a whole number of 1 or greater.");
+      }
+
+      UnrealBundleExportResponse response = await _apiClient.ExportUnrealBundleAsync(
+          ActiveProjectId,
+          new UnrealBundleExportRequest
+          {
+            VariantIndex = checked((int)displayedVariant - 1),
+            BundleName = OptionalText(UnrealBundleNameBox.Text),
+            IncludeZip = UnrealIncludeZipCheckBox.IsChecked == true,
+          });
+
+      string stableIdentity = $"bundle:{StudioOutputCatalog.NormalizePath(response.Bundle.BundleDirectory)}";
+      await RefreshAsync(stableIdentity);
+      SetStatus(
+          "Unreal bundle exported",
+          $"Created {response.Bundle.BundleDirectory}.",
+          InfoBarSeverity.Success);
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Unreal export failed", ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private async void BuildUnrealPlanButton_Click(object sender, RoutedEventArgs e)
+  {
+    StudioOutputItem? selected = SelectedOutput;
+    if (selected?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(selected.BundleDirectory))
+    {
+      return;
+    }
+
+    SetBusy(true);
+    try
+    {
+      UnrealImportPlanResponse response = await _apiClient.BuildUnrealImportPlanAsync(
+          ActiveProjectId,
+          new UnrealImportPlanRequest
+          {
+            BundleDirectory = selected.BundleDirectory,
+            ContentPath = OptionalText(UnrealContentPathBox.Text),
+            AssetName = OptionalText(UnrealAssetNameBox.Text),
+          });
+
+      await RefreshAsync(selected.StableIdentity);
+      SetStatus("Unreal import plan created", $"Created {response.PlanPath}.", InfoBarSeverity.Success);
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Import plan failed", ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private async void ImportUnrealReturnButton_Click(object sender, RoutedEventArgs e)
+  {
+    StudioOutputItem? selected = SelectedOutput;
+    if (selected?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(selected.BundleDirectory))
+    {
+      return;
+    }
+
+    SetBusy(true);
+    try
+    {
+      UnrealReturnImportResponse response = await _apiClient.ImportUnrealReturnsAsync(
+          ActiveProjectId,
+          new UnrealReturnImportRequest
+          {
+            BundleDirectory = selected.BundleDirectory,
+            SourceDirectory = OptionalText(UnrealReturnSourceBox.Text),
+          });
+
+      await RefreshAsync(selected.StableIdentity);
+      SetStatus(
+          "Unreal returns imported",
+          $"{response.Imported.Media.Count} returned media file(s) added to Studio.",
+          InfoBarSeverity.Success);
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Return import failed", ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private async void RevealBundleButton_Click(object sender, RoutedEventArgs e)
+  {
+    StudioOutputItem? selected = SelectedOutput;
+    if (selected?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(selected.BundleDirectory))
+    {
+      return;
+    }
+
+    try
+    {
+      ManagedProjectPathResolution resolution = ManagedProjectPathResolver.Resolve(
+          _backendConfiguration.Mode,
+          _backendConfiguration.Paths.DataDirectory,
+          ActiveProjectId,
+          selected.BundleDirectory);
+      if (!resolution.IsAvailable || string.IsNullOrWhiteSpace(resolution.FullPath))
+      {
+        throw new InvalidOperationException(resolution.ErrorMessage);
+      }
+
+      if (!Directory.Exists(resolution.FullPath))
+      {
+        throw new DirectoryNotFoundException("The Unreal bundle directory does not exist locally.");
+      }
+
+      StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(resolution.FullPath);
+      if (!await Launcher.LaunchFolderAsync(folder))
+      {
+        throw new InvalidOperationException("Windows could not open the Unreal bundle folder.");
+      }
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Reveal bundle failed", ex.Message, InfoBarSeverity.Error);
+    }
+  }
+
+  private async void SaveManifestButton_Click(object sender, RoutedEventArgs e)
+  {
+    await SaveSelectedBundleArtifactAsync(
+          SelectedOutput?.ManifestPath,
+          "unreal-manifest.json",
+          "Unreal manifest",
+          "Manifest save failed");
+  }
+
+  private async void SavePlanButton_Click(object sender, RoutedEventArgs e)
+  {
+    await SaveSelectedBundleArtifactAsync(
+          SelectedOutput?.ImportPlanPath,
+          "unreal-import-plan.json",
+          "Unreal import plan",
+          "Import plan save failed");
+  }
+
+  private async void SaveZipButton_Click(object sender, RoutedEventArgs e)
+  {
+    await SaveSelectedBundleArtifactAsync(
+          SelectedOutput?.ZipPath,
+          "unreal-bundle.zip",
+          "Unreal bundle archive",
+          "Bundle save failed");
+  }
+
+  private async Task SaveSelectedBundleArtifactAsync(
         string? projectRelativePath,
         string fallbackName,
         string description,
         string errorTitle)
+  {
+    if (SelectedOutput?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(projectRelativePath))
     {
-        if (SelectedOutput?.SupportsBundleWorkflow != true || string.IsNullOrWhiteSpace(projectRelativePath))
-        {
-            return;
-        }
-
-        try
-        {
-            string suggestedName = Path.GetFileName(projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
-            await SaveProjectArtifactAsync(
-                projectRelativePath,
-                string.IsNullOrWhiteSpace(suggestedName) ? fallbackName : suggestedName,
-                description);
-        }
-        catch (Exception ex)
-        {
-            SetStatus(errorTitle, ex.Message, InfoBarSeverity.Error);
-        }
+      return;
     }
 
-    private async Task SaveProjectArtifactAsync(string projectRelativePath, string suggestedName, string description)
+    try
     {
-        string extension = Path.GetExtension(suggestedName);
-        if (string.IsNullOrWhiteSpace(extension))
-        {
-            extension = ".bin";
-        }
+      string suggestedName = Path.GetFileName(projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
+      await SaveProjectArtifactAsync(
+          projectRelativePath,
+          string.IsNullOrWhiteSpace(suggestedName) ? fallbackName : suggestedName,
+          description);
+    }
+    catch (Exception ex)
+    {
+      SetStatus(errorTitle, ex.Message, InfoBarSeverity.Error);
+    }
+  }
 
-        FileSavePicker picker = new()
-        {
-            SuggestedFileName = Path.GetFileNameWithoutExtension(suggestedName),
-        };
-        picker.FileTypeChoices.Add(description, [extension]);
-        MainWindow mainWindow = App.MainWindowInstance ??
-            throw new InvalidOperationException("The Studio window is not available.");
-        InitializeWithWindow.Initialize(picker, mainWindow.WindowHandle);
-        StorageFile? destination = await picker.PickSaveFileAsync();
-        if (destination is null)
-        {
-            return;
-        }
-
-        await _projectMediaClient.StreamProjectMediaAsync<bool>(
-            ActiveProjectId,
-            projectRelativePath,
-            async (file, cancellationToken) =>
-            {
-                await using Stream output = await destination.OpenStreamForWriteAsync();
-                output.SetLength(0);
-                await file.Stream.CopyToAsync(output, cancellationToken);
-                await output.FlushAsync(cancellationToken);
-                return true;
-            });
-
-        SetStatus("File saved", $"Saved {destination.Name}.", InfoBarSeverity.Success);
+  private async Task SaveProjectArtifactAsync(string projectRelativePath, string suggestedName, string description)
+  {
+    string extension = Path.GetExtension(suggestedName);
+    if (string.IsNullOrWhiteSpace(extension))
+    {
+      extension = ".bin";
     }
 
-    private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    FileSavePicker picker = new()
     {
-        if (_isInitialized && args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
-        {
-            ApplyFilters();
-        }
+      SuggestedFileName = Path.GetFileNameWithoutExtension(suggestedName),
+    };
+    picker.FileTypeChoices.Add(description, [extension]);
+    MainWindow mainWindow = App.MainWindowInstance ??
+        throw new InvalidOperationException("The Studio window is not available.");
+    InitializeWithWindow.Initialize(picker, mainWindow.WindowHandle);
+    StorageFile? destination = await picker.PickSaveFileAsync();
+    if (destination is null)
+    {
+      return;
     }
 
-    private void Filter_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isInitialized)
+    _ = await _projectMediaClient.StreamProjectMediaAsync<bool>(
+        ActiveProjectId,
+        projectRelativePath,
+        async (file, cancellationToken) =>
         {
-            ApplyFilters();
-        }
+          await using Stream output = await destination.OpenStreamForWriteAsync();
+          output.SetLength(0);
+          await file.Stream.CopyToAsync(output, cancellationToken);
+          await output.FlushAsync(cancellationToken);
+          return true;
+        });
+
+    SetStatus("File saved", $"Saved {destination.Name}.", InfoBarSeverity.Success);
+  }
+
+  private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+  {
+    if (_isInitialized && args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+    {
+      ApplyFilters();
+    }
+  }
+
+  private void Filter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (_isInitialized)
+    {
+      ApplyFilters();
+    }
+  }
+
+  private void ApplyFilters(string? preferredStableIdentity = null)
+  {
+    string? selectionIdentity = preferredStableIdentity ?? SelectedOutput?.StableIdentity;
+    string? kindFilter = KindFilter.SelectedIndex switch
+    {
+      1 => "IMAGES",
+      2 => "VIDEOS",
+      3 => "UNREAL",
+      4 => "OTHER",
+      _ => null,
+    };
+    StudioOutputSort sortOrder = SortOrder.SelectedIndex switch
+    {
+      1 => StudioOutputSort.Name,
+      2 => StudioOutputSort.SizeDescending,
+      _ => StudioOutputSort.Newest,
+    };
+
+    VisibleItems.Clear();
+    foreach (StudioOutputItem item in StudioOutputCatalog.FilterAndSort(
+                 Items,
+                 SearchBox.Text,
+                 kindFilter,
+                 sortOrder))
+    {
+      VisibleItems.Add(item);
     }
 
-    private void ApplyFilters(string? preferredStableIdentity = null)
+    OutputsList.SelectedItem = VisibleItems.FirstOrDefault(
+        item => string.Equals(item.StableIdentity, selectionIdentity, StringComparison.OrdinalIgnoreCase));
+  }
+
+  private void ReviewButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (SelectedOutput?.SupportsMediaWorkflow != true)
     {
-        string? selectionIdentity = preferredStableIdentity ?? SelectedOutput?.StableIdentity;
-        string? kindFilter = KindFilter.SelectedIndex switch
-        {
-            1 => "IMAGES",
-            2 => "VIDEOS",
-            3 => "UNREAL",
-            4 => "OTHER",
-            _ => null,
-        };
-        StudioOutputSort sortOrder = SortOrder.SelectedIndex switch
-        {
-            1 => StudioOutputSort.Name,
-            2 => StudioOutputSort.SizeDescending,
-            _ => StudioOutputSort.Newest,
-        };
-
-        VisibleItems.Clear();
-        foreach (StudioOutputItem item in StudioOutputCatalog.FilterAndSort(
-                     Items,
-                     SearchBox.Text,
-                     kindFilter,
-                     sortOrder))
-        {
-            VisibleItems.Add(item);
-        }
-
-        OutputsList.SelectedItem = VisibleItems.FirstOrDefault(
-            item => string.Equals(item.StableIdentity, selectionIdentity, StringComparison.OrdinalIgnoreCase));
+      return;
     }
 
-    private void ReviewButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedOutput?.SupportsMediaWorkflow != true)
-        {
-            return;
-        }
+    _session.SetLastWorkflowDestination("review");
+    _ = Frame.Navigate(typeof(ReviewPage));
+  }
 
-        _session.SetLastWorkflowDestination("review");
-        Frame.Navigate(typeof(ReviewPage));
+  private async void TimelineButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (SelectedOutput?.SupportsMediaWorkflow != true)
+    {
+      return;
     }
 
-    private async void TimelineButton_Click(object sender, RoutedEventArgs e)
+    StudioOutputItem selected = SelectedOutput;
+    string? jobId = FindMetadataString(selected.Metadata, "job_id");
+    if (string.IsNullOrWhiteSpace(jobId))
     {
-        if (SelectedOutput?.SupportsMediaWorkflow != true)
-        {
-            return;
-        }
+      await App.Services.JobsActivity.RefreshAsync();
+      StudioJobsActivitySnapshot snapshot = App.Services.JobsActivity.Snapshot;
+      if (snapshot.Error is not null)
+      {
+        SetStatus("Job lookup unavailable", StudioPageHelpers.GetErrorMessage(snapshot.Error), InfoBarSeverity.Warning);
+        return;
+      }
 
-        StudioOutputItem selected = SelectedOutput;
-        string? jobId = FindMetadataString(selected.Metadata, "job_id");
-        if (string.IsNullOrWhiteSpace(jobId))
-        {
-            await App.Services.JobsActivity.RefreshAsync();
-            StudioJobsActivitySnapshot snapshot = App.Services.JobsActivity.Snapshot;
-            if (snapshot.Error is not null)
-            {
-                SetStatus("Job lookup unavailable", StudioPageHelpers.GetErrorMessage(snapshot.Error), InfoBarSeverity.Warning);
-                return;
-            }
-
-            jobId = snapshot.Jobs.FirstOrDefault(job =>
-                string.Equals(job.ProjectId, ActiveProjectId, StringComparison.OrdinalIgnoreCase) &&
-                job.Status == "succeeded" &&
-                string.Equals(
-                    NormalizeProjectPath(FindJobOutputPath(job.Result)),
-                    NormalizeProjectPath(selected.Path),
-                    StringComparison.OrdinalIgnoreCase))?.Id;
-        }
-        if (string.IsNullOrWhiteSpace(jobId))
-        {
-            SetStatus("Job identity required", "Select this completed render in Queue first, or use output metadata containing job_id.", InfoBarSeverity.Warning);
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            EditorState editor = await _apiClient.GetEditorStateAsync(ActiveProjectId);
-            double startSeconds = _session.TimelineFocusSeconds ?? 0;
-            await _apiClient.InsertRenderResultWithFallbackAsync(
-                ActiveProjectId,
-                new InsertRenderResultRequest(jobId, editor.Revision, StartSeconds: startSeconds),
-                new RenderResultDescriptor(jobId, selected.Path, Metadata: selected.Metadata as JsonObject));
-            _session.SetLastWorkflowDestination("timeline");
-            Frame.Navigate(typeof(TimelinePage));
-        }
-        catch (Exception ex)
-        {
-            SetStatus("Timeline insertion failed", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+      jobId = snapshot.Jobs.FirstOrDefault(job =>
+          string.Equals(job.ProjectId, ActiveProjectId, StringComparison.OrdinalIgnoreCase) &&
+          job.Status == "succeeded" &&
+          string.Equals(
+              NormalizeProjectPath(FindJobOutputPath(job.Result)),
+              NormalizeProjectPath(selected.Path),
+              StringComparison.OrdinalIgnoreCase))?.Id;
+    }
+    if (string.IsNullOrWhiteSpace(jobId))
+    {
+      SetStatus("Job identity required", "Select this completed render in Queue first, or use output metadata containing job_id.", InfoBarSeverity.Warning);
+      return;
     }
 
-    private static string? FindMetadataString(JsonNode? node, string name)
+    SetBusy(true);
+    try
     {
-        if (node is JsonObject obj)
+      EditorState editor = await _apiClient.GetEditorStateAsync(ActiveProjectId);
+      double startSeconds = _session.TimelineFocusSeconds ?? 0;
+      _ = await _apiClient.InsertRenderResultWithFallbackAsync(
+          ActiveProjectId,
+          new InsertRenderResultRequest(jobId, editor.Revision, StartSeconds: startSeconds),
+          new RenderResultDescriptor(jobId, selected.Path, Metadata: selected.Metadata as JsonObject));
+      _session.SetLastWorkflowDestination("timeline");
+      _ = Frame.Navigate(typeof(TimelinePage));
+    }
+    catch (Exception ex)
+    {
+      SetStatus("Timeline insertion failed", ex.Message, InfoBarSeverity.Error);
+    }
+    finally
+    {
+      SetBusy(false);
+    }
+  }
+
+  private static string? FindMetadataString(JsonNode? node, string name)
+  {
+    if (node is JsonObject obj)
+    {
+      if (obj[name] is JsonValue value && value.TryGetValue<string>(out string? result))
+      {
+        return result;
+      }
+
+      foreach ((_, JsonNode? child) in obj)
+      {
+        string? nested = FindMetadataString(child, name);
+        if (!string.IsNullOrWhiteSpace(nested))
         {
-            if (obj[name] is JsonValue value && value.TryGetValue<string>(out string? result)) return result;
-            foreach ((_, JsonNode? child) in obj)
-            {
-                string? nested = FindMetadataString(child, name);
-                if (!string.IsNullOrWhiteSpace(nested)) return nested;
-            }
+          return nested;
         }
-        else if (node is JsonArray array)
+      }
+    }
+    else if (node is JsonArray array)
+    {
+      foreach (JsonNode? child in array)
+      {
+        string? nested = FindMetadataString(child, name);
+        if (!string.IsNullOrWhiteSpace(nested))
         {
-            foreach (JsonNode? child in array)
-            {
-                string? nested = FindMetadataString(child, name);
-                if (!string.IsNullOrWhiteSpace(nested)) return nested;
-            }
+          return nested;
         }
-        return null;
+      }
+    }
+    return null;
+  }
+
+  private static string? FindJobOutputPath(JsonElement? result)
+  {
+    if (result is not JsonElement element)
+    {
+      return null;
     }
 
-    private static string? FindJobOutputPath(JsonElement? result)
+    if (element.ValueKind == JsonValueKind.Object)
     {
-        if (result is not JsonElement element) return null;
-        if (element.ValueKind == JsonValueKind.Object)
+      foreach (string name in new[] { "video", "output_path", "path", "video_path", "artifact_path" })
+      {
+        if (element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String)
         {
-            foreach (string name in new[] { "video", "output_path", "path", "video_path", "artifact_path" })
-            {
-                if (element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String)
-                    return value.GetString();
-            }
-            foreach (JsonProperty property in element.EnumerateObject())
-            {
-                string? nested = FindJobOutputPath(property.Value);
-                if (!string.IsNullOrWhiteSpace(nested)) return nested;
-            }
+          return value.GetString();
         }
-        return null;
+      }
+      foreach (JsonProperty property in element.EnumerateObject())
+      {
+        string? nested = FindJobOutputPath(property.Value);
+        if (!string.IsNullOrWhiteSpace(nested))
+        {
+          return nested;
+        }
+      }
+    }
+    return null;
+  }
+
+  private static string NormalizeProjectPath(string? path)
+  {
+    return (path ?? string.Empty).Replace('\\', '/').TrimStart('/');
+  }
+
+  private void EnsurePostOperationAllowed(PostProductionOperation operation)
+  {
+    ProjectDto project = _activeProject ?? throw new InvalidOperationException("Reload outputs before starting native media processing.");
+    PostProductionOperationGate gate = PostProductionCapabilities.Gate(
+        PostProductionContracts.Read(project.CanonicalProject.Timeline), operation);
+    if (!gate.Allowed)
+    {
+      throw new InvalidOperationException(gate.Explanation);
+    }
+  }
+
+  private void RenderButton_Click(object sender, RoutedEventArgs e)
+  {
+    StudioOutputItem? selected = SelectedOutput;
+    if (selected?.SupportsMediaWorkflow != true)
+    {
+      return;
+    }
+    try
+    {
+      EnsurePostOperationAllowed(PostProductionOperation.Render);
+    }
+    catch (InvalidOperationException exception)
+    {
+      SetStatus("Render blocked", exception.Message, InfoBarSeverity.Error);
+      return;
     }
 
-    private static string NormalizeProjectPath(string? path) =>
-        (path ?? string.Empty).Replace('\\', '/').TrimStart('/');
+    _session.SetSourceAsset(selected.Path);
+    _session.SetLastWorkflowDestination("render");
+    _ = Frame.Navigate(typeof(RenderPage));
+  }
 
-    private void EnsurePostOperationAllowed(PostProductionOperation operation)
+  private void SetBusy(bool busy)
+  {
+    BusyRing.IsActive = busy;
+    RefreshButton.IsEnabled = !busy;
+    ExportUnrealButton.IsEnabled = !busy;
+    OutputsList.IsEnabled = !busy;
+    if (busy)
     {
-        ProjectDto project = _activeProject ?? throw new InvalidOperationException("Reload outputs before starting native media processing.");
-        PostProductionOperationGate gate = PostProductionCapabilities.Gate(
-            PostProductionContracts.Read(project.CanonicalProject.Timeline), operation);
-        if (!gate.Allowed) throw new InvalidOperationException(gate.Explanation);
+      SaveButton.IsEnabled = false;
+      RevealButton.IsEnabled = false;
+      ReviewButton.IsEnabled = false;
+      TimelineButton.IsEnabled = false;
+      RenderButton.IsEnabled = false;
+      BuildUnrealPlanButton.IsEnabled = false;
+      ImportUnrealReturnButton.IsEnabled = false;
+      RevealBundleButton.IsEnabled = false;
+      SaveManifestButton.IsEnabled = false;
+      SavePlanButton.IsEnabled = false;
+      SaveZipButton.IsEnabled = false;
     }
-
-    private void RenderButton_Click(object sender, RoutedEventArgs e)
+    else
     {
-        StudioOutputItem? selected = SelectedOutput;
-        if (selected?.SupportsMediaWorkflow != true)
-        {
-            return;
-        }
-        try
-        {
-            EnsurePostOperationAllowed(PostProductionOperation.Render);
-        }
-        catch (InvalidOperationException exception)
-        {
-            SetStatus("Render blocked", exception.Message, InfoBarSeverity.Error);
-            return;
-        }
-
-        _session.SetSourceAsset(selected.Path);
-        _session.SetLastWorkflowDestination("render");
-        Frame.Navigate(typeof(RenderPage));
+      UpdateSelectionUi(SelectedOutput);
     }
+  }
 
-    private void SetBusy(bool busy)
-    {
-        BusyRing.IsActive = busy;
-        RefreshButton.IsEnabled = !busy;
-        ExportUnrealButton.IsEnabled = !busy;
-        OutputsList.IsEnabled = !busy;
-        if (busy)
-        {
-            SaveButton.IsEnabled = false;
-            RevealButton.IsEnabled = false;
-            ReviewButton.IsEnabled = false;
-            TimelineButton.IsEnabled = false;
-            RenderButton.IsEnabled = false;
-            BuildUnrealPlanButton.IsEnabled = false;
-            ImportUnrealReturnButton.IsEnabled = false;
-            RevealBundleButton.IsEnabled = false;
-            SaveManifestButton.IsEnabled = false;
-            SavePlanButton.IsEnabled = false;
-            SaveZipButton.IsEnabled = false;
-        }
-        else
-        {
-            UpdateSelectionUi(SelectedOutput);
-        }
-    }
+  private void SetStatus(string title, string message, InfoBarSeverity severity)
+  {
+    StatusInfoBar.Title = title;
+    StatusInfoBar.Message = message;
+    StatusInfoBar.Severity = severity;
+    StatusInfoBar.IsOpen = true;
+  }
 
-    private void SetStatus(string title, string message, InfoBarSeverity severity)
-    {
-        StatusInfoBar.Title = title;
-        StatusInfoBar.Message = message;
-        StatusInfoBar.Severity = severity;
-        StatusInfoBar.IsOpen = true;
-    }
-
-    private static string? OptionalText(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  private static string? OptionalText(string? value)
+  {
+    return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+  }
 }

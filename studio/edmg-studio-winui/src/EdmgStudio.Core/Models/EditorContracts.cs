@@ -54,18 +54,18 @@ public sealed record EditorCommandRequest(
 
 public sealed class EditorHistoryState
 {
-    [JsonPropertyName("can_undo")] public bool CanUndo { get; init; }
-    [JsonPropertyName("can_redo")] public bool CanRedo { get; init; }
-    [JsonPropertyName("undo_label")] public string? UndoLabel { get; init; }
-    [JsonPropertyName("redo_label")] public string? RedoLabel { get; init; }
-    [JsonPropertyName("external_change")] public bool ExternalChange { get; init; }
+  [JsonPropertyName("can_undo")] public bool CanUndo { get; init; }
+  [JsonPropertyName("can_redo")] public bool CanRedo { get; init; }
+  [JsonPropertyName("undo_label")] public string? UndoLabel { get; init; }
+  [JsonPropertyName("redo_label")] public string? RedoLabel { get; init; }
+  [JsonPropertyName("external_change")] public bool ExternalChange { get; init; }
 }
 
 public sealed class EditorState
 {
-    [JsonPropertyName("ok")] public bool Ok { get; init; }
-    [JsonPropertyName("revision")] public long Revision { get; init; }
-    [JsonPropertyName("timeline")] public JsonElement Timeline { get; init; }
-    [JsonPropertyName("history")] public EditorHistoryState History { get; init; } = new();
-    [JsonPropertyName("replayed")] public bool Replayed { get; init; }
+  [JsonPropertyName("ok")] public bool Ok { get; init; }
+  [JsonPropertyName("revision")] public long Revision { get; init; }
+  [JsonPropertyName("timeline")] public JsonElement Timeline { get; init; }
+  [JsonPropertyName("history")] public EditorHistoryState History { get; init; } = new();
+  [JsonPropertyName("replayed")] public bool Replayed { get; init; }
 }

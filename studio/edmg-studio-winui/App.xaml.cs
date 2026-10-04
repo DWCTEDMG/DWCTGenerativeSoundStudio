@@ -1,138 +1,143 @@
-using System.Net.Http;
-using System.Net.Sockets;
 using EdmgStudio.Core.Models;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
+using System.Net.Sockets;
 
 namespace EdmgStudio.WinUI;
 
 public partial class App : Application
 {
-    private MainWindow? _window;
-    private static readonly CancellationTokenSource BootstrapCancellation = new();
-    private static StudioLaunchRequest? _pendingLaunchRequest;
+  private MainWindow? _window;
+  private static readonly CancellationTokenSource BootstrapCancellation = new();
+  private static StudioLaunchRequest? _pendingLaunchRequest;
 
-    public App()
+  public App()
+  {
+    UnhandledException += OnUnhandledException;
+    AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+    TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+    try
     {
-        UnhandledException += OnUnhandledException;
-        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
-        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+      InitializeComponent();
+    }
+    catch (Exception exception)
+    {
+      CrashLogger.Write("Fatal failure while constructing the WinUI application.", exception);
+      throw;
+    }
+  }
 
-        try
-        {
-            InitializeComponent();
-        }
-        catch (Exception exception)
-        {
-            CrashLogger.Write("Fatal failure while constructing the WinUI application.", exception);
-            throw;
-        }
+  public static AppServices Services { get; private set; } = null!;
+  public static bool IsInitialized { get; private set; }
+  public static MainWindow? MainWindowInstance { get; private set; }
+  public static MainPage? Shell { get; internal set; }
+
+  protected override async void OnLaunched(LaunchActivatedEventArgs args)
+  {
+    try
+    {
+      _pendingLaunchRequest = StudioLaunchRequest.Parse(args.Arguments);
+      _window = new MainWindow();
+      MainWindowInstance = _window;
+      _window.Activate();
+
+      AppServices services = await AppServices.CreateAsync(BootstrapCancellation.Token);
+      if (BootstrapCancellation.IsCancellationRequested)
+      {
+        await services.DisposeAsync();
+        return;
+      }
+
+      Services = services;
+      IsInitialized = true;
+      _window.InitializeShell();
+      _ = InitializeLocalRuntimeAsync(services, BootstrapCancellation.Token);
+    }
+    catch (OperationCanceledException) when (BootstrapCancellation.IsCancellationRequested)
+    {
+    }
+    catch (Exception exception)
+    {
+      CrashLogger.Write("Fatal failure while launching the main WinUI window.", exception);
+      throw;
+    }
+  }
+
+  internal static void CancelBootstrap()
+  {
+    BootstrapCancellation.Cancel();
+  }
+
+  private static async Task InitializeLocalRuntimeAsync(AppServices services, CancellationToken cancellationToken)
+  {
+    try
+    {
+      await services.LocalRuntime.InitializeAsync(cancellationToken);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception exception)
+    {
+      CrashLogger.Write("Local Director runtime initialization failed; keeping WinUI available.", exception);
+    }
+  }
+
+  public static void Navigate(string destination)
+  {
+    Shell?.NavigateTo(destination);
+  }
+
+  internal static StudioLaunchRequest? TakePendingLaunchRequest()
+  {
+    StudioLaunchRequest? request = _pendingLaunchRequest;
+    _pendingLaunchRequest = null;
+    return request;
+  }
+
+  private static void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+  {
+    CrashLogger.Write("Unhandled WinUI exception.", e.Exception);
+    System.Diagnostics.Debug.WriteLine($"Unhandled WinUI exception: {e.Exception}");
+
+    // A temporarily unavailable local backend must never take down the shell.
+    // SetupPage uses async event handlers, so a connection-refused exception can
+    // otherwise reach WinUI's top-level handler before the backend finishes starting.
+    if (IsExpectedLocalBackendConnectionFailure(e.Exception))
+    {
+      e.Handled = true;
+      CrashLogger.Write("Handled local backend connection failure; keeping WinUI running.", e.Exception);
+    }
+  }
+
+  private static bool IsExpectedLocalBackendConnectionFailure(Exception exception)
+  {
+    for (Exception? current = exception; current is not null; current = current.InnerException)
+    {
+      if (current is SocketException socketException &&
+          socketException.SocketErrorCode == SocketError.ConnectionRefused)
+      {
+        return true;
+      }
+
+      if (current is HttpRequestException &&
+          current.Message.Contains("127.0.0.1:7863", StringComparison.OrdinalIgnoreCase))
+      {
+        return true;
+      }
     }
 
-    public static AppServices Services { get; private set; } = null!;
-    public static bool IsInitialized { get; private set; }
-    public static MainWindow? MainWindowInstance { get; private set; }
-    public static MainPage? Shell { get; internal set; }
+    return false;
+  }
 
-    protected override async void OnLaunched(LaunchActivatedEventArgs args)
-    {
-        try
-        {
-            _pendingLaunchRequest = StudioLaunchRequest.Parse(args.Arguments);
-            _window = new MainWindow();
-            MainWindowInstance = _window;
-            _window.Activate();
+  private static void OnDomainUnhandledException(object? sender, System.UnhandledExceptionEventArgs e)
+  {
+    CrashLogger.Write($"Unhandled AppDomain exception. IsTerminating={e.IsTerminating}.", e.ExceptionObject as Exception);
+  }
 
-            AppServices services = await AppServices.CreateAsync(BootstrapCancellation.Token);
-            if (BootstrapCancellation.IsCancellationRequested)
-            {
-                await services.DisposeAsync();
-                return;
-            }
-
-            Services = services;
-            IsInitialized = true;
-            _window.InitializeShell();
-            _ = InitializeLocalRuntimeAsync(services, BootstrapCancellation.Token);
-        }
-        catch (OperationCanceledException) when (BootstrapCancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            CrashLogger.Write("Fatal failure while launching the main WinUI window.", exception);
-            throw;
-        }
-    }
-
-    internal static void CancelBootstrap() => BootstrapCancellation.Cancel();
-
-    private static async Task InitializeLocalRuntimeAsync(AppServices services, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await services.LocalRuntime.InitializeAsync(cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            CrashLogger.Write("Local Director runtime initialization failed; keeping WinUI available.", exception);
-        }
-    }
-
-    public static void Navigate(string destination) => Shell?.NavigateTo(destination);
-
-    internal static StudioLaunchRequest? TakePendingLaunchRequest()
-    {
-        StudioLaunchRequest? request = _pendingLaunchRequest;
-        _pendingLaunchRequest = null;
-        return request;
-    }
-
-    private static void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
-    {
-        CrashLogger.Write("Unhandled WinUI exception.", e.Exception);
-        System.Diagnostics.Debug.WriteLine($"Unhandled WinUI exception: {e.Exception}");
-
-        // A temporarily unavailable local backend must never take down the shell.
-        // SetupPage uses async event handlers, so a connection-refused exception can
-        // otherwise reach WinUI's top-level handler before the backend finishes starting.
-        if (IsExpectedLocalBackendConnectionFailure(e.Exception))
-        {
-            e.Handled = true;
-            CrashLogger.Write("Handled local backend connection failure; keeping WinUI running.", e.Exception);
-        }
-    }
-
-    private static bool IsExpectedLocalBackendConnectionFailure(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            if (current is SocketException socketException &&
-                socketException.SocketErrorCode == SocketError.ConnectionRefused)
-            {
-                return true;
-            }
-
-            if (current is HttpRequestException &&
-                current.Message.Contains("127.0.0.1:7863", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static void OnDomainUnhandledException(object? sender, System.UnhandledExceptionEventArgs e)
-    {
-        CrashLogger.Write($"Unhandled AppDomain exception. IsTerminating={e.IsTerminating}.", e.ExceptionObject as Exception);
-    }
-
-    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
-    {
-        CrashLogger.Write("Unobserved task exception.", e.Exception);
-    }
+  private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+  {
+    CrashLogger.Write("Unobserved task exception.", e.Exception);
+  }
 }
