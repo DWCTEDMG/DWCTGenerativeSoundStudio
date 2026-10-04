@@ -68,15 +68,29 @@
                 </Expander>
                 <Expander Header="AI Director · Nemotron + Cosmos" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="True">
                     <StackPanel Spacing="12">
-                        <TextBlock Text="Nemotron is Studio's default managed Director. Cosmos is its optional visual-reasoning specialist in Advanced mode. Install and validate both on the Models page; no endpoint configuration is required." TextWrapping="Wrap" />
+                        <TextBlock Text="Keep Nemotron and Cosmos installed in Models, or select server execution independently. Server planning sends analyzed audio evidence and the scene draft; it does not upload the raw audio. Every plan still requires review and apply." TextWrapping="Wrap" />
                         <ComboBox x:Name="DirectorQualityCombo" Header="Director quality" SelectedIndex="1">
                             <ComboBoxItem Content="Fast" Tag="fast" />
                             <ComboBoxItem Content="Standard" Tag="standard" />
                             <ComboBoxItem Content="Advanced" Tag="advanced" />
                         </ComboBox>
                         <TextBox Header="Primary Director" Text="NVIDIA Nemotron 3 Nano Omni 30B-A3B (managed in Models)" IsReadOnly="True" />
+                        <ComboBox x:Name="DirectorPrimaryExecution" Header="Nemotron execution" SelectedIndex="0" AutomationProperties.AutomationId="DirectorPrimaryExecution">
+                            <ComboBoxItem Content="Local managed model (keep installed catalog)" Tag="local" />
+                            <ComboBoxItem Content="Server endpoint (NVIDIA hosted or self-hosted NIM)" Tag="server" />
+                        </ComboBox>
+                        <TextBox x:Name="DirectorPrimaryEndpoint" Header="Nemotron server base URL (including /v1)" PlaceholderText="https://integrate.api.nvidia.com/v1" />
+                        <TextBox x:Name="DirectorPrimaryServerModel" Header="Nemotron model ID served by the endpoint" />
+                        <TextBlock Text="NVIDIA-hosted execution uses the existing NVIDIA API key. Custom servers use EDMG_NEMOTRON_API_KEY when authentication is required. Switching to local keeps these server settings." TextWrapping="Wrap" Opacity="0.72" />
                         <CheckBox x:Name="DirectorSpecialistEnabled" Content="Enable Cosmos Reason2 specialist" IsChecked="True" />
                         <TextBox Header="Advanced visual specialist" Text="NVIDIA Cosmos Reason2 8B (managed in Models)" IsReadOnly="True" />
+                        <ComboBox x:Name="DirectorSpecialistExecution" Header="Cosmos execution" SelectedIndex="0" AutomationProperties.AutomationId="DirectorSpecialistExecution">
+                            <ComboBoxItem Content="Local managed model (keep installed catalog)" Tag="local" />
+                            <ComboBoxItem Content="Server endpoint (OpenAI-compatible / NIM)" Tag="server" />
+                        </ComboBox>
+                        <TextBox x:Name="DirectorSpecialistEndpoint" Header="Cosmos server base URL (including /v1)" PlaceholderText="https://integrate.api.nvidia.com/v1" />
+                        <TextBox x:Name="DirectorSpecialistServerModel" Header="Cosmos model ID served by the endpoint" />
+                        <TextBlock Text="Use a deployed Cosmos reasoning endpoint; availability depends on the server. Custom servers use EDMG_COSMOS_API_KEY. This is specialist planning evidence, not a Cosmos video-generation endpoint." TextWrapping="Wrap" Opacity="0.72" />
                         <ComboBox x:Name="DirectorSpecialistRouting" Header="Specialist routing" SelectedIndex="0">
                             <ComboBoxItem Content="Automatic" Tag="automatic" />
                             <ComboBoxItem Content="Always for video" Tag="always_video" />

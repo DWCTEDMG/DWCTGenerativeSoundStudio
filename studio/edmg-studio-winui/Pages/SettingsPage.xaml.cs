@@ -419,7 +419,13 @@ public sealed partial class SettingsPage : Page
     DirectorSpecialistEnabled.IsChecked = settings["specialist_enabled"]?.GetValue<bool?>() ?? true;
     SelectComboValue(DirectorQualityCombo, settings["default_quality"]?.GetValue<string>() ?? "standard");
     SelectComboValue(DirectorSpecialistRouting, settings["specialist_routing"]?.GetValue<string>() ?? "automatic");
-    DirectorConfigurationStatus.Text = "Nemotron and Cosmos are local Studio-managed models. Installation, licensing, and file validation are available on Models; generated plans still require review/apply.";
+    SelectComboValue(DirectorPrimaryExecution, settings["primary_execution"]?.GetValue<string>() ?? "local");
+    SelectComboValue(DirectorSpecialistExecution, settings["specialist_execution"]?.GetValue<string>() ?? "local");
+    DirectorPrimaryEndpoint.Text = settings["primary_endpoint"]?.GetValue<string>() ?? "https://integrate.api.nvidia.com/v1";
+    DirectorPrimaryServerModel.Text = settings["primary_server_model"]?.GetValue<string>() ?? "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+    DirectorSpecialistEndpoint.Text = settings["specialist_endpoint"]?.GetValue<string>() ?? "https://integrate.api.nvidia.com/v1";
+    DirectorSpecialistServerModel.Text = settings["specialist_server_model"]?.GetValue<string>() ?? "nvidia/cosmos-reason2-8b";
+    DirectorConfigurationStatus.Text = "Local catalog entries and server configurations coexist. Save selects the route; configuration alone does not prove server availability. Generated plans still require review/apply.";
   }
 
   private async void SaveDirectorSettings_Click(object sender, RoutedEventArgs e)
@@ -429,6 +435,12 @@ public sealed partial class SettingsPage : Page
       JsonObject payload = new()
       {
         ["primary_provider"] = "nemotron",
+        ["primary_execution"] = SelectedTag(DirectorPrimaryExecution, "local"),
+        ["primary_endpoint"] = DirectorPrimaryEndpoint.Text.Trim(),
+        ["primary_server_model"] = DirectorPrimaryServerModel.Text.Trim(),
+        ["specialist_execution"] = SelectedTag(DirectorSpecialistExecution, "local"),
+        ["specialist_endpoint"] = DirectorSpecialistEndpoint.Text.Trim(),
+        ["specialist_server_model"] = DirectorSpecialistServerModel.Text.Trim(),
         ["default_quality"] = SelectedTag(DirectorQualityCombo, "standard"),
         ["specialist_enabled"] = DirectorSpecialistEnabled.IsChecked == true,
         ["specialist_routing"] = SelectedTag(DirectorSpecialistRouting, "automatic"),

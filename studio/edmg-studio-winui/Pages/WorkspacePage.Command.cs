@@ -285,7 +285,9 @@ public sealed partial class WorkspacePage
                 instruction = "Direct this music video using the analyzed rhythm, sections, and transcript. Preserve scene timing and locked appearances; develop coherent visual storytelling, camera movement, and subject actions.";
               }
 
-              bool requireAudioNative = string.IsNullOrWhiteSpace(directorModel) || directorModel.Contains("omni", StringComparison.OrdinalIgnoreCase);
+              bool serverEvidence = director.TryGetProperty("audio_input", out JsonElement audioInput)
+                  && audioInput.GetString() == "analyzed_evidence";
+              bool requireAudioNative = !serverEvidence && (string.IsNullOrWhiteSpace(directorModel) || directorModel.Contains("omni", StringComparison.OrdinalIgnoreCase));
               DirectorGenerationRequest request = new(_directorRevision, Guid.NewGuid().ToString(),
                         instruction, ModelId: directorModel, RequireAudioNative: requireAudioNative);
               JsonElement queued = await App.Services.ApiClient.GenerateDirectorAsync(projectId, request, token);

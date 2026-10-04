@@ -143,6 +143,10 @@ def create_director_router(
         project = get_store().get(project_id)
         if project is None:
             raise HTTPException(404, "Project not found")
+        settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
+        nemotron = bool(settings) and model_id in {
+            None, NEMOTRON_CATALOG_ID, settings.get("primary_server_model"),
+        }
         try:
             result = resolve_director_readiness(
                 hardware_profile(),
@@ -150,11 +154,33 @@ def create_director_router(
                 engine=engine,
                 installed_models=installed_models(),
                 allow_external=allow_external,
-                director_model_id=model_id,
+                director_model_id=None if nemotron else model_id,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         payload = result.model_dump(mode="json")
+        if nemotron:
+            from ..services.director_runtime_settings import _endpoint
+
+            server = settings.get("primary_execution") == "server"
+            configured = bool(_endpoint(settings.get("primary_endpoint")) and settings.get("primary_server_model"))
+            installed = bool(get_models and get_models().installed_path(NEMOTRON_CATALOG_ID))
+            ready = configured if server else installed
+            old_reason = payload["director"]["reason"]
+            reason = ("Server configuration is complete; connectivity and inference are checked when run."
+                if server and ready else "Configure the Nemotron endpoint and served model in Settings."
+                if server else "Managed Nemotron is installed; inference is checked when run."
+                if ready else "Install Nemotron in Models or select Server endpoint in Settings.")
+            payload["director"] = {"role": "director", "engine": "nemotron_server" if server else "nemotron_local",
+                "model_id": settings.get("primary_server_model") if server else NEMOTRON_CATALOG_ID,
+                "label": "Nemotron Director", "profile": "server" if server else "local",
+                "installed": installed, "adapter_ready": True, "ready": ready, "reason": reason,
+                "audio_input": "analyzed_evidence" if server else "local_audio", "inference_verified": False}
+            payload["blockers"] = [value for value in payload["blockers"] if value != old_reason]
+            if not ready:
+                payload["blockers"].append(reason)
+            payload["ready"] = ready and payload["renderer"]["ready"]
+            payload["actions"] = ["Configure AI Director in Settings."] if not ready else []
         payload["project_id"] = project_id
         payload["project_revision"] = project.revision
         return {"ok": True, **payload}
@@ -192,9 +218,16 @@ def create_director_router(
         if request.model_id and request.model_id.startswith("hf_qwen"):
             provider = "qwen"
         if provider == "nemotron":
-            model_id = NEMOTRON_CATALOG_ID
-            primary_path = get_models().installed_path(NEMOTRON_CATALOG_ID)
-            if primary_path is None:
+            server = runtime_settings.get("primary_execution") == "server"
+            model_id = str(runtime_settings.get("primary_server_model") or "") if server else NEMOTRON_CATALOG_ID
+            if server and (not runtime_settings.get("primary_endpoint") or not model_id):
+                raise HTTPException(422, {"message": "Nemotron server endpoint and model are required",
+                    "code": "DIRECTOR_ENDPOINT_REQUIRED", "hint": "Configure AI Director in Settings.", "draft_unchanged": True})
+            if server and request.require_audio_native:
+                raise HTTPException(422, {"message": "Server Director uses analyzed audio evidence, not a raw-audio upload",
+                    "code": "AUDIO_NATIVE_DIRECTOR_REQUIRED", "hint": "Use managed local execution for raw audio, or disable the raw-audio requirement for server planning.", "draft_unchanged": True})
+            primary_path = None if server else get_models().installed_path(NEMOTRON_CATALOG_ID)
+            if not server and primary_path is None:
                 raise HTTPException(422, {
                     "message": "NVIDIA Nemotron Director is not installed",
                     "hint": "Open Models, accept the NVIDIA license, and install Nemotron 3 Nano Omni.",
@@ -292,6 +325,8 @@ def create_director_router(
                 key: runtime_settings.get(key) for key in (
                     "primary_model", "specialist_enabled", "specialist_model",
                     "specialist_routing", "timeout_s", "dense_device_map",
+                    "primary_execution", "primary_endpoint", "primary_server_model",
+                    "specialist_execution", "specialist_endpoint", "specialist_server_model",
                 )
             },
             "require_audio_native": request.require_audio_native,
@@ -310,11 +345,13 @@ def create_director_router(
             "vram_gb": float(hardware.get("llama_vram_gb") or hardware.get("vram_gb") or 0),
         }
         if provider == "nemotron":
-            primary_path = get_models().installed_path(NEMOTRON_CATALOG_ID)
-            payload["director_provider_settings"]["primary_model_path"] = str(primary_path)
-            specialist_path = get_models().installed_path(COSMOS_REASON2_CATALOG_ID)
-            if specialist_path is not None:
-                payload["director_provider_settings"]["specialist_model_path"] = str(specialist_path)
+            if runtime_settings.get("primary_execution") != "server":
+                primary_path = get_models().installed_path(NEMOTRON_CATALOG_ID)
+                payload["director_provider_settings"]["primary_model_path"] = str(primary_path)
+            if runtime_settings.get("specialist_execution") != "server":
+                specialist_path = get_models().installed_path(COSMOS_REASON2_CATALOG_ID)
+                if specialist_path is not None:
+                    payload["director_provider_settings"]["specialist_model_path"] = str(specialist_path)
         if provider == "nemotron" or model_id in {AUDIO_NATIVE_DIRECTOR_MODEL_ID, AUDIO_NATIVE_FALLBACK_MODEL_ID}:
             audio_meta = project.meta.get("audio") or {}
             filename = str(audio_meta.get("filename") or "").strip()

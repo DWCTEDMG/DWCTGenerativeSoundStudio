@@ -339,6 +339,40 @@ def test_director_generation_persists_resolved_workspace_policy(tmp_path):
     assert job.payload["cuda_graphs"] is True
 
 
+def test_server_director_admission_without_local_weights(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Server Director")
+    project.meta["director_document"] = DirectorDocument(scenes=[scene()]).model_dump(mode="json")
+    store.save(project)
+    jobs = JobStore(tmp_path / "projects")
+
+    class Models:
+        def installed_path(self, _model_id):
+            return None
+
+    settings = {"primary_execution": "server", "primary_endpoint": "http://localhost:8000/v1",
+                "primary_server_model": "served-nemotron"}
+    app = FastAPI()
+    app.include_router(create_director_router(lambda: store, lambda: jobs, lambda: Models(),
+        lambda: {"backend": "cpu"}, lambda: settings))
+    with TestClient(app) as client:
+        path = f"/v1/projects/{project.id}/director"
+        readiness = client.get(path + "/readiness", params={"model_id": "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16"})
+        assert readiness.status_code == 200, readiness.text
+        assert readiness.json()["director"]["ready"] is True
+        assert readiness.json()["director"]["inference_verified"] is False
+        assert readiness.json()["director"]["audio_input"] == "analyzed_evidence"
+        request = {"expected_revision": project.revision, "operation_id": "server-1", "instruction": "Keep the scene timing"}
+        rejected = client.post(path + "/generate", json={**request, "require_audio_native": True})
+        assert rejected.status_code == 422
+        response = client.post(path + "/generate", json=request)
+        assert response.status_code == 200, response.text
+        job = jobs.get(project.id, response.json()["job_id"])
+        assert job.payload["model_id"] == "served-nemotron"
+        assert "primary_model_path" not in job.payload["director_provider_settings"]
+        assert job.payload["director_provider_settings"]["primary_endpoint"] == settings["primary_endpoint"]
+
+
 def test_reviewed_draft_apply_checks_baseline_and_preserves_job(tmp_path):
     store = ProjectStore(tmp_path / "projects")
     project = store.create("Draft review")

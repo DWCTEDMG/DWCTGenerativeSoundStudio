@@ -3,15 +3,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .render_settings import _config_dir
 
 DEFAULT_DIRECTOR_RUNTIME_SETTINGS: dict[str, Any] = {
     "primary_provider": "nemotron",
     "primary_model": "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16",
+    "primary_execution": "local",
+    "primary_endpoint": "https://integrate.api.nvidia.com/v1",
+    "primary_server_model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     "default_quality": "standard",
     "specialist_enabled": True,
     "specialist_model": "hf_cosmos_reason2_8b",
+    "specialist_execution": "local",
+    "specialist_endpoint": "https://integrate.api.nvidia.com/v1",
+    "specialist_server_model": "nvidia/cosmos-reason2-8b",
     "specialist_routing": "automatic",
     "timeout_s": 180,
     "runtime_path": "",
@@ -26,6 +33,20 @@ DEFAULT_DIRECTOR_RUNTIME_SETTINGS: dict[str, Any] = {
 }
 
 _DENSE_DEVICE_MAPS = {"auto", "balanced", "balanced_low_0", "sequential"}
+
+
+def _endpoint(value: Any) -> str:
+    endpoint = str(value or "").strip().rstrip("/")
+    if not endpoint:
+        return ""
+    try:
+        parsed = urlsplit(endpoint)
+        valid = parsed.scheme in {"http", "https"} and parsed.hostname and parsed.port != 0
+    except ValueError:
+        return ""
+    if not valid or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return ""
+    return endpoint
 
 
 def _gpu_devices(value: Any) -> str:
@@ -98,9 +119,18 @@ class DirectorRuntimeSettingsStore:
             dense_device_map = "balanced_low_0"
         return {
             "primary_provider": "nemotron",
-            # These identities are owned by Studio's pinned catalogue. Legacy
-            # endpoint fields are deliberately discarded during migration.
+            # Managed identities stay pinned; server settings are independent,
+            # retained when switching back to local execution, and contain no keys.
             "primary_model": DEFAULT_DIRECTOR_RUNTIME_SETTINGS["primary_model"],
+            **{
+                f"{role}_execution": "server" if payload.get(f"{role}_execution") == "server" else "local"
+                for role in ("primary", "specialist")
+            },
+            **{f"{role}_endpoint": _endpoint(payload.get(f"{role}_endpoint")) for role in ("primary", "specialist")},
+            **{
+                f"{role}_server_model": str(payload.get(f"{role}_server_model") or DEFAULT_DIRECTOR_RUNTIME_SETTINGS[f"{role}_server_model"]).strip()[:256]
+                for role in ("primary", "specialist")
+            },
             "default_quality": str(payload.get("default_quality") or "standard").strip().lower()
                 if str(payload.get("default_quality") or "standard").strip().lower() in {"fast", "standard", "advanced"} else "standard",
             "specialist_enabled": bool(payload.get("specialist_enabled", True)),

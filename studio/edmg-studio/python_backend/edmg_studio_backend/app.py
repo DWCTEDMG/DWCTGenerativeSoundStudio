@@ -7934,7 +7934,18 @@ def _dispatch_job(job) -> None:
             job.error = _public_render_job_error(exc)
             jobs.save(job)
             return
-        if job.type not in _LOCAL_MODEL_JOB_TYPES:
+        provider_settings = (job.payload.get("director_provider_settings") or {}) if isinstance(job.payload, dict) else {}
+        server_director = (
+            job.type == "qwen_director"
+            and job.payload.get("provider") == "nemotron"
+            and provider_settings.get("primary_execution") == "server"
+            and (
+                not provider_settings.get("specialist_enabled", True)
+                or provider_settings.get("specialist_routing") == "off"
+                or provider_settings.get("specialist_execution") == "server"
+            )
+        )
+        if job.type not in _LOCAL_MODEL_JOB_TYPES or server_director:
             _dispatch_admitted_job(job)
             return
 

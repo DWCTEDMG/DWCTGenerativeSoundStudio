@@ -24,14 +24,19 @@ def test_nemotron_snapshot_includes_pinned_remote_code():
     assert "*.jinja" in profile.allow_patterns
 
 
-def test_director_settings_migrate_away_from_endpoint_configuration(tmp_path):
-    settings = DirectorRuntimeSettingsStore(tmp_path).update({
+def test_director_settings_preserve_server_configuration_and_managed_catalog(tmp_path):
+    store = DirectorRuntimeSettingsStore(tmp_path)
+    settings = store.update({
         "primary_endpoint": "https://old.example/v1",
         "specialist_endpoint": "https://old.example/cosmos/v1",
         "primary_model": "remote-model",
         "specialist_model": "remote-specialist",
+        "primary_execution": "server", "primary_server_model": "remote-model",
     })
     assert settings["primary_model"] == NEMOTRON_ID
     assert settings["specialist_model"] == COSMOS_ID
-    assert "primary_endpoint" not in settings
-    assert "specialist_endpoint" not in settings
+    assert settings["primary_endpoint"] == "https://old.example/v1"
+    assert settings["specialist_endpoint"] == "https://old.example/cosmos/v1"
+    restored = store.update({"primary_execution": "local"})
+    assert restored["primary_endpoint"] == settings["primary_endpoint"]
+    assert restored["primary_server_model"] == "remote-model"
