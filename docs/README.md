@@ -13,6 +13,8 @@ license: openrail
 - [Backend and managed model runtimes](../studio/edmg-studio/python_backend/README.md)
 - [GPU-first accelerator policy](STUDIO_ACCELERATOR_POLICY.md)
 - [Windows Setup.exe packaging](../studio/edmg-studio/packaging/windows/README.md)
+- [Native WinUI client and JUCE preview status](../studio/edmg-studio-winui/README.md#juce-preview-audio-engine)
+- [JUCE native host build and qualification boundary](../studio/edmg-studio-winui/native/juce-audio-host/README.md)
 - [Linux and compatibility client](../studio/edmg-studio/README.md)
 - [Studio repo map](STUDIO_REPO_MAP.md)
 - [Testing quickstart](TESTING_QUICKSTART.md)

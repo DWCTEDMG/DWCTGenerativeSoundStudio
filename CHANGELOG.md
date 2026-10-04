@@ -7,6 +7,14 @@ recorded.
 
 ## [Unreleased]
 
+### Native audio preview
+
+- Added an isolated JUCE 8 preview host, managed protocol/lifecycle client, explicit Settings engine
+  selection and device diagnostics, immutable Timeline snapshot projection, sample-clock transport,
+  looping, deterministic rendering, and buffer-boundary revision switching. AudioGraph remains the
+  default and rollback path; full-song media, complete graph parity, recovery, real-device, licensing,
+  and packaged clean-machine gates remain open.
+
 The next desktop/backend candidate is version `1.2.0`. It is not a public release until the signed
 artifact, clean-machine, previous-version upgrade, and hardware evidence gates in `RELEASE.md` pass.
 
@@ -51,6 +59,11 @@ artifact, clean-machine, previous-version upgrade, and hardware evidence gates i
 
 ### Security
 
+- Updated the optional NeMo/Parakeet dependency graph from `datasets` 5.0.0 to 5.0.1 and pinned the
+  Electron packaging chain to `http-cache-semantics` 4.3.0. Release-toolchain tests now enforce the
+  resolved packaging override. Remaining upstream alerts are not represented as fixed where no patched
+  release exists or NeMo's published constraints exclude the patched version.
+
 - Updated Studio and Director dependency graphs so local development and production audits report
   zero known vulnerabilities at the recorded baseline.
 - Added weekly Dependabot coverage for both pnpm package roots, the frozen `uv` backend project,
@@ -69,6 +82,10 @@ artifact, clean-machine, previous-version upgrade, and hardware evidence gates i
   major upgrades remain isolated for dedicated migration evidence.
 
 ### Fixed
+
+- Prevented unpackaged WinUI source launches from failing before `MainPage` creation when the JUCE
+  preview preference store cannot access packaged `ApplicationData`; source runs now default safely to
+  AudioGraph and packaged preference persistence remains fail-safe.
 
 - Launched the packaged Windows backend directly from Electron instead of through PowerShell, so a user shell policy, profile, or offline OneDrive configuration cannot prevent the bundled backend and GPU runtime from starting. Unknown pre-existing listeners are isolated onto a private port rather than reused.
 - Included Faster-Whisper's required Silero VAD ONNX asset and distribution metadata in every packaged backend, and made release-manifest validation fail closed when that runtime asset is missing or empty.

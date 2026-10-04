@@ -41,6 +41,13 @@ been exposed.
 
 ## Hardening notes for operators
 
+Dependency manifests and generated locks are release security inputs. Build and package only from the
+reviewed frozen locks, retain the repository's pnpm security overrides, and run the release-toolchain
+tests after lock regeneration. A dependency alert is resolved only when the vulnerable runtime
+resolution is absent; a similarly named `@types/*` package is not runtime evidence. Where upstream
+publishes no fix or a required runtime such as NeMo excludes the patched version, document the
+reachable APIs and containment instead of forcing an incompatible override or claiming remediation.
+
 - Prefer loopback backend binds for local Studio use.
 - For non-loopback backends, set `EDMG_BACKEND_AUTH_TOKEN` and
   `EDMG_BACKEND_AUTH_MODE=required`.

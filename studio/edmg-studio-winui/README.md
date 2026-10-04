@@ -38,6 +38,38 @@ The primary native workflow is implemented:
 - Runtime configuration compatibility with `runtime-defaults.json`, source `launcher_env.json`, `%APPDATA%\EDMG Studio\bootstrap.json`, and process-environment precedence.
 - Native EDMG Studio branding: the canonical logo, atmospheric Studio and Workspace artwork, teal theme resources, branded package tiles, splash screen, and executable icon.
 
+## JUCE preview audio engine
+
+JUCE 8 is integrated as an isolated, opt-in preview host; it is not yet the default Timeline playback
+engine. The current implementation provides:
+
+- a versioned authenticated JSON-lines protocol and managed host lifecycle with bounded messages,
+  correlation, timeouts, stale-response rejection, and safe process termination
+- JUCE device discovery, explicit shared-mode device opening/closing, and Settings diagnostics
+- packaged local engine preference that never mutates the project and cannot switch while transport
+  is running; unpackaged source runs safely default to AudioGraph because package settings are absent
+- immutable canonical Timeline projections with revision ordering, clip validation, sample-rate and
+  duration contracts, and buffer-boundary publication
+- sample-clock play, stop, seek, loop, cursor reporting, deterministic render probes, and a 128-sample
+  crossfade when a prepared revision becomes active
+- bounded embedded float32 PCM for deterministic proof and tests
+
+AudioGraph remains the default, owns normal Timeline playback, and is the rollback path. The JUCE
+Settings text intentionally reports the current host/device/transport state without claiming
+application Timeline playback, callback load, xruns, or native graph latency.
+
+The remaining production gates are material: replace embedded PCM (currently capped at 1 MiB per
+message) with file-backed or memory-mapped prepared media; project the complete canonical mixer,
+buses, sends, automation, VST3 processing, latency compensation, meters, clip edits, and bounce graph;
+make video, scrubbing, Reactive Lab, and render handoff follow the JUCE sample clock; recover safely
+from host/device/plugin/snapshot failures; qualify real WASAPI devices and suspend/resume; and finish
+JUCE commercial-license or AGPL compliance, MSVC runtime, redistribution, and clean-machine evidence.
+
+Build and operating details live in
+[`native/juce-audio-host/README.md`](native/juce-audio-host/README.md). The native VST3 helpers remain
+separate process-isolated components documented in
+[`native/vst3-host/README.md`](native/vst3-host/README.md).
+
 ## Brand assets
 
 The WinUI client treats the Electron product artwork as the canonical source. Regenerate the checked-in native package and in-app assets after changing that artwork:

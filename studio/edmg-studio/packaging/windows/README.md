@@ -147,6 +147,17 @@ cannot replace CUDA dependencies during a build.
 
 ## What gets bundled
 
+The native WinUI source includes the opt-in JUCE preview host integration, but a source build or host
+binary is not release qualification. A distributable package must inventory the exact native host,
+include JUCE notices/license material and the required MSVC runtime handling, preserve AudioGraph as
+the fallback, and pass clean-machine plus real-device qualification. Until those gates and a compatible
+JUCE commercial license or AGPL distribution decision are complete, packaging evidence must not call
+JUCE the default production Timeline engine.
+
+The frozen dependency inputs are also security boundaries: the backend lock carries `datasets` 5.0.1,
+and the Electron packaging toolchain resolves `http-cache-semantics` 4.3.0. The release-toolchain tests
+assert the build overrides so lock regeneration cannot silently restore the vulnerable paths.
+
 - self-contained Windows App SDK WinUI MSIX as the primary Windows frontend
 - WinUI package registration, dynamic AppsFolder launch, rollback, and uninstall helper
 - Electron UI as the Linux and Windows compatibility frontend

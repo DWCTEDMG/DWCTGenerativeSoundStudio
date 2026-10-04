@@ -1,6 +1,6 @@
 # DWCT Generative Sound Studio Release-Convergence Status
 
-Current review date: 2026-08-06
+Current review date: 2026-10-04
 Canonical product: WinUI Windows client plus the shared Studio backend in `studio/edmg-studio`
 Canonical Python lock: `studio/edmg-studio/python_backend/uv.lock`
 
@@ -52,6 +52,13 @@ directory or from unit tests alone.
 
 The repository contains substantially more implementation than the historical ledger recorded:
 
+- an opt-in JUCE 8 native preview host with a managed lifecycle/protocol boundary, explicit device
+  diagnostics, immutable Timeline snapshots, sample-clock transport/looping, deterministic render
+  probes, and AudioGraph rollback; this remains preview scope pending full graph, recovery, device,
+  licensing, and packaging qualification;
+- dependency-lock remediation for `datasets` 5.0.1 and `http-cache-semantics` 4.3.0, with packaging
+  override regression coverage and honest retention of upstream-blocked advisories;
+
 - versioned project manifests, validation, migrations, backups, and atomic writes;
 - SQLite/WAL jobs and events with leases, retries, idempotency, and recovery coverage;
 - autosave/recovery journals and project-health paths;
@@ -74,6 +81,9 @@ The repository contains substantially more implementation than the historical le
   evidence and newly persisted TensorRT job payloads.
 
 These areas are still structurally or evidentially incomplete:
+
+- JUCE production media transfer, canonical mixer/VST3/bounce graph parity, sample-clock UI/video
+  synchronization, fault recovery, real-device continuity, clean-machine packaging, and licensing;
 
 - `edmg_studio_backend/app.py` remains an oversized composition and route module;
 - Render, Timeline, Settings, and several workbench pages remain multi-thousand-line feature

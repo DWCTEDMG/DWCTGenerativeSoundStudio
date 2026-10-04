@@ -144,6 +144,13 @@ pnpm run dev
 `corepack enable` is only needed once per machine if `pnpm` is not already on `PATH`. The package
 manager version is pinned via `packageManager` in `package.json`.
 
+Dependency locks are release inputs. The Electron build chain pins `http-cache-semantics` 4.3.0
+through a pnpm override, and the backend lock resolves `datasets` 5.0.1 for the optional NeMo/Parakeet
+cohort. Do not remove these resolutions without reviewing the associated security advisories and
+rerunning `pnpm run test:release-toolchain`, `pnpm run build`, and `uv lock --project python_backend --check`.
+Other upstream advisories may remain open when no patched release exists or NeMo's published bounds
+exclude it; never force an incompatible runtime version merely to silence a lockfile alert.
+
 On Windows, use the root `RUN_ME.bat` to build and launch the current unpackaged WinUI source tree.
 `pnpm run dev` starts the Electron compatibility client; for browser-only UI work use
 `pnpm exec vite --host 127.0.0.1 --port 5173 --strictPort`.

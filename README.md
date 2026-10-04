@@ -65,6 +65,22 @@ analysis, AI/provider integration, CUDA/TensorRT inference, rendering, jobs,
 outputs, and model lifecycle stay in
 `studio/edmg-studio/python_backend/`; WinUI does not duplicate those engines.
 
+### Timeline audio engines
+
+The native Timeline now contains an **opt-in JUCE preview foundation** alongside the established
+Windows AudioGraph path. Settings can discover and explicitly open a JUCE output device, the managed
+client negotiates an authenticated/versioned protocol with the isolated native host, and immutable
+prepared-Timeline snapshots support sample-clock transport, seeking, looping, deterministic rendering,
+and click-reduced buffer-boundary revision changes. AudioGraph remains the default and rollback path.
+
+This is an integration milestone, not a claim that JUCE has replaced the production Timeline engine.
+Prepared PCM is still embedded in bounded protocol messages intended for proof and tests; full-song
+file-backed/memory-mapped media, the complete mixer/VST3 graph, offline bounce integration, clocked
+video/UI synchronization, crash/device recovery, real-device soak evidence, clean-machine packaging,
+and JUCE licensing approval remain release gates. See the
+[native WinUI README](studio/edmg-studio-winui/README.md#juce-preview-audio-engine) and
+[native host README](studio/edmg-studio-winui/native/juce-audio-host/README.md).
+
 ### Unified Workspace
 
 On Windows, **Workspace → All tools** is the primary guided session: choose source media, run or reuse

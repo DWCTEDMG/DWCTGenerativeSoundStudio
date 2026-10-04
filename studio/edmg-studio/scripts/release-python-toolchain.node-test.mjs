@@ -771,15 +771,15 @@ test("Director release stages a self-contained production hoisted install", () =
   assert.match(prepare, /load staged director entrypoint/);
   assert.match(prepare, /await import/);
   assert.doesNotMatch(prepare, /const copyEntries = \[[^\]]*"node_modules"/s);
-  assert.equal(directorPackage.pnpm?.overrides?.["fast-uri"], "3.1.6");
-  assert.equal(directorPackage.pnpm?.overrides?.["ip-address"], "10.3.1");
-  assert.equal(directorPackage.pnpm?.overrides?.hono, "4.13.5");
+  assert.equal(directorPackage.pnpm?.overrides?.["fast-uri"], "3.1.8");
+  assert.equal(directorPackage.pnpm?.overrides?.["ip-address"], "10.7.1");
+  assert.equal(directorPackage.pnpm?.overrides?.hono, "4.13.7");
   assert.equal(directorPackage.pnpm?.overrides?.["nanoid@3"], "3.3.18");
   assert.equal(directorPackage.pnpm?.overrides?.qs, "6.16.0");
   for (const resolution of [
-    "fast-uri@3.1.6:",
-    "ip-address@10.3.1:",
-    "hono@4.13.5:",
+    "fast-uri@3.1.8:",
+    "ip-address@10.7.1:",
+    "hono@4.13.7:",
     "nanoid@3.3.18:",
     "qs@6.16.0:",
   ]) {
@@ -896,6 +896,8 @@ test("Windows packaging stages and installs a self-contained packaged WinUI prim
 test("build-tool transitive security overrides stay on audited patched releases", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(studioRoot, "package.json"), "utf8"));
   const lockfile = fs.readFileSync(path.join(studioRoot, "pnpm-lock.yaml"), "utf8");
+  const backendProject = fs.readFileSync(path.join(studioRoot, "python_backend", "pyproject.toml"), "utf8");
+  const backendLock = fs.readFileSync(path.join(studioRoot, "python_backend", "uv.lock"), "utf8");
   assert.deepEqual(
     {
       brace1: packageJson.pnpm?.overrides?.["brace-expansion@1"],
@@ -903,33 +905,40 @@ test("build-tool transitive security overrides stay on audited patched releases"
       brace5: packageJson.pnpm?.overrides?.["brace-expansion@5"],
       xmldom08: packageJson.pnpm?.overrides?.["@xmldom/xmldom@0.8"],
       fastUri3: packageJson.pnpm?.overrides?.["fast-uri@3"],
+      httpCacheSemantics: packageJson.pnpm?.overrides?.["http-cache-semantics"],
       joi18: packageJson.pnpm?.overrides?.["joi@18"],
       jsYaml4: packageJson.pnpm?.overrides?.["js-yaml@4"],
       nanoid3: packageJson.pnpm?.overrides?.["nanoid@3"],
     },
     {
-      brace1: "1.1.18",
-      brace2: "2.1.4",
-      brace5: "5.0.9",
+      brace1: "1.1.21",
+      brace2: "2.1.7",
+      brace5: "5.0.12",
       xmldom08: "0.8.15",
-      fastUri3: "3.1.6",
-      joi18: "18.2.5",
+      fastUri3: "3.1.8",
+      httpCacheSemantics: "4.3.0",
+      joi18: "18.2.6",
       jsYaml4: "4.3.2",
       nanoid3: "3.3.18",
     },
   );
   for (const resolution of [
-    "brace-expansion@1.1.18:",
-    "brace-expansion@2.1.4:",
-    "brace-expansion@5.0.9:",
+    "brace-expansion@1.1.21:",
+    "brace-expansion@2.1.7:",
+    "brace-expansion@5.0.12:",
     "'@xmldom/xmldom@0.8.15':",
-    "fast-uri@3.1.6:",
-    "joi@18.2.5:",
+    "fast-uri@3.1.8:",
+    "http-cache-semantics@4.3.0:",
+    "joi@18.2.6:",
     "js-yaml@4.3.2:",
     "nanoid@3.3.18:",
   ]) {
     assert.match(lockfile, new RegExp(`^  ${resolution.replaceAll(".", "\\.")}`, "m"));
   }
+  assert.doesNotMatch(lockfile, /^  http-cache-semantics@(?:[0-3]\.|4\.[0-2](?:\.|:))/m);
+  assert.match(backendProject, /"datasets>=5\.0\.1,<6"/);
+  assert.match(backendLock, /name = "datasets"\r?\nversion = "5\.0\.1"/);
+  assert.doesNotMatch(backendLock, /name = "datasets"\r?\nversion = "5\.0\.0"/);
 });
 
 test("Studio CI uses Vitest 4 compatible worker arguments", () => {

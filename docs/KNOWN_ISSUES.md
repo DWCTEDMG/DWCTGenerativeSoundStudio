@@ -1,6 +1,6 @@
 # EDMG Studio 1.2.0 Candidate: Known Issues and Release Blockers
 
-Last reviewed: 2026-08-06
+Last reviewed: 2026-10-04
 
 This page describes the current source candidate. It does not turn an older build directory or the
 installed 1.1.0 application into a 1.2.0 release artifact. Public promotion remains blocked until
@@ -34,6 +34,20 @@ every item in the first section has reproducible evidence attached to the fresh 
    candidate being promoted.
 
 ## Known technical limitations
+
+- **JUCE is preview-only:** the native host, protocol, explicit device controls, immutable Timeline
+  snapshots, sample-clock transport, looping, and deterministic render probes are implemented, but
+  full-song file-backed media, complete mixer/VST3 graph parity, clocked UI/video integration,
+  offline bounce, failure recovery, real-device soak evidence, license approval, and clean-machine
+  packaging remain open. AudioGraph is still the default and rollback path.
+- **Dependency advisories with no compatible upgrade:** the candidate resolves `datasets` 5.0.1 and
+  `http-cache-semantics` 4.3.0, removing those reported vulnerable versions. Open advisories remain
+  for Transformers, NLTK, Lightning, and Hydra where no patched release exists or NeMo's published
+  ASR constraints exclude the patched version. Do not force incompatible overrides; retain bounded,
+  trusted-input use and require an upstream-compatible update or reviewed backport.
+- **Unpackaged preference persistence:** source Debug/Release launches have no package-local
+  `ApplicationData`. They safely default the JUCE preview preference to AudioGraph for each session;
+  packaged builds persist the selection locally.
 
 - **Packaged Git identity:** the backend manifest fingerprints the exact backend source set, binary,
   and frozen lock, and the Settings UI exposes those hashes. It does not yet record an archive-safe

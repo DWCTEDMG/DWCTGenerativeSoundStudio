@@ -10,6 +10,12 @@ Both frontends use the same local FastAPI backend and project format. On Windows
 provider plan or BYOM → managed Qwen Director review → storyboard → Reactive Lab/timeline → explicit
 apply and render handoff → queue → review → outputs. The dedicated AI Planner, Director, Storyboard,
 Reactive Lab, Timeline, Render, Models, and Settings pages remain available for specialist work.
+
+Timeline playback continues to default to Windows AudioGraph. Settings also exposes an explicit
+JUCE preview selection and device diagnostics backed by an isolated native host. That preview proves
+protocol, device, transport, immutable snapshot, loop, and deterministic-render foundations; it is
+not yet the production full-song mixer path. Switching engines does not edit project files, and
+AudioGraph remains the required fallback.
 CUDA, TensorRT, analysis, rendering, jobs, and model lifecycle remain authoritative in Python.
 
 The original DWCTEDMG codebase remains the engine + integrations, but Studio is the

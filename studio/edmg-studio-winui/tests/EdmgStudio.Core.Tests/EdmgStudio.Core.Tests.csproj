@@ -18,7 +18,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EdmgStudio.Core\EdmgStudio.Core.csproj" />
+    <Compile Include="..\..\Services\CrashLogger.cs" Link="CrashLogger.cs" />
+    <Compile Include="..\..\Services\WindowsAudioPreviewEnginePreferenceStore.cs" Link="WindowsAudioPreviewEnginePreferenceStore.cs" />
     <Compile Include="..\..\Services\WindowsAudioEngine.cs" Link="WindowsAudioEngine.cs" />
+    <Compile Include="..\..\Services\WindowsPackageIdentity.cs" Link="WindowsPackageIdentity.cs" />
     <Content Include="..\..\..\contracts\fixtures\v1\post-production-compatibility-golden.json" Link="Fixtures\post-production-compatibility-golden.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

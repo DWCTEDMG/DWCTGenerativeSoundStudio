@@ -1,10 +1,26 @@
 using EdmgStudio.Core.Audio;
+using EdmgStudio.WinUI.Services;
 
 namespace EdmgStudio.Core.Tests;
 
 [TestClass]
 public sealed class AudioPreviewEngineSelectionTests
 {
+  [TestMethod]
+  public void WindowsPreferenceStoreIsSafeForUnpackagedSourceRuns()
+  {
+    if (WindowsPackageIdentity.IsPackaged)
+    {
+      Assert.Inconclusive("This regression test exercises the unpackaged source-build boundary.");
+    }
+
+    WindowsAudioPreviewEnginePreferenceStore store = new();
+
+    Assert.AreEqual(AudioPreviewEngine.AudioGraph, store.Load());
+    store.Save(AudioPreviewEngine.Juce);
+    Assert.AreEqual(AudioPreviewEngine.AudioGraph, store.Load());
+  }
+
   [TestMethod]
   public void DefaultsToAudioGraphAndPersistsStoppedSelection()
   {
