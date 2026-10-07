@@ -7782,7 +7782,8 @@ def _run_job_in_subprocess(job) -> None:
         return
     cmd = _render_worker_command(job.project_id, job.id, attempt=job.attempt)
     jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
-    popen_kwargs: dict[str, Any] = {"env": os.environ.copy()}
+    from .automatic_gpu_admission import worker_environment
+    popen_kwargs: dict[str, Any] = {"env": worker_environment()}
     if os.name == "nt":
         # Keep the foreground API/UI snappy while the render grinds.
         popen_kwargs["creationflags"] = (
@@ -7921,6 +7922,15 @@ def _resolve_job_execution(job) -> None:
 
 
 def _dispatch_job(job) -> None:
+    if os.getenv("EDMG_AUTO_GPU_SCHEDULING") == "1":
+        from .automatic_gpu_admission import dispatch_guard, eligible
+        with dispatch_guard(eligible(job), lambda: _job_attempt_active(job)):
+            _dispatch_job_impl(job)
+    else:
+        _dispatch_job_impl(job)
+
+
+def _dispatch_job_impl(job) -> None:
     """Serialize local model jobs through their complete child-process lifetime."""
     from .services.model_load_coordinator import ModelLoadCanceled, model_load_lock
 
@@ -7947,6 +7957,27 @@ def _dispatch_job(job) -> None:
         )
         if job.type not in _LOCAL_MODEL_JOB_TYPES or server_director:
             _dispatch_admitted_job(job)
+            return
+
+        from .automatic_gpu_admission import eligible, reserve
+        if eligible(job) and _job_in_subprocess_enabled():
+            def waiting_gpu():
+                jobs.update_progress(job.project_id, job.id, stage="waiting_for_gpu",
+                    current=0, total=1, message="Waiting for an available Ubuntu GPU",
+                    expected_attempt=job.attempt)
+            try:
+                with reserve(lambda: _job_attempt_active(job), waiting_gpu) as gpu:
+                    jobs.append_log(job.project_id, job.id,
+                        f"Automatic GPU admission: physical GPU {gpu[0]}, UUID {gpu[1]}; worker logical cuda:0")
+                    _run_job_in_subprocess(job)
+            except ModelLoadCanceled:
+                return
+            except Exception as exc:
+                latest = jobs.get(job.project_id, job.id)
+                if latest and latest.attempt == job.attempt and latest.status not in ('succeeded','failed','canceled'):
+                    latest.status = 'failed'
+                    latest.error = _public_render_job_error(exc)
+                    jobs.save(latest)
             return
 
         def waiting() -> None:
