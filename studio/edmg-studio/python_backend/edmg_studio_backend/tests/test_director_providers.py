@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -12,6 +15,41 @@ from edmg_studio_backend.domain.director_plan import (
 )
 from edmg_studio_backend.services import director_providers
 from edmg_studio_backend.services.director_runtime_settings import DirectorRuntimeSettingsStore
+
+
+def test_local_cosmos_uses_conditional_generation_head_and_offline_loading(monkeypatch, tmp_path):
+    (tmp_path / "config.json").write_text('{"model_type":"qwen3_vl"}')
+    calls = []
+
+    class Output:
+        def __getitem__(self, _slice):
+            return self
+
+    model = SimpleNamespace(eval=lambda: model, parameters=lambda: iter([SimpleNamespace(device="cuda:0")]),
+                            generate=lambda **kwargs: Output())
+    processor = SimpleNamespace(
+        apply_chat_template=lambda *args, **kwargs: {"input_ids": SimpleNamespace(shape=(1, 3))},
+        batch_decode=lambda *args, **kwargs: ['{"status":"ok"}'])
+
+    def load(path, **kwargs):
+        calls.append((path, kwargs))
+        return model
+
+    def bare_backbone(*args, **kwargs):
+        pytest.fail("Cosmos loaded a bare backbone instead of a generation model")
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_bf16_supported=lambda: True), bfloat16="bf16", float16="fp16",
+        inference_mode=nullcontext))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoConfig=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(model_type="qwen3_vl")),
+        AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+        AutoModel=SimpleNamespace(from_pretrained=bare_backbone),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=bare_backbone),
+        AutoModelForImageTextToText=SimpleNamespace(from_pretrained=load)))
+    assert director_providers._local_transformers_json(str(tmp_path), [], device_map="auto", max_new_tokens=4) == '{"status":"ok"}'
+    assert calls[0][1]["local_files_only"] is True
+    assert calls[0][1]["device_map"] == "auto"
 
 
 def _document(intent: str = "Original") -> dict:

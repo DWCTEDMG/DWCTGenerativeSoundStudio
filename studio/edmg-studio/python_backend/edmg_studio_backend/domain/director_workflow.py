@@ -343,6 +343,16 @@ def prepare_workflow(project, plan_builder, *, resulting_revision: int,
         history.append(deepcopy(previous))
         project.meta["director_workflow_history"] = history[-10:]
     project.meta["director_workflow"] = draft.model_dump(mode="json")
+    if draft.timeline_context:
+        # Preparation creates a new reviewable snapshot. Capture its current
+        # context instead of carrying a generation revision into the next draft.
+        selected = draft.timeline_context["selected_range"]
+        set_timeline_context(
+            draft,
+            timeline_context(project, selected["start_sample"], selected["end_sample"]),
+            resulting_revision,
+        )
+        project.meta["director_workflow"] = draft.model_dump(mode="json")
     return draft
 
 
