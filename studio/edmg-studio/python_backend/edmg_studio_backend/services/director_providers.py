@@ -61,7 +61,7 @@ def _server_endpoint(settings: dict[str, Any], role: str) -> ProviderEndpoint:
     key = os.getenv(variable, "")
     # Never send the general NVIDIA credential to a custom server.
     parsed = urlsplit(endpoint)
-    if not key and parsed.scheme == "https" and (parsed.hostname or "").endswith(".endpoints.huggingface.cloud"):
+    if not key and parsed.scheme == "https" and (parsed.hostname or "").endswith((".endpoints.huggingface.cloud", ".hf.space")):
         from ..config import Settings
         from .secrets import SecretStore
         from .hf_auth import resolve_hf_token
@@ -233,15 +233,31 @@ class OpenAICompatibleNemotronProvider:
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(request, separators=(",", ":"))}]
         raw = self._request(messages)
+        def parse_plan(response_text):
+            candidate = json.loads(response_text)
+            # Some servers return the document itself. Wrap only this known
+            # contract; scene, timing, and lock validation still run below.
+            if isinstance(candidate, dict) and "document" not in candidate and "scenes" in candidate:
+                metadata = {key: candidate.pop(key) for key in
+                            ("decisions", "specialist_results", "diagnostics") if key in candidate}
+                candidate = {"schema_version": "1.0", "correlation_id": correlation_id,
+                             "director_model": self.config.model, "mode": mode,
+                             "document": candidate, **metadata}
+            return DirectorPlan.model_validate_json(_merge_server_document(
+                json.dumps(candidate), context["source_document"]))
         try:
-            plan = DirectorPlan.model_validate_json(_merge_server_document(raw, context["source_document"]))
+            plan = parse_plan(raw)
         except (ValidationError, ValueError, json.JSONDecodeError) as first_error:
             repair = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": f"Repair this response to the required JSON schema. Validation error: {first_error}"},
             ]
-            plan = DirectorPlan.model_validate_json(_merge_server_document(
-                self._request(repair), context["source_document"]))
+            try:
+                plan = parse_plan(self._request(repair))
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                raise UserFacingError("Director returned an invalid plan.",
+                    hint="Retry Director planning; the model response did not match the required schema.",
+                    code="DIRECTOR_PLAN_INVALID", status_code=502) from exc
         if plan.document == DirectorDocument.model_validate(context["source_document"]):
             plan.diagnostics["no_scene_edits"] = True
         plan.director_model = self.config.model

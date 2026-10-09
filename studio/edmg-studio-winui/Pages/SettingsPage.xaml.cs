@@ -486,8 +486,20 @@ public sealed partial class SettingsPage : Page
   {
     SelectComboValue(DirectorPrimaryExecution, "server");
     DirectorPrimaryEndpoint.Text = HfNemotronEndpoint.Text.Trim();
-    DirectorPrimaryServerModel.Text = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4";
+    var isZeroGpuSpace = Uri.TryCreate(DirectorPrimaryEndpoint.Text, UriKind.Absolute, out var endpoint)
+      && endpoint.Host.EndsWith(".hf.space", StringComparison.OrdinalIgnoreCase);
+    DirectorPrimaryServerModel.Text = isZeroGpuSpace
+      ? "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16"
+      : "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4";
     DirectorConfigurationStatus.Text = "Hugging Face Nemotron selected. Save AI Director settings to apply. Save your Hugging Face credential in the hosted services section; generated plans still require review/apply.";
+  }
+
+  private void UseHuggingFaceCosmos_Click(object sender, RoutedEventArgs e)
+  {
+    SelectComboValue(DirectorSpecialistExecution, "server");
+    DirectorSpecialistEndpoint.Text = $"https://{HfNamespace.Text.Trim()}-cosmos-reason2-8b.hf.space/v1";
+    DirectorSpecialistServerModel.Text = "nvidia/Cosmos-Reason2-8B";
+    DirectorConfigurationStatus.Text = "Cosmos ZeroGPU specialist selected. Save AI Director settings to apply. Uses the saved Hugging Face credential and Space request quotas.";
   }
 
   private void ApplyHuggingFaceSettings(JsonElement settings)

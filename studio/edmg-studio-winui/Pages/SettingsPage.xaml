@@ -54,8 +54,8 @@
                     <StackPanel Spacing="10">
                         <TextBlock Text="Use hosted inference without downloading model weights. Dedicated endpoints incur running GPU charges; ZeroGPU Spaces use request quotas. Paused Spaces must be resumed in Hugging Face before MCP tools can respond." TextWrapping="Wrap" />
                         <TextBox x:Name="HfNamespace" Header="Hugging Face account or organization" Text="gulle1155" />
-                        <TextBox x:Name="HfNemotronEndpoint" Header="Nemotron dedicated endpoint (including /v1)" Text="https://6ac87f4453d27c9b5cb0cba8.endpoints.huggingface.cloud/v1" />
-                        <TextBox x:Name="HfHunyuanEndpoint" Header="HunyuanVideo 1.5 dedicated endpoint" Text="https://6ac883da53d27c9b5cb0cbf7.endpoints.huggingface.cloud" />
+                        <TextBox x:Name="HfNemotronEndpoint" Header="Nemotron Space or dedicated endpoint (including /v1)" Text="https://gulle1155-nemotron-3-nano-omni-zerogpu.hf.space/v1" />
+                        <TextBox x:Name="HfHunyuanEndpoint" Header="HunyuanVideo 1.5 Space or dedicated endpoint" Text="https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space" />
                         <PasswordBox x:Name="HfToken" Header="Hugging Face token (empty keeps saved credential)" />
                         <TextBlock Text="Credentials use the backend's protected secret store. Studio can also use hf auth login or EDMG_HF_TOKEN. Codex's OAuth connection is separate from Studio authentication." TextWrapping="Wrap" Opacity="0.72" />
                         <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
@@ -65,8 +65,10 @@
                         <ComboBox x:Name="HfMcpServer" Header="MCP connection" SelectedIndex="0" AutomationProperties.AutomationId="HfMcpServer">
                             <ComboBoxItem Content="Hugging Face Hub" Tag="hub" />
                             <ComboBoxItem Content="Hunyuan ZeroGPU Space" Tag="hunyuan" />
-                            <ComboBoxItem Content="Nemotron demo Space" Tag="nemotron" />
+                            <ComboBoxItem Content="Nemotron ZeroGPU Space" Tag="nemotron" />
+                            <ComboBoxItem Content="Cosmos Reason2 ZeroGPU Space" Tag="cosmos" />
                         </ComboBox>
+                        <Button Content="Use Cosmos ZeroGPU for Director specialist" Click="UseHuggingFaceCosmos_Click" HorizontalAlignment="Left" />
                         <Button Content="Discover MCP tools" Click="DiscoverHuggingFaceMcp_Click" AutomationProperties.AutomationId="HfDiscoverMcp" HorizontalAlignment="Left" />
                         <TextBox x:Name="HfMcpTools" Header="MCP discovery results" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="220" />
                         <TextBox x:Name="HfPreviewPrompt" Header="Hunyuan hosted preview description" Text="A glowing blue sculpture on a dark concert stage, slow cinematic camera movement" TextWrapping="Wrap" />

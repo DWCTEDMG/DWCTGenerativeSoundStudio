@@ -181,6 +181,7 @@ def test_credential_fallback_and_paused_errors_are_safe(fixture, monkeypatch):
 
 def test_preview_validates_mp4_and_actual_metadata(fixture, monkeypatch):
     client, _, _ = fixture
+    assert client.post("/v1/huggingface/settings", json={"hunyuan_endpoint": "https://test.endpoints.huggingface.cloud"}).status_code == 200
     video = base64.b64encode(b"\x00\x00\x00\x18ftypisom0000").decode()
     payload = {"video_base64": video, "frames": 17, "fps": 24, "model": "hunyuan"}
     monkeypatch.setattr(module.requests, "request", lambda *args, **kwargs: Response(payload))
@@ -193,3 +194,39 @@ def test_preview_validates_mp4_and_actual_metadata(fixture, monkeypatch):
 def test_non_ascii_secret_is_rejected(fixture):
     client, _, _ = fixture
     assert client.post("/v1/huggingface/settings", json={"webhook_secret": "\u00e9"}).status_code == 422
+
+
+def test_zerogpu_preview_uses_queue_and_same_host_download(fixture, monkeypatch):
+    client, _, _ = fixture
+    endpoint = "https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space"
+    assert client.post("/v1/huggingface/settings", json={"hunyuan_endpoint": endpoint}).status_code == 200
+    video = b"\x00\x00\x00\x18ftypisom0000"
+    calls = []
+    def request(method, url, **kwargs):
+        calls.append((method, url))
+        if method == "POST":
+            assert kwargs["json"]["data"] == ["test", 42, 17, 20]
+            return Response({"event_id": "event123"})
+        if "/call/" in url:
+            return Response(lines=["event: complete", 'data: [{"video":{"path":"/tmp/gradio/video.mp4","url":"https://evil.example/file"}},"CUDA receipt"]'])
+        result = Response()
+        result.iter_content = lambda _: iter([video])
+        return result
+    monkeypatch.setattr(module.requests, "request", request)
+    response = client.post("/v1/huggingface/hunyuan/preview", json={"prompt": "test"})
+    assert response.status_code == 200
+    assert base64.b64decode(response.json()["video_base64"]) == video
+    assert response.json()["device"] == "huggingface_zerogpu"
+    assert all(url.startswith(endpoint + "/") for _, url in calls)
+
+
+def test_zerogpu_queue_error_does_not_return_a_successful_preview(fixture, monkeypatch):
+    client, _, _ = fixture
+    client.post("/v1/huggingface/settings", json={
+        "hunyuan_endpoint": "https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space"})
+    monkeypatch.setattr(module.requests, "request", lambda method, *a, **k:
+        Response({"event_id": "event123"}) if method == "POST" else
+        Response(lines=["event: error", 'data: "GPU quota exceeded"']))
+    response = client.post("/v1/huggingface/hunyuan/preview", json={"prompt": "test"})
+    assert response.status_code == 503
+    assert "quota" in response.text

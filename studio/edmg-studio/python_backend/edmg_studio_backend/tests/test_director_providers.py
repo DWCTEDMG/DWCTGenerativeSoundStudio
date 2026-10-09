@@ -103,6 +103,43 @@ def test_nemotron_provider_repairs_invalid_json_once(monkeypatch):
     assert plan.document.scenes[0].intent == "Directed"
 
 
+def test_nemotron_accepts_bare_document_without_bypassing_locks(monkeypatch):
+    provider = director_providers.OpenAICompatibleNemotronProvider(
+        director_providers.ProviderEndpoint("http://director/v1", "served-model"))
+    monkeypatch.setattr(provider, "_request", lambda _: json.dumps(_document("Changed")))
+    context = {"source_document": _document()}
+    plan = provider.plan(context=context, instruction="Direct", mode="standard",
+                         specialist_results=[], correlation_id="owned-correlation")
+    assert plan.director_model == "served-model"
+    assert plan.correlation_id == "owned-correlation"
+    assert plan.document.scenes[0].intent == "Changed"
+    with pytest.raises(ValueError, match="locked scene"):
+        provider.plan(context={**context, "locked_scene_ids": ["scene-1"]},
+                      instruction="Direct", mode="standard", specialist_results=[],
+                      correlation_id="owned-correlation")
+
+
+def test_invalid_repaired_plan_is_not_an_authentication_error(monkeypatch):
+    provider = director_providers.OpenAICompatibleNemotronProvider(
+        director_providers.ProviderEndpoint("http://director/v1", "served-model"))
+    monkeypatch.setattr(provider, "_request", lambda _: '{}')
+    with pytest.raises(director_providers.UserFacingError) as caught:
+        provider.plan(context={"source_document": _document()}, instruction="Direct",
+                      mode="standard", specialist_results=[], correlation_id="corr")
+    assert caught.value.code == "DIRECTOR_PLAN_INVALID"
+    assert "schema" in caught.value.hint
+
+
+def test_pydantic_extra_forbidden_does_not_suggest_token_replacement():
+    from pydantic import ValidationError
+    from edmg_studio_backend.errors import hint_from_exception
+    with pytest.raises(ValidationError) as caught:
+        DirectorPlan.model_validate({**_plan(), "unexpected": True})
+    hint = hint_from_exception(caught.value)
+    assert "schema" in hint
+    assert "token" not in hint.lower()
+
+
 def test_server_context_is_bounded_and_partial_scene_edits_keep_source_metadata(monkeypatch):
     source = _document()
     source["scenes"].append({"scene_id": "scene-2", "start_sample": "48000", "end_sample": "96000",
