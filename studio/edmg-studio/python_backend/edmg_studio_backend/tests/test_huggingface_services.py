@@ -140,6 +140,27 @@ def test_mcp_discovers_tools_using_negotiated_session_and_sse(fixture, monkeypat
     assert client.get("/v1/huggingface/mcp/arbitrary/tools").status_code == 404
 
 
+def test_private_mcp_prefers_saved_credential_over_stale_environment(fixture, monkeypatch):
+    client, secrets, _ = fixture
+    secrets.set("hf_token", "saved")
+    monkeypatch.setattr(module, "hf_token_candidates", lambda **kwargs:
+        [SimpleNamespace(token="stale-env"), SimpleNamespace(token="saved")])
+
+    def request(method, url, **kwargs):
+        if kwargs["headers"]["Authorization"] != "Bearer saved":
+            return Response(status=404)
+        body = kwargs["json"]
+        if body["method"] == "notifications/initialized":
+            return Response(status=202)
+        result = {"protocolVersion": "2025-03-26"} if body["id"] == 1 else {"tools": [{"name": "generate"}]}
+        return Response({"id": body["id"], "result": result})
+
+    monkeypatch.setattr(module.requests, "request", request)
+    response = client.get("/v1/huggingface/mcp/nemotron/tools")
+    assert response.status_code == 200
+    assert response.json()["tools"] == [{"name": "generate"}]
+
+
 def test_credential_fallback_and_paused_errors_are_safe(fixture, monkeypatch):
     client, _, _ = fixture
     monkeypatch.setattr(module, "hf_token_candidates", lambda **kwargs:

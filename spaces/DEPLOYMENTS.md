@@ -21,6 +21,8 @@ Deployment creation, application startup, successful inference, valid media outp
 
 Codex's global `hf-mcp-server` uses `https://huggingface.co/mcp?login` with OAuth. Added and login completed on 2026-10-09.
 
+Studio uses `https://huggingface.co/mcp` with a bearer token. Its hosted connection prefers the protected credential saved in Studio over inherited environment tokens, because private Spaces can return 404 for a rejected credential rather than 401.
+
 Both Space applications already launch with `mcp_server=True`. Their MCP URLs are:
 
 - https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space/gradio_api/mcp/

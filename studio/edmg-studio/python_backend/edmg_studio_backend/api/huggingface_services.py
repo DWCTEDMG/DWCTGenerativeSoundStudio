@@ -111,6 +111,10 @@ def create_huggingface_services_router(data_dir: Path, secrets_store):
     def request(method, url, **kwargs):
         # URLs originate only from validated HF settings or fixed Hub routes.
         candidates = hf_token_candidates(secrets_store=secrets_store)
+        # Private Spaces mask rejected credentials as 404, so use the credential
+        # explicitly saved for this connection before inherited environment tokens.
+        saved_token = secrets_store.get("hf_token")
+        candidates.sort(key=lambda candidate: candidate.token != saved_token)
         if not candidates:
             raise HTTPException(401, "Save a Hugging Face token or sign in with hf auth login")
         headers = kwargs.pop("headers", {})
@@ -140,7 +144,7 @@ def create_huggingface_services_router(data_dir: Path, secrets_store):
         return {**settings.model_dump(), "has_token": bool(hf_token_candidates(secrets_store=secrets_store)),
             "has_webhook_secret": bool(secrets_store.get("hf_webhook_secret")),
             "mcp_servers": {
-                "hub": "https://huggingface.co/mcp?login",
+                "hub": "https://huggingface.co/mcp",
                 "hunyuan": f"https://{namespace}-hunyuan-video-1-5-zerogpu.hf.space/gradio_api/mcp/",
                 "nemotron": f"https://{namespace}-nemotron-3-nano-omni-zerogpu.hf.space/gradio_api/mcp/"}}
 
