@@ -181,6 +181,12 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
 
   private void UpdateBackendSnapshot(BackendStatus snapshot)
   {
+    if (!snapshot.IsReady)
+    {
+      NextStepText.Text = "The Studio backend is not ready. Retry the connection below or inspect the backend configuration in Settings before starting a project.";
+      NextStepButton.Content = "Open Settings";
+      NextStepButton.Tag = "settings";
+    }
     BackendReadinessText.Text = snapshot.State switch
     {
       BackendLifecycleState.Ready => $"Backend: connected to {snapshot.CurrentBackendUri}",
@@ -202,6 +208,12 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
 
   private void UpdateSetupStatus(SetupStatusResponse setup)
   {
+    bool bundleReady = IsTrue(setup.BackendBundle, "ok") || IsTrue(setup.BackendBundle, "ready");
+    NextStepText.Text = bundleReady
+        ? "The managed backend bundle is available. Continue in Workspace, then choose models and render settings for this project. Optional tools below are only needed for their specific routes."
+        : "The backend is connected, but the packaged backend bundle has not been verified. You can explore Workspace now; repair the runtime below before treating this installation as production-ready.";
+    NextStepButton.Content = bundleReady ? "Open Workspace" : "Review Settings";
+    NextStepButton.Tag = bundleReady ? "workspace" : "settings";
     BundleReadinessText.Text =
         $"Backend bundle: {DescribeDiagnostic(setup.BackendBundle, "ok", "ready")} · toolchain: {DescribeDiagnostic(setup.Toolchain, "ready", "ok")}";
     FfmpegReadinessText.Text = "FFmpeg: " + DescribeReadinessSection(setup.SystemReadiness, "ffmpeg");
@@ -226,6 +238,21 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         StringComparison.Ordinal)
         ? _baseStorageStatus
         : $"{_baseStorageStatus}{Environment.NewLine}{storageSummary}";
+  }
+
+  private void NavigateSetup_Click(object sender, RoutedEventArgs e)
+  {
+    if (sender is Button { Tag: string destination })
+    {
+      App.Navigate(destination);
+    }
+  }
+
+  private static bool IsTrue(JsonElement value, string propertyName)
+  {
+    return value.ValueKind == JsonValueKind.Object
+        && value.TryGetProperty(propertyName, out JsonElement property)
+        && property.ValueKind == JsonValueKind.True;
   }
 
   private void UpdateTasks(IEnumerable<SetupTaskDto> tasks)
