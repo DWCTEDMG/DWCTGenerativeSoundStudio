@@ -16,6 +16,13 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class SettingsPage : Page
 {
+  private void NavigateSettings_Click(object sender, RoutedEventArgs e)
+  {
+    if (sender is Button { Tag: string destination })
+    {
+      App.Navigate(destination);
+    }
+  }
   private readonly EdmgStudio.Core.Services.StudioApiClient _apiClient = App.Services.ApiClient;
   private const string Vst3ScanRootsSettingKey = "Vst3.ScanRoots";
   private JsonObject? _renderProviderSettings;
