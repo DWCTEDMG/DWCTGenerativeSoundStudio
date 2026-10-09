@@ -155,7 +155,7 @@
                         <Button AutomationProperties.AutomationId="SettingsLocalRuntimeSave" Content="Save local runtime settings" Click="LocalRuntimeSave_Click" HorizontalAlignment="Left" />
                     </StackPanel>
                 </Expander>
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Remote control and Quick Controls" />
                         <TextBlock Opacity="0.72" Text="Edit keyboard shortcuts, connect a MIDI input, learn mappings, and assign the eight Timeline Quick Controls." TextWrapping="Wrap" />
@@ -182,7 +182,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Appearance" />
                         <TextBlock
@@ -203,7 +203,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Desktop backend" />
                         <TextBlock
@@ -240,7 +240,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Video generation route" />
                         <ComboBox
@@ -263,7 +263,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Transcription" />
                         <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
@@ -292,7 +292,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Secure provider secret" />
                         <Grid ColumnDefinitions="220,*,Auto,Auto" ColumnSpacing="8">
@@ -317,7 +317,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Microsoft Foundry project" />
                         <TextBox
@@ -347,7 +347,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="10">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Audio preview engine" />
                         <ComboBox x:Name="AudioPreviewEngineComboBox"
@@ -357,7 +357,7 @@
                                   Width="260"
                                   HorizontalAlignment="Left">
                             <ComboBoxItem Content="Windows AudioGraph (default)" Tag="AudioGraph" />
-                            <ComboBoxItem Content="JUCE preview" Tag="Juce" />
+                            <ComboBoxItem Content="JUCE (Timeline output)" Tag="Juce" />
                         </ComboBox>
                         <TextBlock x:Name="AudioPreviewEngineStatusText"
                                    AutomationProperties.AutomationId="SettingsAudioPreviewEngineStatusText"
@@ -386,7 +386,7 @@
                                     Click="RefreshJuceDevicesButton_Click" Content="Discover devices" />
                         </StackPanel>
                         <ComboBox x:Name="JuceDeviceComboBox" AutomationProperties.AutomationId="SettingsJuceDeviceComboBox"
-                                  Header="Explicit JUCE output device" DisplayMemberPath="Name" PlaceholderText="Discover devices first" />
+                                  Header="Explicit JUCE output device" DisplayMemberPath="Name" PlaceholderText="Discover devices first" SelectionChanged="JuceDeviceComboBox_SelectionChanged" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <ComboBox x:Name="JuceSampleRateComboBox" Header="Sample rate" SelectedIndex="1" Width="140">
                                 <x:Int32>44100</x:Int32>
@@ -412,14 +412,15 @@
                                     AutomationProperties.AutomationId="SettingsStopJuceToneButton"
                                     Click="StopJuceToneButton_Click" Content="Stop proof" />
                         </StackPanel>
+                        <Button Content="Save JUCE settings" Click="SaveJuceSettingsButton_Click" HorizontalAlignment="Left" />
                         <TextBlock x:Name="JuceDeviceStatusText" Opacity="0.72" Text="No JUCE device has been opened." TextWrapping="Wrap" />
                         <TextBlock Opacity="0.68"
-                                   Text="Selection is persisted locally and can change only while transport is stopped; it never changes project files. The current JUCE path provides host, device, transport, and prepared-Timeline diagnostics but is not yet wired as application Timeline playback. Callback load, xruns, and native graph latency remain unavailable until that integration is complete. AudioGraph remains the default and rollback path."
+                                   Text="Save the JUCE output device, diagnostic sample rate, and buffer size locally. Select JUCE above to use it for Timeline playback. Timeline follows the project sample rate to preserve timing. Stop transport before changing output settings. AudioGraph remains the default and fallback. Callback load, xruns, and native graph latency are not yet reported."
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="VST3 plugins" />
                         <TextBlock x:Name="Vst3CapabilityText"
@@ -445,7 +446,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="8">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Support bundle" />
                         <TextBlock
@@ -460,7 +461,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource StudioCardStyle}">
+                <Border Style="{StaticResource StudioCardStyle}" Padding="20">
                     <StackPanel Spacing="8">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Backend readiness and hardware" />
                         <TextBox

@@ -85,7 +85,7 @@ public sealed class AudioPreviewEngineSelection
 
     string message = engine == AudioPreviewEngine.AudioGraph
         ? "AudioGraph is selected as the default and rollback preview engine."
-        : "JUCE preview is selected. Start and configure the optional host explicitly before using its diagnostics.";
+        : "JUCE is selected for Timeline output. Timeline starts the host and configures the saved device when preparing playback.";
     return new(changed, engine, message);
   }
 }
