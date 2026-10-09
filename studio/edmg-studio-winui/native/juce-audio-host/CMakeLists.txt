@@ -3,7 +3,8 @@ project(EdmgStudioJuceAudioHost VERSION 0.1.0 LANGUAGES CXX)
 
 include(FetchContent)
 if(JUCE_ROOT)
-    add_subdirectory("${JUCE_ROOT}" "${CMAKE_BINARY_DIR}/juce")
+    cmake_path(CONVERT "${JUCE_ROOT}" TO_CMAKE_PATH_LIST juce_SOURCE_DIR)
+    add_subdirectory("${juce_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/juce")
 else()
     FetchContent_Declare(
         juce

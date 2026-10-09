@@ -16,7 +16,7 @@
                 <StackPanel Spacing="6">
                     <TextBlock Text="Studio Forge" Style="{StaticResource PageTitleTextBlockStyle}" />
                     <TextBlock
-                        Text="Inspect backend and project readiness, then move into the canonical workflow that owns each action."
+                        Text="Turn an idea into an audio-reactive video. Forge finds the next useful action and opens the native tool that owns it."
                         TextWrapping="Wrap"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 </StackPanel>
@@ -26,6 +26,24 @@
             </Grid>
 
             <InfoBar x:Name="StatusInfoBar" IsOpen="False" IsClosable="True" />
+
+            <Border Padding="20" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Build path" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Audio → analysis → reviewed plan → render → editorial review → output. Each stage stays editable in its specialist page." TextWrapping="Wrap" />
+                    <TextBlock x:Name="NextActionTextBlock" Text="Checking your active project..." TextWrapping="Wrap" FontWeight="SemiBold" />
+                    <Button x:Name="NextActionButton" Content="Open Workspace" Tag="workspace" Click="Navigate_Click"
+                            Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left"
+                            AutomationProperties.AutomationId="StudioForgeNextActionButton" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Plan" Tag="plannerLab" Click="Navigate_Click" />
+                        <Button Content="Render" Tag="render" Click="Navigate_Click" />
+                        <Button Content="Review" Tag="review" Click="Navigate_Click" />
+                        <Button Content="Outputs" Tag="outputs" Click="Navigate_Click" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
 
             <Grid ColumnSpacing="16">
                 <Grid.ColumnDefinitions>
@@ -65,9 +83,9 @@
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="Canonical workflows" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Specialist tools" Style="{StaticResource SubtitleTextBlockStyle}" />
                     <TextBlock
-                        Text="Forge is a readiness and routing surface. It does not silently install models, render variants, publish cues, or mutate project data."
+                        Text="Use these tools to edit each stage. Forge recommends a route, while publishing, installation, and generation still require your explicit action."
                         TextWrapping="Wrap"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ItemsWrapGrid x:Name="WorkflowButtonsPanel" Orientation="Horizontal"
@@ -115,7 +133,7 @@
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                 <StackPanel Spacing="8">
-                    <TextBlock Text="Developer validation" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Developer validation (advanced)" Style="{StaticResource SubtitleTextBlockStyle}" />
                     <TextBlock
                         Text="Documentation only — Studio Forge never executes shell commands."
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
