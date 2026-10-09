@@ -4644,6 +4644,8 @@ public sealed partial class TimelinePage : Page
       string graphKey,
       CancellationToken cancellationToken)
   {
+    var audioPreferences = WindowsAudioPreviewEnginePreferenceStore.ReadPreferences();
+    graphKey = $"{graphKey}|{audioPreferences.DeviceId}|{audioPreferences.BufferFrames}";
     if (string.Equals(graphKey, _configuredJuceGraphKey, StringComparison.Ordinal))
     {
       return;
@@ -4664,13 +4666,16 @@ public sealed partial class TimelinePage : Page
     JuceAudioDeviceDescriptor[] devices = await App.Services.JuceAudioEngine.RequestAsync<JuceAudioDeviceDescriptor[]>(
         JuceAudioEngineProtocol.ListDevicesCommand, new { }, JuceAudioEngineProtocol.DeviceListEvent,
         cancellationToken: cancellationToken);
-    JuceAudioDeviceDescriptor output = devices.FirstOrDefault(item => item.IsDefaultOutput)
+    if (audioPreferences.DeviceId is not null && !devices.Any(item => item.Id == audioPreferences.DeviceId))
+      throw new InvalidOperationException("The saved JUCE output device is unavailable. Choose an available device in Settings and save again.");
+    JuceAudioDeviceDescriptor output = devices.FirstOrDefault(item => item.Id == audioPreferences.DeviceId)
+        ?? devices.FirstOrDefault(item => item.IsDefaultOutput)
         ?? devices.FirstOrDefault()
         ?? throw new InvalidOperationException("JUCE did not find an output audio device.");
     int sampleRate = project.Timebase.SampleRate;
-    int bufferFrames = output.BufferSizes.Contains(DefaultAudioBufferFrames)
-        ? DefaultAudioBufferFrames
-        : output.BufferSizes.OrderBy(value => Math.Abs(value - DefaultAudioBufferFrames)).FirstOrDefault(512);
+    int bufferFrames = output.BufferSizes.Contains(audioPreferences.BufferFrames)
+        ? audioPreferences.BufferFrames
+        : output.BufferSizes.OrderBy(value => Math.Abs(value - audioPreferences.BufferFrames)).FirstOrDefault(512);
     JuceAudioDeviceConfigurationResult configured = await App.Services.JuceAudioEngine.RequestAsync<JuceAudioDeviceConfigurationResult>(
         JuceAudioEngineProtocol.ConfigureDeviceCommand,
         new JuceAudioDeviceConfiguration(output.Id, sampleRate, bufferFrames, Math.Min(2, output.OutputChannels), false),

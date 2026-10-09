@@ -38,6 +38,9 @@ public sealed partial class SettingsPage : Page
   {
     InitializeComponent();
     InitializeAudioPreviewEngine();
+    var audioPreferences = WindowsAudioPreviewEnginePreferenceStore.ReadPreferences();
+    JuceSampleRateComboBox.SelectedItem = audioPreferences.SampleRate;
+    JuceBufferSizeComboBox.SelectedItem = audioPreferences.BufferFrames;
     InitializeAppearance();
     LoadBackendSettings();
     LoadLocalRuntimeSettings();
@@ -203,7 +206,7 @@ public sealed partial class SettingsPage : Page
     AudioPreviewEngine engine = App.Services.AudioPreviewEngineSelection.SelectedEngine;
     string role = engine == AudioPreviewEngine.AudioGraph
         ? "AudioGraph is selected for application Timeline playback."
-        : "JUCE preview is opted in for diagnostics; application Timeline playback remains on AudioGraph until native routing is connected.";
+        : "JUCE is selected for Timeline output. The host and saved device are configured when Timeline prepares playback.";
     AudioPreviewEngineStatusText.Text = $"{role} {detail}";
     ReturnToAudioGraphButton.IsEnabled = engine != AudioPreviewEngine.AudioGraph &&
         App.Services.Transport.State.Mode == TransportMode.Stopped;
@@ -233,7 +236,8 @@ public sealed partial class SettingsPage : Page
       JuceAudioDeviceDescriptor[] devices = await App.Services.JuceAudioEngine.RequestAsync<JuceAudioDeviceDescriptor[]>(
           JuceAudioEngineProtocol.ListDevicesCommand, new { }, JuceAudioEngineProtocol.DeviceListEvent);
       JuceDeviceComboBox.ItemsSource = devices;
-      JuceDeviceComboBox.SelectedItem = devices.FirstOrDefault(device => device.IsDefaultOutput) ?? devices.FirstOrDefault();
+      JuceDeviceComboBox.SelectedItem = devices.FirstOrDefault(device => device.Id == WindowsAudioPreviewEnginePreferenceStore.ReadPreferences().DeviceId)
+          ?? devices.FirstOrDefault(device => device.IsDefaultOutput) ?? devices.FirstOrDefault();
       JuceDeviceStatusText.Text = devices.Length == 0
           ? "The JUCE host reported no output devices."
           : $"Discovered {devices.Length} output device(s); none was opened automatically.";
@@ -242,6 +246,37 @@ public sealed partial class SettingsPage : Page
     catch (Exception exception) when (exception is InvalidOperationException or InvalidDataException or OperationCanceledException)
     {
       JuceDeviceStatusText.Text = $"Device discovery failed: {exception.Message}";
+    }
+  }
+
+  private void JuceDeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+  {
+    if (OpenJuceDeviceButton is not null)
+      ApplyJuceStatus(App.Services.JuceAudioEngine.Status);
+  }
+
+  private void SaveJuceSettingsButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (App.Services.Transport.State.Mode != TransportMode.Stopped)
+    {
+      JuceDeviceStatusText.Text = "Stop playback or recording before saving output settings.";
+      return;
+    }
+    try
+    {
+      var saved = WindowsAudioPreviewEnginePreferenceStore.ReadPreferences();
+      WindowsAudioPreviewEnginePreferenceStore.WritePreferences(saved with
+      {
+        Engine = App.Services.AudioPreviewEngineSelection.SelectedEngine,
+        DeviceId = (JuceDeviceComboBox.SelectedItem as JuceAudioDeviceDescriptor)?.Id ?? saved.DeviceId,
+        SampleRate = JuceSampleRateComboBox.SelectedItem is int rate ? rate : 48000,
+        BufferFrames = JuceBufferSizeComboBox.SelectedItem is int frames ? frames : 512
+      });
+      JuceDeviceStatusText.Text = "JUCE settings saved. Timeline uses the saved output and buffer on its next preparation; its sample rate follows the project.";
+    }
+    catch (Exception exception)
+    {
+      JuceDeviceStatusText.Text = $"Could not save JUCE settings: {exception.Message}";
     }
   }
 
@@ -386,7 +421,9 @@ public sealed partial class SettingsPage : Page
       ShowStatus(
           availableFailures.Length == 0
               ? "Settings and diagnostics loaded."
-              : $"Settings loaded with unavailable probes: {string.Join(" | ", availableFailures)}",
+              : availableFailures.All(failure => failure.Contains("Studio backend is unavailable", StringComparison.OrdinalIgnoreCase))
+                  ? "Studio backend is unavailable. Backend settings and diagnostics could not refresh. Local audio settings remain available. Reconnect, then Refresh."
+                  : $"Some settings could not refresh: {string.Join(" | ", availableFailures.Distinct())}",
           availableFailures.Length == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
     }
     catch (Exception exception)

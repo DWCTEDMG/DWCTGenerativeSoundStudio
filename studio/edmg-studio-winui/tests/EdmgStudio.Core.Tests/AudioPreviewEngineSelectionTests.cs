@@ -14,11 +14,25 @@ public sealed class AudioPreviewEngineSelectionTests
       Assert.Inconclusive("This regression test exercises the unpackaged source-build boundary.");
     }
 
-    WindowsAudioPreviewEnginePreferenceStore store = new();
-
-    Assert.AreEqual(AudioPreviewEngine.AudioGraph, store.Load());
-    store.Save(AudioPreviewEngine.Juce);
-    Assert.AreEqual(AudioPreviewEngine.AudioGraph, store.Load());
+    string directory = Path.Combine(Path.GetTempPath(), "EDMG-audio-test-" + Guid.NewGuid());
+    string path = Path.Combine(directory, "audio.json");
+    try
+    {
+      WindowsAudioPreviewEnginePreferenceStore store = new(path);
+      Assert.AreEqual(AudioPreviewEngine.AudioGraph, store.Load());
+      WindowsAudioPreviewEnginePreferenceStore.WritePreferences(new(DeviceId: "device-1", BufferFrames: 256), path);
+      store.Save(AudioPreviewEngine.Juce);
+      Assert.AreEqual(AudioPreviewEngine.Juce, new WindowsAudioPreviewEnginePreferenceStore(path).Load());
+      var saved = WindowsAudioPreviewEnginePreferenceStore.ReadPreferences(path);
+      Assert.AreEqual("device-1", saved.DeviceId);
+      Assert.AreEqual(256, saved.BufferFrames);
+      File.WriteAllText(path, "invalid json");
+      Assert.AreEqual(AudioPreviewEngine.AudioGraph, store.Load());
+    }
+    finally
+    {
+      if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+    }
   }
 
   [TestMethod]
