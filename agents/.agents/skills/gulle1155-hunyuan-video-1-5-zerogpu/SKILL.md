@@ -63,4 +63,3 @@ curl -X POST https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space/call/v2/genera
   | awk -F'"' '{ print $4}' \
   | read EVENT_ID; curl -N https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space/call/generate/$EVENT_ID
 ```
-
