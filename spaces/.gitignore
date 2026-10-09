@@ -1,0 +1,4 @@
+upstream-*/
+*-reference/
+**/__pycache__/
+**/.cache/

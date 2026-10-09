@@ -61,6 +61,15 @@ def _server_endpoint(settings: dict[str, Any], role: str) -> ProviderEndpoint:
     key = os.getenv(variable, "")
     # Never send the general NVIDIA credential to a custom server.
     parsed = urlsplit(endpoint)
+    if not key and parsed.scheme == "https" and (parsed.hostname or "").endswith(".endpoints.huggingface.cloud"):
+        from ..config import Settings
+        from .secrets import SecretStore
+        from .hf_auth import resolve_hf_token
+
+        hf_secrets = SecretStore(Settings().data_dir)
+        key = hf_secrets.get("hf_token") or os.getenv("EDMG_HF_TOKEN", "")
+        if not key:
+            key, _ = resolve_hf_token(secrets_store=hf_secrets)
     if not key and parsed.scheme == "https" and parsed.hostname == "integrate.api.nvidia.com":
         from ..config import Settings
         from .secrets import SecretStore

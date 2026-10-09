@@ -2339,6 +2339,21 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     return SendJsonElementAsync(HttpMethod.Get, "/v1/settings/director_runtime", null, true, cancellationToken);
   }
 
+  public Task<JsonElement> GetHuggingFaceServicesAsync(CancellationToken cancellationToken = default) =>
+      SendJsonElementAsync(HttpMethod.Get, "/v1/huggingface/settings", null, true, cancellationToken);
+
+  public Task<JsonElement> SaveHuggingFaceServicesAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+      PostJsonElementAsync("/v1/huggingface/settings", request, cancellationToken);
+
+  public Task<JsonElement> DiscoverHuggingFaceMcpToolsAsync(string server, CancellationToken cancellationToken = default) =>
+      SendJsonElementAsync(HttpMethod.Get, $"/v1/huggingface/mcp/{Uri.EscapeDataString(server)}/tools", null, true, cancellationToken);
+
+  public Task<JsonElement> RegisterHuggingFaceWebhookAsync(CancellationToken cancellationToken = default) =>
+      PostJsonElementAsync("/v1/huggingface/webhook", JsonSerializer.SerializeToElement(new { }), cancellationToken);
+
+  public Task<JsonElement> GenerateHuggingFacePreviewAsync(JsonElement request, CancellationToken cancellationToken = default) =>
+      PostJsonElementAsync("/v1/huggingface/hunyuan/preview", request, cancellationToken);
+
   public Task<JsonElement> SaveDirectorRuntimeSettingsAsync(
       JsonElement request,
       CancellationToken cancellationToken = default)

@@ -25,6 +25,7 @@ public sealed partial class SettingsPage : Page
   private bool _juceDeviceOpen;
   private bool _initializingAudioPreviewEngine;
   private long _juceProjectRevision;
+  private string _hfWebhookId = "";
 
   public SettingsPage()
   {
@@ -49,6 +50,7 @@ public sealed partial class SettingsPage : Page
     await RefreshAsync();
     await RefreshRuntimeAsync();
     await RefreshExecutionPlaneAsync();
+    await RunHuggingFaceActionAsync(this, async () => ApplyHuggingFaceSettings(await _apiClient.GetHuggingFaceServicesAsync()));
   }
 
   private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)
@@ -427,6 +429,103 @@ public sealed partial class SettingsPage : Page
     DirectorSpecialistServerModel.Text = settings["specialist_server_model"]?.GetValue<string>() ?? "nvidia/cosmos-reason2-8b";
     DirectorConfigurationStatus.Text = "Local catalog entries and server configurations coexist. Save selects the route; configuration alone does not prove server availability. Generated plans still require review/apply.";
   }
+
+  private void UseNvidiaHostedNemotron_Click(object sender, RoutedEventArgs e)
+  {
+    SelectComboValue(DirectorPrimaryExecution, "server");
+    DirectorPrimaryEndpoint.Text = "https://integrate.api.nvidia.com/v1";
+    DirectorPrimaryServerModel.Text = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+    DirectorConfigurationStatus.Text = "NVIDIA-hosted Nemotron selected. Save AI Director settings to apply. Uses your NVIDIA API key; availability and valid Director plans still require verification.";
+  }
+
+  private void UseHuggingFaceNemotron_Click(object sender, RoutedEventArgs e)
+  {
+    SelectComboValue(DirectorPrimaryExecution, "server");
+    DirectorPrimaryEndpoint.Text = HfNemotronEndpoint.Text.Trim();
+    DirectorPrimaryServerModel.Text = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4";
+    DirectorConfigurationStatus.Text = "Hugging Face Nemotron selected. Save AI Director settings to apply. Save your Hugging Face credential in the hosted services section; generated plans still require review/apply.";
+  }
+
+  private void ApplyHuggingFaceSettings(JsonElement settings)
+  {
+    HfNamespace.Text = settings.GetProperty("namespace").GetString() ?? "";
+    HfNemotronEndpoint.Text = settings.GetProperty("nemotron_endpoint").GetString() ?? "";
+    HfHunyuanEndpoint.Text = settings.GetProperty("hunyuan_endpoint").GetString() ?? "";
+    HfWebhookUrl.Text = settings.GetProperty("webhook_url").GetString() ?? "";
+    _hfWebhookId = settings.GetProperty("webhook_id").GetString() ?? "";
+    HfServicesStatus.Text = $"Credential available: {settings.GetProperty("has_token").GetBoolean()}. Webhook secret saved: {settings.GetProperty("has_webhook_secret").GetBoolean()}. Webhook ID: {(_hfWebhookId.Length == 0 ? "not registered" : _hfWebhookId)}. Configuration does not prove inference readiness.";
+  }
+
+  private async Task SaveHuggingFaceSettingsAsync()
+  {
+    JsonObject payload = new()
+    {
+      ["namespace"] = HfNamespace.Text.Trim(),
+      ["nemotron_endpoint"] = HfNemotronEndpoint.Text.Trim(),
+      ["hunyuan_endpoint"] = HfHunyuanEndpoint.Text.Trim(),
+      ["webhook_url"] = HfWebhookUrl.Text.Trim(),
+      ["webhook_id"] = _hfWebhookId,
+      ["hf_token"] = HfToken.Password,
+      ["webhook_secret"] = HfWebhookSecret.Password,
+    };
+    ApplyHuggingFaceSettings(await _apiClient.SaveHuggingFaceServicesAsync(JsonSerializer.SerializeToElement(payload)));
+    HfToken.Password = "";
+    HfWebhookSecret.Password = "";
+  }
+
+  private async Task RunHuggingFaceActionAsync(object sender, Func<Task> action)
+  {
+    HfServicesPanel.IsEnabled = false;
+    try { await action(); }
+    catch (Exception exception) when (exception is StudioApiException or HttpRequestException or JsonException or IOException or FormatException or UnauthorizedAccessException)
+    {
+      HfServicesStatus.Text = StudioPageHelpers.GetErrorMessage(exception);
+      ShowStatus(HfServicesStatus.Text, InfoBarSeverity.Error);
+    }
+    finally { HfServicesPanel.IsEnabled = true; }
+  }
+
+  private async void LoadHuggingFace_Click(object sender, RoutedEventArgs e) =>
+      await RunHuggingFaceActionAsync(sender, async () => ApplyHuggingFaceSettings(await _apiClient.GetHuggingFaceServicesAsync()));
+
+  private async void SaveHuggingFace_Click(object sender, RoutedEventArgs e) =>
+      await RunHuggingFaceActionAsync(sender, SaveHuggingFaceSettingsAsync);
+
+  private async void DiscoverHuggingFaceMcp_Click(object sender, RoutedEventArgs e) =>
+      await RunHuggingFaceActionAsync(sender, async () =>
+      {
+        await SaveHuggingFaceSettingsAsync();
+        HfServicesStatus.Text = "Discovering MCP tools...";
+        JsonElement result = await _apiClient.DiscoverHuggingFaceMcpToolsAsync(SelectedTag(HfMcpServer, "hub"));
+        HfMcpTools.Text = result.GetProperty("url").GetString() + Environment.NewLine +
+            string.Join(Environment.NewLine, result.GetProperty("tools").EnumerateArray().Select(tool => tool.GetProperty("name").GetString()));
+        HfServicesStatus.Text = "MCP tools discovered. Discovery does not run generation or qualify inference.";
+      });
+
+  private async void RegisterHuggingFaceWebhook_Click(object sender, RoutedEventArgs e) =>
+      await RunHuggingFaceActionAsync(sender, async () =>
+      {
+        await SaveHuggingFaceSettingsAsync();
+        JsonElement result = await _apiClient.RegisterHuggingFaceWebhookAsync();
+        _hfWebhookId = result.GetProperty("id").GetString() ?? "";
+        HfServicesStatus.Text = $"Repository webhook {_hfWebhookId} registered. Check delivery in Hugging Face's webhook dashboard.";
+      });
+
+  private async void GenerateHuggingFacePreview_Click(object sender, RoutedEventArgs e) =>
+      await RunHuggingFaceActionAsync(sender, async () =>
+      {
+        FileSavePicker picker = new() { SuggestedStartLocation = PickerLocationId.VideosLibrary, SuggestedFileName = "hunyuan-studio-preview" };
+        picker.FileTypeChoices.Add("MP4 video", [".mp4"]);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, App.MainWindowInstance!.WindowHandle);
+        StorageFile? file = await picker.PickSaveFileAsync();
+        if (file is null) return;
+        await SaveHuggingFaceSettingsAsync();
+        HfServicesStatus.Text = "Generating hosted Hunyuan preview. GPU cold starts may take several minutes...";
+        JsonObject request = new() { ["prompt"] = HfPreviewPrompt.Text.Trim(), ["seed"] = 42, ["frames"] = 17, ["steps"] = 20 };
+        JsonElement result = await _apiClient.GenerateHuggingFacePreviewAsync(JsonSerializer.SerializeToElement(request));
+        await FileIO.WriteBytesAsync(file, Convert.FromBase64String(result.GetProperty("video_base64").GetString() ?? ""));
+        HfServicesStatus.Text = $"Saved {result.GetProperty("frames")} frames at {result.GetProperty("fps")} fps to {file.Path}. Import this MP4 into your project to use it in Timeline.";
+      });
 
   private async void SaveDirectorSettings_Click(object sender, RoutedEventArgs e)
   {

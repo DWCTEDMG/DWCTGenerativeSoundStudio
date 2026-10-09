@@ -3505,6 +3505,10 @@ def _generation_provider_status() -> dict[str, Any]:
     return status
 
 
+from .api.huggingface_services import create_huggingface_services_router
+
+app.include_router(create_huggingface_services_router(settings.data_dir, secrets))
+
 app.include_router(
     create_system_settings_router(
         SystemSettingsDependencies(
