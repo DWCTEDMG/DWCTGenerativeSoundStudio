@@ -29,7 +29,7 @@
                     <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource PageTitleStyle}" Text="Setup Wizard" />
                     <TextBlock
                         Style="{StaticResource PageSubtitleStyle}"
-                        Text="Verify the native client, backend runtime, storage, AI path, and FFmpeg readiness." />
+                        Text="Prepare a project, choose an AI and render route, and verify the desktop runtime before production." />
                 </StackPanel>
                 <CommandBar Grid.Column="1" Background="Transparent" DefaultLabelPosition="Right">
                     <AppBarButton
@@ -43,7 +43,33 @@
 
             <InfoBar x:Name="SetupInfoBar" Grid.Row="1" IsClosable="True" IsOpen="False" />
 
-            <Grid x:Name="SetupGrid" Grid.Row="2" ColumnSpacing="14" RowSpacing="14">
+            <StackPanel Grid.Row="2" Spacing="14">
+                <Border Padding="20" Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Your next step" />
+                        <TextBlock x:Name="NextStepText" Text="Checking the managed backend and Studio capabilities..." TextWrapping="Wrap" />
+                        <Button x:Name="NextStepButton" Content="Open Workspace" Tag="workspace" Click="NavigateSetup_Click" HorizontalAlignment="Left" Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
+                </Border>
+                <Border Padding="20" Style="{StaticResource StudioCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Production setup" />
+                        <TextBlock Text="1 · Create a project, import audio, analyze it, and review the AI plan in Workspace." TextWrapping="Wrap" />
+                        <TextBlock Text="2 · Choose local or hosted AI in Settings; check installed models and licensing in Models. Optional providers are not required for the core workflow." TextWrapping="Wrap" />
+                        <TextBlock Text="3 · Confirm render route and acceleration in Render, then preview and assemble outputs. Timeline and audio preview are available in the native Studio." TextWrapping="Wrap" />
+                        <TextBlock Text="4 · For distribution, verify the packaged backend, FFmpeg and model redistribution rights, signing, clean-machine install, and real-device media output. Setup checks do not certify a production release." TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Workspace" Tag="workspace" Click="NavigateSetup_Click" />
+                            <Button Content="Settings" Tag="settings" Click="NavigateSetup_Click" />
+                            <Button Content="Models" Tag="models" Click="NavigateSetup_Click" />
+                            <Button Content="Render" Tag="render" Click="NavigateSetup_Click" />
+                            <Button Content="Forge" Tag="studioForge" Click="NavigateSetup_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <Grid x:Name="SetupGrid" Grid.Row="3" ColumnSpacing="14" RowSpacing="14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
@@ -60,7 +86,7 @@
                     Padding="20"
                     Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="9">
-                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Readiness" />
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Runtime diagnostics" />
                         <ProgressRing x:Name="SetupProgress" Width="24" Height="24" HorizontalAlignment="Left" AutomationProperties.Name="Loading setup readiness" IsActive="False" />
                         <TextBlock x:Name="BackendReadinessText" Text="Backend: checking" TextWrapping="Wrap" />
                         <TextBlock x:Name="BundleReadinessText" Text="Backend bundle: checking" TextWrapping="Wrap" />
@@ -139,7 +165,7 @@
                     Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Native workflow status" />
-                        <TextBlock Text="Current coverage" FontWeight="SemiBold" />
+                        <TextBlock Text="Native workflow coverage" FontWeight="SemiBold" />
                         <TextBlock Text="Backend lifecycle, project management, workspace and timeline editing, render queue, review, output preview, models, settings, Director, Planner, Reactive Lab, Cloud, and Studio Forge are reachable in the native shell." TextWrapping="Wrap" />
                         <TextBlock Text="Setup operations remain Python-owned" FontWeight="SemiBold" />
                         <TextBlock Text="The native client invokes the supported setup API and reports its task progress. Install and dependency logic is not duplicated in C#." TextWrapping="Wrap" />
@@ -216,8 +242,8 @@
                     Style="{StaticResource StudioCardStyle}">
                     <StackPanel Spacing="14">
                         <StackPanel Spacing="3">
-                            <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Supported setup actions" />
-                            <TextBlock Foreground="{ThemeResource StudioMutedTextBrush}" Text="Choose a runtime profile, model, and ComfyUI endpoint. Actions queue work in the Python setup service and can be canceled above." TextWrapping="Wrap" />
+                            <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource SectionTitleStyle}" Text="Runtime repair and optional compatibility tools" />
+                            <TextBlock Foreground="{ThemeResource StudioMutedTextBrush}" Text="Use these actions only when diagnostics identify a missing component. Ollama and ComfyUI are optional routes; the Python setup service owns installs and reports progress above." TextWrapping="Wrap" />
                         </StackPanel>
                         <Grid x:Name="ActionColumns" ColumnSpacing="14" RowSpacing="14">
                             <Grid.ColumnDefinitions>

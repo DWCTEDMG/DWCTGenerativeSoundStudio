@@ -51,6 +51,7 @@ public sealed partial class StudioForgePage : Page
     }
     catch (Exception ex)
     {
+      SetNextAction("Forge could not read the current backend or project state. Check the connection in Setup, then refresh.", "Open Setup", "setup");
       ShowStatus(StudioPageHelpers.GetErrorMessage(ex), InfoBarSeverity.Error);
     }
     finally
@@ -98,6 +99,7 @@ public sealed partial class StudioForgePage : Page
     string projectId = App.Services.Session.ActiveProjectId;
     if (string.IsNullOrWhiteSpace(projectId))
     {
+      SetNextAction("Start in Workspace: create or select a project and import an audio track.", "Open Workspace", "workspace");
       ProjectIdentityTextBlock.Text = "No active project selected.";
       ProjectSummaryTextBlock.Text =
           "Select or create a project in Workspace to inspect its Forge readiness.";
@@ -131,11 +133,32 @@ public sealed partial class StudioForgePage : Page
     (JsonElement Value, string? Error) liveCue = await liveCueTask;
 
     ProjectIdentityTextBlock.Text = $"{project.Name} · {project.Id}";
+    int artifactCount = StudioOutputCatalog.CountArtifacts(outputs);
+    if (!project.HasAudio)
+    {
+      SetNextAction("Import audio into this project. Forge needs a source track before analysis and planning.", "Import audio in Workspace", "workspace");
+    }
+    else if (!project.HasAnalysis)
+    {
+      SetNextAction("Analyze the audio to create reusable timing and structure for the plan.", "Analyze in Workspace", "workspace");
+    }
+    else if (!project.HasPlan)
+    {
+      SetNextAction("Create and review a plan; choose a provider and keep the draft editable before render.", "Open AI Planner", "plannerLab");
+    }
+    else if (artifactCount == 0)
+    {
+      SetNextAction("Your plan is ready for a render profile and generation job. Check Models if a provider is unavailable.", "Configure Render", "render");
+    }
+    else
+    {
+      SetNextAction("Generated media is available. Review the cut and continuity, then inspect or export the final output.", "Open Review", "review");
+    }
     StringBuilder summary = new StringBuilder()
             .AppendLine($"Audio:    {ReadyLabel(project.HasAudio)}")
             .AppendLine($"Analysis: {ReadyLabel(project.HasAnalysis)}")
             .AppendLine($"Plan:     {ReadyLabel(project.HasPlan)}")
-            .AppendLine($"Outputs:  {StudioOutputCatalog.CountArtifacts(outputs)} artifact(s)")
+            .AppendLine($"Outputs:  {artifactCount} artifact(s)")
             .Append($"Jobs:     {jobs.Jobs.Count(job => string.Equals(job.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))} tracked");
     ProjectSummaryTextBlock.Text = summary.ToString();
 
@@ -189,6 +212,13 @@ public sealed partial class StudioForgePage : Page
   {
     RuntimeProgressRing.IsActive = isBusy;
     StudioPageHelpers.SetControlsEnabled(this, !isBusy);
+  }
+
+  private void SetNextAction(string message, string buttonLabel, string destination)
+  {
+    NextActionTextBlock.Text = message;
+    NextActionButton.Content = buttonLabel;
+    NextActionButton.Tag = destination;
   }
 
   private void ShowStatus(string message, InfoBarSeverity severity)
