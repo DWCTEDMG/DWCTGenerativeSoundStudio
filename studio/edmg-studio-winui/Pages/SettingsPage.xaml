@@ -50,12 +50,10 @@
                         </CommandBar>
                     </StackPanel>
                 </Expander>
-                <Expander x:Name="HfServicesPanel" Header="Hugging Face - hosted models, MCP and webhooks" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                <Expander x:Name="HfServicesPanel" Header="Hugging Face Spaces MCP" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <StackPanel Spacing="10">
-                        <TextBlock Text="Use hosted inference without downloading model weights. Dedicated endpoints incur running GPU charges; ZeroGPU Spaces use request quotas. Paused Spaces must be resumed in Hugging Face before MCP tools can respond." TextWrapping="Wrap" />
+                        <TextBlock Text="Connect to your ZeroGPU Spaces through MCP. Spaces use request quotas and must be running before tools can respond." TextWrapping="Wrap" />
                         <TextBox x:Name="HfNamespace" Header="Hugging Face account or organization" Text="gulle1155" />
-                        <TextBox x:Name="HfNemotronEndpoint" Header="Nemotron Space or dedicated endpoint (including /v1)" Text="https://gulle1155-nemotron-3-nano-omni-zerogpu.hf.space/v1" />
-                        <TextBox x:Name="HfHunyuanEndpoint" Header="HunyuanVideo 1.5 Space or dedicated endpoint" Text="https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space" />
                         <PasswordBox x:Name="HfToken" Header="Hugging Face token (empty keeps saved credential)" />
                         <TextBlock Text="Credentials use the backend's protected secret store. Studio can also use hf auth login or EDMG_HF_TOKEN. Codex's OAuth connection is separate from Studio authentication." TextWrapping="Wrap" Opacity="0.72" />
                         <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
@@ -63,7 +61,6 @@
                             <AppBarButton Label="Save connections" Icon="Save" Click="SaveHuggingFace_Click" />
                         </CommandBar>
                         <ComboBox x:Name="HfMcpServer" Header="MCP connection" SelectedIndex="0" AutomationProperties.AutomationId="HfMcpServer">
-                            <ComboBoxItem Content="Hugging Face Hub" Tag="hub" />
                             <ComboBoxItem Content="Hunyuan ZeroGPU Space" Tag="hunyuan" />
                             <ComboBoxItem Content="Nemotron ZeroGPU Space" Tag="nemotron" />
                             <ComboBoxItem Content="Cosmos Reason2 ZeroGPU Space" Tag="cosmos" />
@@ -71,15 +68,7 @@
                         <Button Content="Use Cosmos ZeroGPU for Director specialist" Click="UseHuggingFaceCosmos_Click" HorizontalAlignment="Left" />
                         <Button Content="Discover MCP tools" Click="DiscoverHuggingFaceMcp_Click" AutomationProperties.AutomationId="HfDiscoverMcp" HorizontalAlignment="Left" />
                         <TextBox x:Name="HfMcpTools" Header="MCP discovery results" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="220" />
-                        <TextBox x:Name="HfPreviewPrompt" Header="Hunyuan hosted preview description" Text="A glowing blue sculpture on a dark concert stage, slow cinematic camera movement" TextWrapping="Wrap" />
-                        <Button Content="Generate and save short Hunyuan MP4" Click="GenerateHuggingFacePreview_Click" AutomationProperties.AutomationId="HfGeneratePreview" HorizontalAlignment="Left" />
-                        <TextBlock Text="Preview uses 17 frames, 20 steps and seed 42. Save the MP4 and import it into Studio to use it in Timeline." TextWrapping="Wrap" Opacity="0.72" />
-                        <TextBox x:Name="HfWebhookUrl" Header="Repository webhook receiver (HTTPS)" PlaceholderText="https://your-service.example/hooks/huggingface" />
-                        <PasswordBox x:Name="HfWebhookSecret" Header="Webhook secret (ASCII; empty keeps saved secret)" />
-                        <TextBlock Text="Register watches the two demo Spaces and the Hunyuan handler repository for Repo update events. Your receiver must validate X-Webhook-Secret. The MCP URL is not a receiver." TextWrapping="Wrap" />
-                        <Button Content="Register or update repository webhook" Click="RegisterHuggingFaceWebhook_Click" AutomationProperties.AutomationId="HfRegisterWebhook" HorizontalAlignment="Left" />
                         <HyperlinkButton Content="Manage Spaces and resume paused demos" NavigateUri="https://huggingface.co/gulle1155" />
-                        <HyperlinkButton Content="Manage Hugging Face webhooks" NavigateUri="https://huggingface.co/settings/webhooks" />
                         <TextBlock x:Name="HfServicesStatus" Text="Load connections to inspect saved configuration. Availability requires a live check." TextWrapping="Wrap" AutomationProperties.AutomationId="HfServicesStatus" />
                     </StackPanel>
                 </Expander>
@@ -125,26 +114,18 @@
                             <ComboBoxItem Content="Advanced" Tag="advanced" />
                         </ComboBox>
                         <TextBox Header="Primary Director" Text="NVIDIA Nemotron 3 Nano Omni 30B-A3B Reasoning" IsReadOnly="True" />
-                        <TextBlock Text="Download the Nemotron BF16 Director from Models for local use, use NVIDIA hosting, or connect to your own compatible server. These are execution choices for the same Director model." TextWrapping="Wrap" />
+                        <TextBlock Text="Use the downloaded NVIDIA Director locally, or select its ZeroGPU Space connection. Generated plans remain drafts until review and apply." TextWrapping="Wrap" />
                         <ComboBox x:Name="DirectorPrimaryExecution" Header="Nemotron execution" SelectedIndex="0" AutomationProperties.AutomationId="DirectorPrimaryExecution">
                             <ComboBoxItem Content="Local model (download in Models)" Tag="local" />
-                            <ComboBoxItem Content="Hosted model (NVIDIA or another compatible server)" Tag="server" />
+                            <ComboBoxItem Content="Studio connection (Space or local WSL runtime)" Tag="server" />
                         </ComboBox>
-                        <Button Content="Use NVIDIA-hosted Nemotron" Click="UseNvidiaHostedNemotron_Click" AutomationProperties.AutomationId="DirectorUseNvidiaHosted" HorizontalAlignment="Left" />
-                        <Button Content="Use Hugging Face Nemotron endpoint" Click="UseHuggingFaceNemotron_Click" AutomationProperties.AutomationId="DirectorUseHuggingFace" HorizontalAlignment="Left" />
-                        <TextBox x:Name="DirectorPrimaryEndpoint" Header="Nemotron server base URL (including /v1)" PlaceholderText="https://integrate.api.nvidia.com/v1" />
-                        <TextBox x:Name="DirectorPrimaryServerModel" Header="Nemotron model ID served by the endpoint" />
-                        <TextBlock Text="For hosting elsewhere, enter that server's OpenAI-compatible base URL and its served model ID. Click Save AI Director settings to apply your choice. Local downloads remain available when you switch hosting." TextWrapping="Wrap" Opacity="0.72" />
-                        <TextBlock Text="NVIDIA-hosted execution uses the existing NVIDIA API key. Custom servers use EDMG_NEMOTRON_API_KEY when authentication is required. Switching to local keeps these server settings." TextWrapping="Wrap" Opacity="0.72" />
+                        <Button Content="Use Nemotron ZeroGPU Space" Click="UseHuggingFaceNemotron_Click" AutomationProperties.AutomationId="DirectorUseHuggingFace" HorizontalAlignment="Left" />
                         <CheckBox x:Name="DirectorSpecialistEnabled" Content="Enable Cosmos Reason2 specialist" IsChecked="True" />
                         <TextBox Header="Advanced visual specialist" Text="NVIDIA Cosmos Reason2 8B (managed in Models)" IsReadOnly="True" />
                         <ComboBox x:Name="DirectorSpecialistExecution" Header="Cosmos execution" SelectedIndex="0" AutomationProperties.AutomationId="DirectorSpecialistExecution">
                             <ComboBoxItem Content="Local managed model (keep installed catalog)" Tag="local" />
-                            <ComboBoxItem Content="Server endpoint (OpenAI-compatible / NIM)" Tag="server" />
+                            <ComboBoxItem Content="Studio connection (Space or local WSL runtime)" Tag="server" />
                         </ComboBox>
-                        <TextBox x:Name="DirectorSpecialistEndpoint" Header="Cosmos server base URL (including /v1)" PlaceholderText="https://integrate.api.nvidia.com/v1" />
-                        <TextBox x:Name="DirectorSpecialistServerModel" Header="Cosmos model ID served by the endpoint" />
-                        <TextBlock Text="Use a deployed Cosmos reasoning endpoint; availability depends on the server. Custom servers use EDMG_COSMOS_API_KEY. This is specialist planning evidence, not a Cosmos video-generation endpoint." TextWrapping="Wrap" Opacity="0.72" />
                         <ComboBox x:Name="DirectorSpecialistRouting" Header="Specialist routing" SelectedIndex="0">
                             <ComboBoxItem Content="Automatic" Tag="automatic" />
                             <ComboBoxItem Content="Always for video" Tag="always_video" />

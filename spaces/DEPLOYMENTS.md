@@ -36,12 +36,14 @@ Hub repository-update webhooks require a receiving HTTPS URL. Native Studio Sett
 
 ## Native Studio usage
 
-1. Open **Settings and cloud > Hugging Face - hosted models, MCP and webhooks**. Saved settings load when the page opens; **Load connections** reloads them.
-2. Save a Hugging Face token in the protected credential field, or use the backend machine's `hf auth login` / `EDMG_HF_TOKEN`. Empty password fields preserve saved credentials. Codex OAuth does not automatically authenticate the Studio backend.
-3. Select Hub, Hunyuan, Nemotron or Cosmos and choose **Discover MCP tools**. This performs an MCP initialize/session negotiation and tools/list call. It does not execute arbitrary tools or authorize generation.
-4. In **AI Director**, choose **Use Hugging Face Nemotron endpoint**, then **Save AI Director settings**. The button selects BF16 for a Space URL and NVFP4 for a dedicated endpoint. Use **Use Cosmos ZeroGPU for Director specialist** to populate the specialist connection, then save AI Director settings. The existing protected HF credential authenticates both. Plans still pass review/apply.
-5. Use **Generate and save short Hunyuan MP4** for a 17-frame, 20-step hosted preview. Select a destination before generation. Import the saved video into a project using Studio's existing media workflow.
-6. For repo notifications, enter your receiving HTTPS URL and ASCII secret, then **Register or update repository webhook**. The returned ID is persisted so later updates reuse the registration. No public Studio webhook receiver is created automatically.
+Native Settings now shows **Hugging Face Spaces MCP**. Dedicated endpoint fields, NVIDIA endpoint presets, webhook registration controls, and the separate hosted-preview form have been removed from the native UI at the user's request. Existing cloud resources are separate from these UI options.
+
+1. Open Settings > Hugging Face Spaces MCP and load connections.
+2. Save a Hugging Face token in the protected credential field. Empty fields preserve saved credentials; Codex OAuth is separate.
+3. Choose Hunyuan, Nemotron, or Cosmos and discover MCP tools. Discovery does not execute generation.
+4. Select a ZeroGPU Space preset for Director or use the downloaded local NVIDIA runtime. Save AI Director settings; generated direction remains subject to review/apply.
+
+Legacy backend routes remain compatible with existing clients; endpoint and webhook configuration is no longer offered by the native Settings page.
 
 Backend routes are under `/v1/huggingface`: GET/POST `settings`, GET `mcp/{hub|hunyuan|nemotron|cosmos}/tools`, POST `webhook`, POST `hunyuan/preview`. Endpoint URLs are restricted to HTTPS Hugging Face endpoint or Space hosts before receiving stored credentials; redirects are disabled. Token candidates rejected with 401 are skipped. Successful settings and webhook responses never return credential values.
 
