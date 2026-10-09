@@ -5296,6 +5296,10 @@ def _refine_video_model_prompt(
 ) -> str:
     fallback = prompt or DEFAULT_RENDER_PROMPT
     engine_value = str(engine or settings.video_model_engine or "").strip().lower()
+    if engine_value == "hunyuan_video15":
+        # Hunyuan uses an LLM text encoder. Keep the reviewed scene narrative,
+        # including deliberate stops, instead of rebuilding it for SD1.5 CLIP.
+        return fallback.strip()
     if engine_value == "ltx_25":
         base_prompt = fallback.strip()
         if not bool(settings.video_model_prompt_refine):

@@ -480,6 +480,17 @@ public sealed partial class SettingsPage : Page
   private string _directorSpecialistEndpoint = "";
   private string _directorSpecialistServerModel = "";
 
+  private void UseLocalNvidiaDirector_Click(object sender, RoutedEventArgs e)
+  {
+    SelectComboValue(DirectorPrimaryExecution, "server");
+    SelectComboValue(DirectorSpecialistExecution, "server");
+    _directorPrimaryEndpoint = "http://127.0.0.1:8011/nemotron/v1";
+    _directorPrimaryServerModel = "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16";
+    _directorSpecialistEndpoint = "http://127.0.0.1:8011/cosmos/v1";
+    _directorSpecialistServerModel = "nvidia/Cosmos-Reason2-8B";
+    DirectorConfigurationStatus.Text = "Local NVIDIA WSL runtime selected for Nemotron and Cosmos. Save AI Director settings to apply. The runtime must be started and model downloads complete before inference; plans still require review/apply.";
+  }
+
   private void UseHuggingFaceNemotron_Click(object sender, RoutedEventArgs e)
   {
     SelectComboValue(DirectorPrimaryExecution, "server");

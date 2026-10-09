@@ -46,6 +46,10 @@ def _endpoint(value: Any) -> str:
         return ""
     if not valid or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return ""
+    # Director endpoints are OpenAI base URLs. HF dashboards copy the host
+    # alone; without this suffix the adapter posts to /chat/completions (404).
+    if parsed.hostname.endswith((".endpoints.huggingface.cloud", ".hf.space")) and parsed.path in {"", "/"}:
+        endpoint += "/v1"
     return endpoint
 
 

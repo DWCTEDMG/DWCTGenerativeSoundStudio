@@ -120,6 +120,7 @@
                             <ComboBoxItem Content="Studio connection (Space or local WSL runtime)" Tag="server" />
                         </ComboBox>
                         <Button Content="Use Nemotron ZeroGPU Space" Click="UseHuggingFaceNemotron_Click" AutomationProperties.AutomationId="DirectorUseHuggingFace" HorizontalAlignment="Left" />
+                        <Button Content="Use local NVIDIA models in WSL" Click="UseLocalNvidiaDirector_Click" AutomationProperties.AutomationId="DirectorUseLocalNvidia" HorizontalAlignment="Left" />
                         <CheckBox x:Name="DirectorSpecialistEnabled" Content="Enable Cosmos Reason2 specialist" IsChecked="True" />
                         <TextBox Header="Advanced visual specialist" Text="NVIDIA Cosmos Reason2 8B (managed in Models)" IsReadOnly="True" />
                         <ComboBox x:Name="DirectorSpecialistExecution" Header="Cosmos execution" SelectedIndex="0" AutomationProperties.AutomationId="DirectorSpecialistExecution">

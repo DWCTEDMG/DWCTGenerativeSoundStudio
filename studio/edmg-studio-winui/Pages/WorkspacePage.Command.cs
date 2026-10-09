@@ -260,16 +260,16 @@ public sealed partial class WorkspacePage
           await LoadSelectedProjectAsync(projectId, token);
           if (internalModel)
           {
-            CommandStatus.Text = "Baseline ready. Checking Qwen readiness";
+            CommandStatus.Text = "Baseline ready. Checking Director availability";
             JsonElement readiness = await App.Services.ApiClient.GetDirectorReadinessAsync(
                       projectId, "automatic", "automatic", token, directorModel);
             JsonElement director = readiness.GetProperty("director");
             if (!director.GetProperty("ready").GetBoolean())
             {
               string reason = director.TryGetProperty("reason", out JsonElement reasonValue)
-                        ? reasonValue.GetString() ?? "The selected Qwen runtime is unavailable."
-                        : "The selected Qwen runtime is unavailable.";
-              CommandStatus.Text = $"Baseline draft ready. Qwen was not run: {reason}";
+                        ? reasonValue.GetString() ?? "The selected Director runtime is unavailable."
+                        : "The selected Director runtime is unavailable.";
+              CommandStatus.Text = $"Baseline draft ready. Director was not run: {reason}";
               CommandProgress.Value = 100;
               ShowStatus("Baseline draft retained", reason, InfoBarSeverity.Warning);
               return;
@@ -277,7 +277,7 @@ public sealed partial class WorkspacePage
 
             try
             {
-              CommandStatus.Text = "Queuing Qwen direction";
+              CommandStatus.Text = "Queuing Director direction";
               string instruction = string.Join("\n", new[] { brief, style is null ? null : "Visual style: " + style }
                         .Where(value => !string.IsNullOrWhiteSpace(value)));
               if (instruction.Length == 0)
@@ -303,7 +303,7 @@ public sealed partial class WorkspacePage
             }
             catch (Exception error) when (error is HttpRequestException or InvalidOperationException)
             {
-              CommandStatus.Text = $"Baseline draft ready. Qwen stopped: {error.Message}";
+              CommandStatus.Text = $"Baseline draft ready. Director stopped: {error.Message}";
               CommandProgress.Value = 100;
               ShowStatus("Baseline draft retained", error.Message, InfoBarSeverity.Warning);
             }
