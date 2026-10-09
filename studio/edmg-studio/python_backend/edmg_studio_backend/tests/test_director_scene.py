@@ -524,4 +524,23 @@ def test_workflow_recovers_exact_context_and_reviewed_job_after_restart(tmp_path
         assert reviewed.json()["director_job"]["reviewed_job_id"] == job.id
         assert reviewed.json()["director_job"]["status"] == "reviewed"
         assert client.get(workflow_path).json()["director_job"]["status"] == "reviewed"
+        applied = client.post(
+            f"/v1/projects/{project.id}/director/drafts/{job.id}/apply",
+            json={"expected_revision": reviewed.json()["revision"]},
+        )
+        assert applied.status_code == 200, applied.text
+        workspace = client.get(workflow_path).json()
+        workspace_review = client.post(
+            workflow_path + "/review",
+            json={"expected_revision": workspace["revision"],
+                  "draft_id": workspace["draft"]["draft_id"]},
+        )
+        assert workspace_review.status_code == 200, workspace_review.text
+        workspace_apply = client.post(
+            workflow_path + "/apply",
+            json={"expected_revision": workspace_review.json()["revision"],
+                  "draft_id": workspace_review.json()["draft"]["draft_id"]},
+        )
+        assert workspace_apply.status_code == 200, workspace_apply.text
+        assert workspace_apply.json()["status"] == "applied"
     restarted_jobs.close()

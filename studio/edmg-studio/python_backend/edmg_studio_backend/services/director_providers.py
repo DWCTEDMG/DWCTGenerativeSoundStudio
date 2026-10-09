@@ -277,7 +277,7 @@ def _local_transformers_json(
         raise ValueError(f"Managed Director model is incomplete: {path}")
     try:
         import torch
-        from transformers import AutoModel, AutoModelForCausalLM, AutoProcessor
+        from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
     except ImportError as exc:
         raise RuntimeError("The Studio CUDA Transformers runtime is not installed") from exc
 
@@ -291,10 +291,15 @@ def _local_transformers_json(
         "torch_dtype": torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         "low_cpu_mem_usage": True,
     }
-    try:
-        model = AutoModel.from_pretrained(str(path), **load_options).eval()
-    except (ValueError, TypeError):
-        model = AutoModelForCausalLM.from_pretrained(str(path), **load_options).eval()
+    config = AutoConfig.from_pretrained(str(path), trust_remote_code=True, local_files_only=True)
+    if config.model_type == "qwen3_vl":
+        # Cosmos Reason2 needs the language-generation head, not the bare VL backbone.
+        model = AutoModelForImageTextToText.from_pretrained(str(path), **load_options).eval()
+    else:
+        try:
+            model = AutoModel.from_pretrained(str(path), **load_options).eval()
+        except (ValueError, TypeError):
+            model = AutoModelForCausalLM.from_pretrained(str(path), **load_options).eval()
     inputs = processor.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True,
         return_dict=True, return_tensors="pt",

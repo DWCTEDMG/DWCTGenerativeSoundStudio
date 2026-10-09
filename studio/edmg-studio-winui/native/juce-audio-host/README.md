@@ -29,15 +29,19 @@ Current native behavior includes shared-mode output-device enumeration/configura
 transport configuration, immutable prepared-Timeline snapshots, monotonically increasing revisions,
 play/stop/seek/loop commands, sample-position status, deterministic bounded render probes, and a
 128-sample crossfade when a new snapshot is published at an audio callback boundary. Timeline sources
-carry embedded stereo float32 PCM solely for deterministic proof and tests.
+use authorized file-backed WAV/AIFF readers for production-size prepared media; embedded stereo
+float32 PCM remains available for bounded deterministic proof and tests. Native Timeline source
+routes explicit JUCE selection through host/device setup and prepared snapshots, sends transport
+commands, queries sample position, and returns to AudioGraph on startup/preparation failure.
 
 ## Qualification boundary
 
-Do not describe this host as complete production playback. Protocol messages are capped at 1 MiB, so
-full songs require file-backed or memory-mapped prepared media. The native graph still needs canonical
+Do not describe this host as complete production playback. Protocol messages are capped at 1 MiB;
+file-backed media avoids sending full songs through that control channel. The native graph still needs canonical
 mixer/bus/send/automation/VST3/latency/meter projection and shared preview/bounce behavior. WinUI
-playhead, video, scrubbing, Reactive Lab, and render handoff must follow the JUCE sample clock when it
-owns playback. Host crashes, device loss, plugin hangs, and rejected revisions need tested safe fallback
+playhead/video sample-position integration is present, but scrubbing, Reactive Lab, and render handoff
+need complete synchronization qualification when JUCE owns playback. Host crashes, device loss,
+plugin hangs, and rejected revisions need tested safe fallback
 without simultaneous device ownership or project mutation.
 
 Deterministic renders validate DSP behavior only. They do not establish WASAPI continuity, callback
