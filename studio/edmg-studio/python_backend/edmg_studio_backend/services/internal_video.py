@@ -80,7 +80,7 @@ class InternalVideoSettings:
     negative_prompt: str = (
         "blurry, low quality, watermark, text, logo, collage, contact sheet, "
         "split screen, multi-panel composition, comic panels, tiled image, storyboard sheet, mosaic, "
-        "duplicate subject, multiple people, extra person, cloned subject"
+        "duplicate subject, cloned subject"
     )
     model_id: str = "hf_sd15_internal"
     loras: tuple[dict[str, Any], ...] = field(default_factory=tuple)
@@ -2923,8 +2923,6 @@ def _negative_prompt_for_frame(
         "storyboard sheet",
         "mosaic",
         "duplicate subject",
-        "multiple people",
-        "extra person",
         "cloned subject",
     )
     lowered = resolved.lower()

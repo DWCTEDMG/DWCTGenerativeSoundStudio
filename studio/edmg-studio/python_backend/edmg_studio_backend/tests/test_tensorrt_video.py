@@ -1489,8 +1489,9 @@ def test_internal_negative_prompt_rejects_spatial_storyboard_layouts() -> None:
     assert "multi-panel composition" in negative
     assert "storyboard sheet" in negative
     assert "duplicate subject" in negative
-    assert "multiple people" in negative
-    assert "extra person" in negative
+    # Layout protection must allow intentionally authored crowds and processions.
+    assert "multiple people" not in negative
+    assert "extra person" not in negative
     assert "cloned subject" in negative
 
 
