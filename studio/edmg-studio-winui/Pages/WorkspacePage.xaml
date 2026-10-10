@@ -155,7 +155,7 @@
                             </ComboBox>
                             <ComboBox x:Name="CommandDirectorModel" Header="Director listening model" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="CommandDirectorModel_SelectionChanged">
                                 <ComboBoxItem Content="Automatic (Nemotron Omni default)" Tag="" />
-                                <ComboBoxItem Content="Nemotron 3 Nano Omni 30B-A3B Reasoning · BF16" Tag="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16" />
+                                <ComboBoxItem Content="Nemotron 3 Nano Omni 30B-A3B Reasoning · BF16" Tag="hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16" />
                                 <ComboBoxItem Content="Qwen3-Omni-30B-A3B Thinking · audio native" Tag="hf_qwen3_omni_30b_a3b_thinking_director" />
                                 <ComboBoxItem Content="Qwen2.5-Omni-7B · audio-native fallback" Tag="hf_qwen25_omni_7b_director" />
                                 <ComboBoxItem Content="Qwen3-VL-8B Q4_K_M + Q8 projector" Tag="hf_qwen3_vl_8b_gguf_director" />

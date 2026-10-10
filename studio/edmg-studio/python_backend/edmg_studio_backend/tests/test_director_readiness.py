@@ -225,3 +225,49 @@ def test_workspace_readiness_route_returns_project_revision_and_actionable_block
     assert payload["renderer"]["model_id"] == HUNYUAN_MODEL_ID
     assert payload["ready"] is False
     assert payload["actions"]
+
+
+@pytest.mark.parametrize("model_id", [
+    None,
+    "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16",
+    "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+    "custom-served-model",
+])
+def test_nemotron_readiness_accepts_catalog_legacy_and_server_ids(tmp_path, model_id):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Nemotron routing")
+    app = FastAPI()
+    app.include_router(create_director_router(
+        lambda: store,
+        get_runtime_settings=lambda: {
+            "primary_provider": "nemotron", "primary_execution": "server",
+            "primary_endpoint": "http://localhost:8081/v1",
+            "primary_server_model": "custom-served-model",
+        },
+    ))
+    with TestClient(app) as client:
+        response = client.get(f"/v1/projects/{project.id}/director/readiness",
+                              params={} if model_id is None else {"model_id": model_id})
+    assert response.status_code == 200, response.text
+    director = response.json()["director"]
+    assert director["engine"] == "nemotron_server"
+    assert director["model_id"] == "custom-served-model"
+    assert director["ready"]
+    assert director["inference_verified"] is False
+
+
+@pytest.mark.parametrize("model_id", [
+    "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16",
+    "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+])
+def test_explicit_nemotron_overrides_qwen_default_for_generation(model_id):
+    from edmg_studio_backend.api.director import _director_provider
+    assert _director_provider(model_id, {"primary_provider": "qwen"}) == "nemotron"
+
+
+def test_explicit_qwen_keeps_compatibility_and_unknown_models_remain_rejected():
+    from edmg_studio_backend.api.director import _director_provider
+    assert _director_provider(STANDARD_DIRECTOR_MODEL_ID, {"primary_provider": "nemotron"}) == "qwen"
+    assert _director_provider(None, {"primary_provider": "qwen"}) == "qwen"
+    with pytest.raises(ValueError, match="Unsupported internal Director model"):
+        resolve_director_readiness(director_model_id="untrusted-model")

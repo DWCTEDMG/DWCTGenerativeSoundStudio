@@ -28,9 +28,21 @@ from ..domain.editor_commands import digest
 from ..revisions import RevisionRoute, revision_context
 from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID
 from ..services.qwen_director import validate_proposal
+from ..domain.director_plan import NEMOTRON_MODEL_ID
 
 NEMOTRON_CATALOG_ID = "hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16"
 COSMOS_REASON2_CATALOG_ID = "hf_cosmos_reason2_8b"
+
+
+def _director_provider(model_id: str | None, settings: dict, provider: str = "automatic") -> str:
+    """Resolve explicit model choices consistently for readiness and generation."""
+    if model_id and model_id.startswith("hf_qwen"):
+        return "qwen"
+    if model_id and model_id in {
+        NEMOTRON_CATALOG_ID, NEMOTRON_MODEL_ID, settings.get("primary_server_model"),
+    }:
+        return "nemotron"
+    return str(settings.get("primary_provider") or "nemotron").strip().lower() if provider == "automatic" else provider
 
 
 class DirectorUpdate(BaseModel):
@@ -144,9 +156,11 @@ def create_director_router(
         if project is None:
             raise HTTPException(404, "Project not found")
         settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
-        nemotron = bool(settings) and model_id in {
-            None, NEMOTRON_CATALOG_ID, settings.get("primary_server_model"),
-        }
+        nemotron = bool(settings) and _director_provider(model_id, settings) == "nemotron" and (
+            model_id is None or model_id in {
+                NEMOTRON_CATALOG_ID, NEMOTRON_MODEL_ID, settings.get("primary_server_model"),
+            }
+        )
         try:
             result = resolve_director_readiness(
                 hardware_profile(),
@@ -213,10 +227,7 @@ def create_director_router(
         readiness_snapshot = None
         hardware = hardware_profile() if get_hardware is not None else {}
         runtime_settings = dict(get_runtime_settings() or {}) if get_runtime_settings is not None else {}
-        configured_provider = str(runtime_settings.get("primary_provider") or "nemotron").strip().lower()
-        provider = request.provider if request.provider != "automatic" else configured_provider
-        if request.model_id and request.model_id.startswith("hf_qwen"):
-            provider = "qwen"
+        provider = _director_provider(request.model_id, runtime_settings, request.provider)
         if provider == "nemotron":
             server = runtime_settings.get("primary_execution") == "server"
             model_id = str(runtime_settings.get("primary_server_model") or "") if server else NEMOTRON_CATALOG_ID
