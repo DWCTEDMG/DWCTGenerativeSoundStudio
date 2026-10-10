@@ -173,4 +173,8 @@ Repository changes: noninteractive WSL GPU inventory uses the absolute NVIDIA br
 
 **Qualification remains pending:** task `0d0b138c` was last observed running in pipeline weight loading, with no error. The user then requested leaving work running and committing/pushing. No fresh motion-qualified smoke receipt or completed project render is claimed. An old model receipt is historical evidence only. Separate unfinished Lightning/Transformers dependency edits are preserved and excluded from this WSL commit. Implementer section preserved.
 
+
+
+**Follow-up UTC 2026-10-10T13:34Z:** On the user's leave-running/push request, both the prior backend and Linux worker were absent. WSL cold-started with its existing NAT fallback. Restarted the Windows backend using the saved CUDA environment/current source: server PID 21028, health OK/version 1.2.0. Started replacement qualification task 9741eb50; status running. Final ordinary inventory reports all three Windows/WSL GPU mappings and correctly leaves runtime qualification false until a fresh successful receipt. WSL implementation commit 2a36c25f3ff6fc7755588b5caf45aa1e8fcbb53c was pushed and remote-verified on default codex/Unified. The user requested leaving the test running; project render qualification is still pending.
+
 <!-- REVIEWER-UPDATE-END -->
