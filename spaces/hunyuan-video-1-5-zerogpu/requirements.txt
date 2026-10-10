@@ -1,5 +1,5 @@
-torch==2.10.0
-torchvision==0.25.0
+torch==2.13.0
+torchvision==0.28.0
 diffusers>=0.36.0,<0.40
 transformers>=5,<6
 accelerate>=1.10

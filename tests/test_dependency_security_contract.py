@@ -21,6 +21,45 @@ from packaging.version import Version
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("name,floor", [("werkzeug", "3.1.9"), ("mako", "1.4.2"), ("multidict", "6.9.1")])
+def test_backend_transitive_security_floors(name, floor):
+    lock = tomllib.loads((ROOT / "studio/edmg-studio/python_backend/uv.lock").read_text(encoding="utf-8"))
+    versions = [p["version"] for p in lock["package"] if p["name"] == name]
+    assert versions and all(Version(value) >= Version(floor) for value in versions)
+
+
+@pytest.mark.parametrize("project,name,floor", [
+    ("studio/edmg-studio", "shell-quote", "1.11.0"),
+    ("studio/edmg-studio", "joi", "18.2.9"),
+    ("studio/edmg-studio", "source-map-js", "1.2.2"),
+    ("studio/edmg-studio", "postcss-selector-parser", "7.1.6"),
+    ("chatgpt-apps/edmg-director", "@modelcontextprotocol/sdk", "1.31.0"),
+    ("chatgpt-apps/edmg-director", "proxy-addr", "2.0.8"),
+    ("chatgpt-apps/edmg-director", "source-map-js", "1.2.2"),
+])
+def test_javascript_security_resolutions(project, name, floor):
+    lock = (ROOT / project / "pnpm-lock.yaml").read_text(encoding="utf-8")
+    versions = re.findall(r"^  '?" + re.escape(name) + r"@(\d+\.\d+\.\d+)[^:\n]*:", lock, re.MULTILINE)
+    assert versions and all(Version(value) >= Version(floor) for value in versions)
+
+
+def test_electron_proxy_dependency_no_longer_pulls_unpatched_sprintf():
+    lock = (ROOT / "studio/edmg-studio/pnpm-lock.yaml").read_text(encoding="utf-8")
+    assert not re.search(r"^  sprintf-js@", lock, re.MULTILINE)
+    assert not re.search(r"^  roarr@2\.", lock, re.MULTILINE)
+
+
+@pytest.mark.parametrize("space", [
+    "nemotron-3-nano-omni-zerogpu", "cosmos-reason2-8b-zerogpu",
+    "hunyuan-video-1-5-zerogpu", "hunyuan-video-1-5-endpoint",
+])
+def test_space_torch_runtime_excludes_jit_memory_corruption(space):
+    requirements = (ROOT / "spaces" / space / "requirements.txt").read_text(encoding="utf-8")
+    assert "torch==2.13.0" in requirements.splitlines()
+    assert "torchvision==0.28.0" in requirements.splitlines()
+    assert "torchaudio==2.10.0" not in requirements.splitlines()
+
+
 def test_virtualenv_lock_and_constraint_include_both_security_fixes():
     backend = ROOT / "studio/edmg-studio/python_backend"
     lock = tomllib.loads((backend / "uv.lock").read_text(encoding="utf-8"))
