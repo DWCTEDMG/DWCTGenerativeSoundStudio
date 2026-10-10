@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import subprocess
 from dataclasses import dataclass
 from typing import Literal, Protocol, Sequence
 
@@ -133,7 +134,7 @@ def _run_inventory(
 ) -> list[GpuObservation]:
     try:
         result = run.run(args, 10.0)
-    except TimeoutError as exc:
+    except (TimeoutError, subprocess.TimeoutExpired) as exc:
         raise GpuDiscoveryError("GPU_DISCOVERY_TIMEOUT", f"{source} GPU discovery timed out") from exc
     except FileNotFoundError as exc:
         raise GpuDiscoveryError(
@@ -179,7 +180,7 @@ def discover_wsl_gpus(run: CommandRunner, distro: str) -> list[GpuObservation]:
             "--distribution",
             selected_distro,
             "--exec",
-            "nvidia-smi",
+            "/usr/lib/wsl/lib/nvidia-smi",
             f"--query-gpu={_QUERY_ARGUMENT}",
             f"--format={_FORMAT_ARGUMENT}",
         ),

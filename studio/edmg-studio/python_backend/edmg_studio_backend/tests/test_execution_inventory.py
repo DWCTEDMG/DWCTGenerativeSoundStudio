@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import subprocess
 
 import pytest
 
@@ -118,7 +119,7 @@ def test_discovery_builds_bounded_windows_and_wsl_commands() -> None:
         "--distribution",
         "Ubuntu",
         "--exec",
-        "nvidia-smi",
+        "/usr/lib/wsl/lib/nvidia-smi",
     )
     assert windows_runner.calls[0][1] == 10.0
     assert wsl_runner.calls[0][1] == 10.0
@@ -128,6 +129,7 @@ def test_discovery_builds_bounded_windows_and_wsl_commands() -> None:
     ("failure", "code"),
     [
         (TimeoutError("timed out"), "GPU_DISCOVERY_TIMEOUT"),
+        (subprocess.TimeoutExpired("wsl.exe", 10), "GPU_DISCOVERY_TIMEOUT"),
         (FileNotFoundError("wsl.exe"), "GPU_DISCOVERY_COMMAND_MISSING"),
     ],
 )

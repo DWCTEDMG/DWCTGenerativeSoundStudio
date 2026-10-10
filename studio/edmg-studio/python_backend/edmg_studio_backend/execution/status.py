@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from ..services import internal_video_models
+from ..services.launcher_environment import launcher_env_path
 from ..services.model_runtime_registry import execution_inventory_status
 from .inventory import (
     CommandResult,
@@ -51,7 +53,9 @@ def execution_inventory_summary(models_dir: Path, *, probe: bool = False) -> dic
         windows_gpus = discover_windows_gpus(Runner())
     except GpuDiscoveryError as exc:
         discovery_blockers.append({"code": exc.code, "message": "Windows GPU inventory is unavailable."})
-    if probe and configured and config.distro:
+    # GPU discovery is a bounded inventory query, not a model/inference probe.
+    # Native Models/Render must retain usable mappings on ordinary refreshes.
+    if configured and config.distro:
         try:
             wsl_gpus = discover_wsl_gpus(Runner(), config.distro)
         except GpuDiscoveryError as exc:
@@ -59,8 +63,24 @@ def execution_inventory_summary(models_dir: Path, *, probe: bool = False) -> dic
     worker_launchable = bool(
         configured and wsl_installed and worker_environment_present and model_installed and not issues
     )
-    receipts = list(Path(models_dir).glob("**/runtime-validation.json")) if Path(models_dir).exists() else []
-    runtime_qualified = bool(receipts)
+    # A Windows Whisper/LTX receipt cannot qualify the Ubuntu video worker.
+    runtime_qualified = False
+    receipt_path = Path(models_dir) / "internal/video/hf_hunyuan_video15_internal/runtime-validation.json"
+    if configured and receipt_path.is_file():
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            runtime_qualified = (
+                receipt.get("package_id") == "hf_hunyuan_video15_internal"
+                and receipt.get("runtime_backend") == "hyvideo15_linux_subprocess"
+                and receipt.get("success") is True
+                and receipt.get("validation_level") == 5
+                and receipt.get("result", {}).get("motion_evidence", {}).get("status") == "pass"
+                # Configuration edits invalidate historical worker qualification.
+                and launcher_env_path().is_file()
+                and receipt_path.stat().st_mtime_ns >= launcher_env_path().stat().st_mtime_ns
+            )
+        except (OSError, ValueError, AttributeError):
+            pass
     readiness = {
         "wsl_installed": wsl_installed,
         "distribution_running": bool(wsl_gpus),

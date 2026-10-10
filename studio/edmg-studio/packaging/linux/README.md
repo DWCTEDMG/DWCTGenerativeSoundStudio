@@ -1,5 +1,8 @@
 # Linux Packaging Notes
 
+For the native Windows WinUI Studio using a Linux GPU worker, see
+[Native Studio with a WSL Hunyuan worker](WSL_NATIVE_STUDIO.md).
+
 EDMG Studio already ships Linux-aware runtime branches in the Electron shell, Setup Wizard, desktop artifact helpers, and packaged smoke validation. The Linux packaged target is the Electron `AppImage`.
 
 ## UI availability
