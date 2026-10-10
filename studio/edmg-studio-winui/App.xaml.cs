@@ -71,6 +71,11 @@ public partial class App : Application
 
   private static async Task InitializeLocalRuntimeAsync(AppServices services, CancellationToken cancellationToken)
   {
+    // External backends own inference; never auto-start WSL on the frontend host.
+    if (services.Configuration.Mode == EdmgStudio.Core.Services.RequestedBackendMode.External)
+    {
+      return;
+    }
     try
     {
       await services.LocalRuntime.InitializeAsync(cancellationToken);

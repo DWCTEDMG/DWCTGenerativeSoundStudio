@@ -52,6 +52,7 @@ public sealed partial class SettingsPage : Page
 
   private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
   {
+    LoadLocalRuntimeSettings();
     SubscribeMidiEvents();
     SubscribeLocalRuntimeEvents();
     SubscribeJuceEvents();
@@ -364,6 +365,7 @@ public sealed partial class SettingsPage : Page
   private async void RefreshButton_Click(object sender, RoutedEventArgs e)
   {
     await RefreshAsync();
+    await RefreshExecutionPlaneAsync();
   }
 
   private async Task RefreshAsync()
@@ -896,6 +898,9 @@ public sealed partial class SettingsPage : Page
     try
     {
       BackendStatus status = await App.Services.SwitchBackendAsync(mode, externalBackendUri);
+      UnsubscribeLocalRuntimeEvents();
+      LoadLocalRuntimeSettings();
+      SubscribeLocalRuntimeEvents();
       LoadBackendSettings();
       status = await App.Services.BackendSupervisor.StartAsync();
       LoadBackendSettings();
@@ -905,6 +910,7 @@ public sealed partial class SettingsPage : Page
               : status.Detail ?? status.Message,
           status.IsReady ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
       await RefreshAsync();
+      await RefreshExecutionPlaneAsync();
     }
     catch (Exception exception) when (
         exception is ArgumentException or InvalidDataException or IOException or UnauthorizedAccessException or HttpRequestException)

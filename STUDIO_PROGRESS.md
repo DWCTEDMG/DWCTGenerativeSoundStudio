@@ -41,6 +41,11 @@ Visual Studio supports repository instructions when its custom-instructions opti
 
 ## Reviewer update
 
+### External backend Director host routing (2026-10-10 UTC)
+
+- User assigned the screenshot routing repair in a side conversation. Candidate: `6e80145` plus owned WinUI changes; existing Python dependency edits preserved. External mode skips frontend WSL/Qwen initialization, hides local process/profile controls, guards local action handlers, and presents execution inventory from the selected backend. Backend switching and Settings refresh update the host presentation. Managed local mode retains its controls.
+- Root verification: `dotnet build studio/edmg-studio-winui/EdmgStudio.WinUI.csproj --configuration Release --runtime win-x64 --no-restore --nologo` exited 0, zero warnings/errors, including the final incremental build (`outputs/remote-director-routing-build-final.log`). `git diff --check -- studio/edmg-studio-winui` passed with line-ending notices. ChatLog3/4 checked; external reference files absent. No backend/session restart, dependency synchronization, live remote Director inference, laptop deployment, commit or push. Server worker evidence is explicitly distinguished from Director inference; the server has no legacy Qwen process-management API.
+
 ### Page lifecycle race repairs (2026-10-10 UTC)
 
 - User assigned implementation of four review findings and requested commit/push to the default branch, superseding reviewer-only mode for this slice. Candidate: `be55bcb` plus owned WinUI changes; pre-existing Python dependency compatibility work remains preserved and excluded from this commit. Implementer section preserved.

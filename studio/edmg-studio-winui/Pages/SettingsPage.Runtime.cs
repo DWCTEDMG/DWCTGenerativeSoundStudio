@@ -19,13 +19,21 @@ public sealed partial class SettingsPage
           .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), profile.RuntimeProfile, StringComparison.Ordinal));
       ApplyExecutionInventory(await _apiClient.GetExecutionInventoryAsync());
     }
-    catch (Exception ex) { ExecutionReadinessText.Text = $"Execution status unavailable: {ex.Message}"; }
+    catch (Exception ex)
+    {
+      ExecutionReadinessText.Text = $"Execution status unavailable: {ex.Message}";
+      if (UsesExternalDirector) RemoteDirectorRuntimeText.Text = $"Execution host: {App.Services.Configuration.BackendUri}. Server execution status unavailable: {ex.Message}";
+    }
   }
 
   private void ApplyExecutionInventory(ExecutionInventory inventory)
   {
     ExecutionReadinessPresentation view = ExecutionPlanePresentation.Describe(inventory);
     ExecutionReadinessText.Text = $"{view.Title}: {view.Detail} Distro: {inventory.Wsl.Distribution ?? "not configured"}.";
+    if (UsesExternalDirector)
+    {
+      RemoteDirectorRuntimeText.Text = $"Execution host: {App.Services.Configuration.BackendUri}\nServer GPUs: {inventory.PhysicalGpus.Length}\nServer WSL distribution: {inventory.Wsl.Distribution ?? "not configured"}\n{view.Title}: {view.Detail}\nThis is worker execution evidence; Director provider inference has not been tested here.";
+    }
   }
 
   private async void SaveExecutionProfile_Click(object sender, RoutedEventArgs e)

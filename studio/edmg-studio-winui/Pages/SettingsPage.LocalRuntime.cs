@@ -9,9 +9,19 @@ public sealed partial class SettingsPage
 {
   private bool _localRuntimeEventsSubscribed;
   private bool _loadingLocalRuntimeSettings;
+  private static bool UsesExternalDirector => App.Services.Configuration.Mode == EdmgStudio.Core.Services.RequestedBackendMode.External;
+
+  private async void RemoteDirectorRuntimeRefresh_Click(object sender, RoutedEventArgs e)
+  {
+    await RefreshExecutionPlaneAsync();
+  }
 
   private void LoadLocalRuntimeSettings()
   {
+    RemoteDirectorRuntimePanel.Visibility = UsesExternalDirector ? Visibility.Visible : Visibility.Collapsed;
+    LocalDirectorRuntimePanel.Visibility = UsesExternalDirector ? Visibility.Collapsed : Visibility.Visible;
+    RemoteDirectorRuntimeText.Text = $"Execution host: {App.Services.Configuration.BackendUri}. Refresh to inspect server execution evidence.";
+    if (UsesExternalDirector) return;
     _loadingLocalRuntimeSettings = true;
     try
     {
@@ -39,6 +49,7 @@ public sealed partial class SettingsPage
 
   private void SubscribeLocalRuntimeEvents()
   {
+    if (UsesExternalDirector) return;
     if (_localRuntimeEventsSubscribed)
     {
       return;
@@ -66,6 +77,7 @@ public sealed partial class SettingsPage
 
   private void ApplyLocalRuntimeStatus(RuntimeStatus status)
   {
+    if (UsesExternalDirector) return;
     LocalRuntimeStateText.Text = status.State switch
     {
       RuntimeState.Ready => "Ready",
@@ -124,6 +136,7 @@ public sealed partial class SettingsPage
 
   private async void LocalRuntimeTest_Click(object sender, RoutedEventArgs e)
   {
+    if (UsesExternalDirector) return;
     try
     {
       RuntimeHealthResult result = await App.Services.LocalRuntime.TestAsync();
@@ -137,6 +150,7 @@ public sealed partial class SettingsPage
 
   private async void LocalRuntimeOpenLogs_Click(object sender, RoutedEventArgs e)
   {
+    if (UsesExternalDirector) return;
     try
     {
       string log = await App.Services.LocalRuntime.ReadRecentLogAsync();
@@ -161,6 +175,7 @@ public sealed partial class SettingsPage
 
   private void LocalRuntimeSave_Click(object sender, RoutedEventArgs e)
   {
+    if (UsesExternalDirector) return;
     if (_loadingLocalRuntimeSettings)
     {
       return;
@@ -197,6 +212,7 @@ public sealed partial class SettingsPage
 
   private async Task RunLocalRuntimeActionAsync(Func<Task> action, string successMessage)
   {
+    if (UsesExternalDirector) return;
     try
     {
       await action();
