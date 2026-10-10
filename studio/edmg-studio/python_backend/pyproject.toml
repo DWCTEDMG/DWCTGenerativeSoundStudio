@@ -75,7 +75,7 @@ asr = [
 ]
 source-separation = ["demucs>=4.0.1,<5"]
 parakeet = [
-  "nemo-toolkit[asr]>=2.6.2,<3",
+  "nemo-toolkit[asr]==2.7.3",
   "datasets>=5.0.1,<6",
 ]
 aws = ["boto3>=1.34,<2"]
@@ -124,6 +124,13 @@ dev = [
 [tool.uv]
 required-version = "==0.11.28"
 default-groups = []
+# Security overrides for NeMo 2.7.3's stale pins. Validate this cohort with
+# tests/test_nemo_security_cohort.py before changing any member. Keep fsspec
+# within datasets 5.0.1's supported range; newer Lightning is incompatible.
+override-dependencies = [
+  "hydra-core==1.3.7",
+  "fsspec==2026.6.0",
+]
 constraint-dependencies = [
   "GitPython>=3.1.59,<4",
   "PyJWT>=2.15,<3",
@@ -140,6 +147,9 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+# Unreleased upstream fixes for GHSA-8mgp-746c-j5xp. Keep the immutable
+# revision: PyPI 3.10.3 has the same version string but lacks these fixes.
+nltk = { url = "https://github.com/nltk/nltk/archive/cbc98458b43de5f792f0382583c16df39e5c5117.tar.gz" }
 torch = [
   { index = "pytorch-cpu", extra = "cpu" },
   { index = "pytorch-cpu", extra = "directml" },

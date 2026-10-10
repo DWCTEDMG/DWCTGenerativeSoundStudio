@@ -21,7 +21,20 @@ from packaging.version import Version
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("name,floor", [("werkzeug", "3.1.9"), ("mako", "1.4.2"), ("multidict", "6.9.1")])
+def test_nltk_uses_immutable_fixed_source_instead_of_affected_pypi_release():
+    backend = ROOT / "studio/edmg-studio/python_backend"
+    manifest = tomllib.loads((backend / "pyproject.toml").read_text(encoding="utf-8"))
+    fixed_source = "https://github.com/nltk/nltk/archive/cbc98458b43de5f792f0382583c16df39e5c5117.tar.gz"
+    assert manifest["tool"]["uv"]["sources"]["nltk"] == {"url": fixed_source}
+    lock = tomllib.loads((backend / "uv.lock").read_text(encoding="utf-8"))
+    packages = [p for p in lock["package"] if p["name"] == "nltk"]
+    assert len(packages) == 1
+    assert packages[0]["source"] == {"url": fixed_source}
+    assert packages[0]["sdist"]["hash"].startswith("sha256:")
+
+
+@pytest.mark.parametrize("name,floor", [("werkzeug", "3.1.9"), ("mako", "1.4.2"), ("multidict", "6.9.1"),
+                                        ("hydra-core", "1.3.7"), ("fsspec", "2026.6.0")])
 def test_backend_transitive_security_floors(name, floor):
     lock = tomllib.loads((ROOT / "studio/edmg-studio/python_backend/uv.lock").read_text(encoding="utf-8"))
     versions = [p["version"] for p in lock["package"] if p["name"] == name]
