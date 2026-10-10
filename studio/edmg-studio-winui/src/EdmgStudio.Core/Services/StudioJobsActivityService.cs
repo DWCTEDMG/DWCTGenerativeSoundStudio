@@ -36,11 +36,11 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
   private readonly TimeSpan _refreshInterval;
   private readonly TimeSpan _maximumBackoff;
   private readonly object _lifecycleSync = new();
-  private readonly object _refreshSync = new();
   private readonly CancellationTokenSource _lifetimeCancellation = new();
   private CancellationTokenSource? _loopCancellation;
   private Task? _loopTask;
   private Task? _refreshTask;
+  private Task? _disposeTask;
   private StudioJobsActivitySnapshot _snapshot = StudioJobsActivitySnapshot.Empty;
   private int _subscriberCount;
   private int _consecutiveFailures;
@@ -85,8 +85,9 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
   public async Task RefreshAsync(CancellationToken cancellationToken = default)
   {
     Task refreshTask;
-    lock (_refreshSync)
+    lock (_lifecycleSync)
     {
+      cancellationToken.ThrowIfCancellationRequested();
       ObjectDisposedException.ThrowIf(_disposed, this);
       if (_refreshTask is null || _refreshTask.IsCompleted)
       {
@@ -99,28 +100,42 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
     await refreshTask.WaitAsync(cancellationToken).ConfigureAwait(false);
   }
 
-  public async ValueTask DisposeAsync()
+  public ValueTask DisposeAsync()
   {
-    Task? loopTask;
     lock (_lifecycleSync)
     {
       if (_disposed)
       {
-        return;
+        return new ValueTask(_disposeTask ?? Task.CompletedTask);
       }
 
       _disposed = true;
       _subscriberCount = 0;
       _lifetimeCancellation.Cancel();
       _loopCancellation?.Cancel();
-      loopTask = _loopTask;
+      _disposeTask = DisposeCoreAsync(_loopTask, _refreshTask);
+      return new ValueTask(_disposeTask);
     }
+  }
 
+  private async Task DisposeCoreAsync(Task? loopTask, Task? refreshTask)
+  {
     if (loopTask is not null)
     {
       try
       {
         await loopTask.ConfigureAwait(false);
+      }
+      catch (OperationCanceledException)
+      {
+      }
+    }
+
+    if (refreshTask is not null)
+    {
+      try
+      {
+        await refreshTask.ConfigureAwait(false);
       }
       catch (OperationCanceledException)
       {
@@ -190,6 +205,10 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
           null,
           _refreshInterval);
     }
+    catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+    {
+      return;
+    }
     catch (Exception exception)
     {
       _consecutiveFailures = Math.Min(_consecutiveFailures + 1, 30);
@@ -205,7 +224,14 @@ public sealed class StudioJobsActivityService : IAsyncDisposable
       };
     }
 
-    Volatile.Write(ref _snapshot, next);
+    lock (_lifecycleSync)
+    {
+      if (_disposed)
+      {
+        return;
+      }
+      Volatile.Write(ref _snapshot, next);
+    }
     SnapshotChanged?.Invoke(this, next);
   }
 

@@ -25,7 +25,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
   private RuntimeStatusResponse? _runtimeStatus;
   private string? _taskFingerprint;
   private readonly bool _isInitialized;
-  private bool _isRefreshing;
+  private readonly EdmgStudio.Core.Services.SerializedAsyncOperation _refreshOperations = new();
   private bool _isPolling;
   private bool _isCommandRunning;
 
@@ -43,15 +43,21 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
 
   public async Task RefreshAsync(CancellationToken cancellationToken = default)
   {
-    if (_isRefreshing)
+    try
     {
-      return;
+      await _refreshOperations.RunAsync(() => RefreshCoreAsync(cancellationToken), cancellationToken);
     }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+  }
 
-    _isRefreshing = true;
+  private async Task RefreshCoreAsync(CancellationToken cancellationToken)
+  {
     try
     {
       ModelCatalogueResponse response = await _apiClient.GetTypedModelCatalogueAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
       _catalogue = response;
       _tensorRtStatus = response.TensorRtMigration;
       RebuildModels();
@@ -63,8 +69,11 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
           LoadQwenConfigAsync(cancellationToken),
           LoadWhisperConfigAsync(cancellationToken));
       _tensorRtStatus ??= await _apiClient.GetTensorRtLegacyStatusAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
       _runtimeStatus = await _apiClient.GetRuntimeStatusAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
       ExecutionInventory execution = await _apiClient.GetExecutionInventoryAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
       ExecutionReadinessPresentation executionView = ExecutionPlanePresentation.Describe(execution);
       ExecutionPlaneDiagnosticsText.Text = $"{executionView.Title} — {executionView.Detail} Distro: {execution.Wsl.Distribution ?? "not configured"}; physical GPU mappings: {execution.PhysicalGpus.Length}.";
       UpdateTensorRt();
@@ -77,10 +86,6 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     {
       ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
     }
-    finally
-    {
-      _isRefreshing = false;
-    }
   }
 
   private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -90,6 +95,10 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     _pageCancellation = new CancellationTokenSource();
     CancellationToken cancellationToken = _pageCancellation.Token;
     await RefreshAsync(cancellationToken);
+    if (cancellationToken.IsCancellationRequested)
+    {
+      return;
+    }
     await PollTasksAsync(cancellationToken);
     if (!cancellationToken.IsCancellationRequested)
     {
@@ -122,6 +131,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     try
     {
       ModelTaskListResponse response = await _apiClient.GetModelTasksAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
       IReadOnlyList<ModelTask> tasks = response.Tasks ?? [];
       string fingerprint = ModelTask.Fingerprint(tasks);
       bool catalogueChanged = _taskFingerprint is not null
@@ -265,6 +275,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     }
 
     JsonElement response = await _apiClient.GetHunyuanRuntimeConfigAsync(cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     if (!response.TryGetProperty("config", out JsonElement config))
     {
       throw new InvalidOperationException("Hunyuan runtime configuration response was missing its config object.");
@@ -356,6 +367,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
     }
 
     JsonElement response = await _apiClient.GetLtxRuntimeConfigAsync(cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     if (!response.TryGetProperty("config", out JsonElement config))
     {
       throw new InvalidOperationException("LTX runtime configuration response was missing its config object.");
@@ -418,6 +430,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
   private async Task LoadQwenConfigAsync(CancellationToken cancellationToken)
   {
     JsonElement response = await _apiClient.GetDirectorRuntimeSettingsAsync(cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     JsonElement settings = response.GetProperty("settings");
     SetHunyuanText(QwenRuntimePathBox, settings, "runtime_path");
     QwenGpuDevicesBox.Text = settings.TryGetProperty("gpu_devices", out JsonElement devices) ? devices.ToString() : "auto";
@@ -431,6 +444,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
   private async Task LoadWhisperConfigAsync(CancellationToken cancellationToken)
   {
     JsonElement response = await _apiClient.GetTranscriptionSettingsAsync(cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     JsonElement settings = response.GetProperty("settings");
     SelectTag(WhisperDeviceCombo, settings.TryGetProperty("device", out JsonElement device) ? device.GetString() : "auto");
     SelectTag(WhisperComputeCombo, settings.TryGetProperty("compute_type", out JsonElement compute) ? compute.GetString() : "auto");
@@ -445,6 +459,7 @@ public sealed partial class ModelsPage : Page, IStudioRefreshable
   private async Task UpdateRuntimeStatusAsync(string modelId, TextBlock target, CancellationToken cancellationToken)
   {
     ModelRuntimeStatus status = await _apiClient.GetModelRuntimeReadinessAsync(modelId, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     string details = string.Join("\n", (status.Blockers ?? []).Concat(status.Warnings ?? []));
     target.Text = $"Installed: {status.Installed} | Configured: {status.ValidationLevel >= 3} | Reachable: {status.AdapterReady} | Execution ready: {status.ExecutionReady || status.RuntimeReady} | Level-5 qualified: {status.RuntimeReady}\nDevice: {status.Device ?? "unknown"} | Capability level: {status.ValidationLevel}\n{details}";
   }

@@ -24,6 +24,8 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
   private readonly Dictionary<string, Direct3DPreviewControl> _comparisonPreviews = new(StringComparer.OrdinalIgnoreCase);
   private readonly SemaphoreSlim _synchronizedSeekGate = new(1, 1);
   private CancellationTokenSource? _pageCancellation;
+  private CancellationTokenSource? _projectCancellation;
+  private CancellationTokenSource? _refreshCancellation;
   private CancellationTokenSource? _previewCancellation;
   private CancellationTokenSource? _synchronizedSeekCancellation;
   private IDisposable? _jobsActivityLease;
@@ -79,6 +81,8 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
   private void OnUnloaded(object sender, RoutedEventArgs e)
   {
+    _projectCancellation?.Cancel();
+    _refreshCancellation?.Cancel();
     App.Services.JobsActivity.SnapshotChanged -= JobsActivity_SnapshotChanged;
     _jobsActivityLease?.Dispose();
     _jobsActivityLease = null;
@@ -99,10 +103,12 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
   private async Task LoadProjectsAsync(CancellationToken cancellationToken)
   {
+    bool refreshOwnsBusyState = false;
     SetBusy(true);
     try
     {
       ProjectListResponse response = await _apiClient.GetProjectsAsync(cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested();
       ProjectComboBox.ItemsSource = response.Projects;
 
       string activeProjectId = App.Services.Session.ActiveProjectId;
@@ -120,6 +126,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       _isRestoringSelection = true;
       ProjectComboBox.SelectedItem = project;
       _isRestoringSelection = false;
+      refreshOwnsBusyState = true;
       await SelectProjectAsync(project, cancellationToken);
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -131,18 +138,35 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     }
     finally
     {
-      SetBusy(false);
+      if (!cancellationToken.IsCancellationRequested && !refreshOwnsBusyState)
+      {
+        SetBusy(false);
+      }
     }
   }
 
   private async Task SelectProjectAsync(ProjectDto project, CancellationToken cancellationToken)
   {
+    _projectCancellation?.Cancel();
+    _projectCancellation?.Dispose();
+    _projectCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    cancellationToken = _projectCancellation.Token;
+    CancelPreview();
     bool isRestoringProject = string.Equals(
         project.Id,
         App.Services.Session.ActiveProjectId,
         StringComparison.OrdinalIgnoreCase);
     int desiredVariant = isRestoringProject ? App.Services.Session.SelectedVariantIndex : 0;
+    if (!isRestoringProject)
+    {
+      App.Services.Session.SetReviewComparison([], null);
+      App.Services.Session.SetSelectedArtifact(null);
+      App.Services.Session.SetSourceAsset(null);
+    }
 
+    ResetSurface();
+    _referencePath = null;
+    _primaryArtifact = null;
     _selectedProject = project;
     App.Services.Session.ActiveProjectId = project.Id;
     App.Services.Session.SelectedVariantIndex = Math.Max(0, desiredVariant);
@@ -157,6 +181,11 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     }
 
     string projectId = _selectedProject.Id;
+    _refreshCancellation?.Cancel();
+    _refreshCancellation?.Dispose();
+    _refreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+        cancellationToken, _projectCancellation?.Token ?? cancellationToken);
+    cancellationToken = _refreshCancellation.Token;
     List<string> failures = [];
     SetBusy(true);
     try
@@ -229,13 +258,17 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     }
     finally
     {
-      SetBusy(false);
+      if (!cancellationToken.IsCancellationRequested)
+      {
+        SetBusy(false);
+      }
     }
   }
 
   private async Task LoadReviewAsync(string projectId, CancellationToken cancellationToken)
   {
     JsonElement response = await _apiClient.GetVariantReviewAsync(projectId, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     JsonElement review = TryGetObject(response, "variant_review", out JsonElement wrapper)
         ? wrapper
         : response;
@@ -310,6 +343,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
     RestoreArtifactSelection();
     await UpdateSelectionPresentationAsync(cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
 
     int artifactCount = ReadInt(review, "artifact_count", Artifacts.Count);
     bool compareReady = ReadBoolean(review, "compare_ready", artifactCount > 1);
@@ -326,6 +360,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
         projectId,
         variantIndex,
         cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     JsonElement continuity = TryGetObject(response, "continuity", out JsonElement wrapper)
         ? wrapper
         : response;
@@ -364,6 +399,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
   private async Task LoadJobsAsync(string projectId, CancellationToken cancellationToken)
   {
     await App.Services.JobsActivity.RefreshAsync(cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     ApplyJobsSnapshot(projectId, App.Services.JobsActivity.Snapshot);
   }
 
@@ -403,11 +439,13 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
   {
     LiveCuePublishResponse response =
         await _apiClient.GetTypedLiveCuePublishStatusAsync(projectId, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     UpdatePublishingStatus(response.Publish);
   }
 
   private async Task UpdateSelectionPresentationAsync(CancellationToken cancellationToken)
   {
+    cancellationToken.ThrowIfCancellationRequested();
     SelectedArtifacts.Clear();
     foreach (string path in _selectedPaths)
     {
@@ -452,6 +490,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     NotesTextBox.Text = _primaryArtifact.ReviewNotes;
     RebuildActiveAnnotations();
     await LoadComparisonPreviewsAsync(_selectedProject.Id, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     UpdateDirectorReviewCommands();
   }
 
@@ -459,6 +498,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
   {
     string? selectedId = _selectedDirectorReport?.ReportId;
     DirectorReviewListResponse response = await _apiClient.GetDirectorReviewsAsync(projectId, cancellationToken);
+    cancellationToken.ThrowIfCancellationRequested();
     DirectorReports.Clear();
     foreach (ReviewReport report in response.Reports)
     {
@@ -545,7 +585,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     int maxAttempts = (int)DirectorMaxAttemptsBox.Value;
     string? targetSceneId = string.IsNullOrWhiteSpace(DirectorTargetSceneTextBox.Text)
         ? null : DirectorTargetSceneTextBox.Text.Trim();
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     SetBusy(true);
     DirectorReviewStatusText.Text = retryOfReportId is null
         ? "Collecting deterministic frame evidence and assessing available dimensions…"
@@ -582,7 +622,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     {
       return;
     }
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     SetBusy(true);
     try
     {
@@ -734,7 +774,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       return;
     }
 
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     string[] selectedPaths = [.. _selectedPaths];
     string[] traits = TraitsTextBox.Text
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -799,7 +839,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       return;
     }
 
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     SetBusy(true);
     try
     {
@@ -830,7 +870,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       return;
     }
 
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     try
     {
       JsonElement detail = await _apiClient.GetProjectJobAsync(
@@ -877,7 +917,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       return;
     }
 
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     SetBusy(true);
     try
     {
@@ -915,7 +955,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       return;
     }
 
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     SetBusy(true);
     try
     {
@@ -952,7 +992,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       return;
     }
 
-    CancellationToken cancellationToken = _pageCancellation?.Token ?? CancellationToken.None;
+    CancellationToken cancellationToken = _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None;
     SetBusy(true);
     try
     {
@@ -1055,7 +1095,9 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
   private void ResetSurface()
   {
+    _isRestoringSelection = true;
     _selectedProject = null;
+    VariantComboBox.ItemsSource = null;
     Artifacts.Clear();
     SelectedArtifacts.Clear();
     ContinuityWarnings.Clear();
@@ -1074,6 +1116,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     PublishStatusText.Text = "Publishing status unavailable.";
     JobLogTextBox.Visibility = Visibility.Collapsed;
     ShowDirectorReport(null);
+    _isRestoringSelection = false;
   }
 
   private async void OnProjectSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1101,7 +1144,10 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
       await LoadContinuityAsync(
           _selectedProject.Id,
           option.Index,
-          _pageCancellation?.Token ?? CancellationToken.None);
+          _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None);
+    }
+    catch (OperationCanceledException)
+    {
     }
     catch (Exception ex)
     {
@@ -1127,12 +1173,18 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
     ReplaceSelectedPaths(updated);
     RestoreArtifactSelection();
-    await UpdateSelectionPresentationAsync(_pageCancellation?.Token ?? CancellationToken.None);
+    try
+    {
+      await UpdateSelectionPresentationAsync(_projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None);
+    }
+    catch (OperationCanceledException)
+    {
+    }
   }
 
   private async void OnRefreshClick(object sender, RoutedEventArgs e)
   {
-    await RefreshSurfaceAsync(_pageCancellation?.Token ?? CancellationToken.None, showSuccess: true);
+    await RefreshSurfaceAsync(_projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None, showSuccess: true);
   }
 
   private async void OnComparisonPreviewLoaded(object sender, RoutedEventArgs e)
@@ -1166,7 +1218,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             _selectedProject.Id,
             artifact,
             preview,
-            _pageCancellation?.Token ?? CancellationToken.None);
+            _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None);
       }
       catch (OperationCanceledException)
       {
@@ -1239,7 +1291,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
     _synchronizedSeekCancellation?.Cancel();
     _synchronizedSeekCancellation?.Dispose();
     _synchronizedSeekCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-        _pageCancellation?.Token ?? CancellationToken.None);
+        _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None);
     CancellationToken cancellationToken = _synchronizedSeekCancellation.Token;
     try
     {
@@ -1388,8 +1440,8 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
             LockFields = _primaryArtifact.Locks,
             Annotations = GetAnnotationRequests(_primaryArtifact.Path)
           },
-          _pageCancellation?.Token ?? CancellationToken.None);
-      await LoadReviewAsync(_selectedProject.Id, _pageCancellation?.Token ?? CancellationToken.None);
+          _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None);
+      await LoadReviewAsync(_selectedProject.Id, _projectCancellation?.Token ?? _pageCancellation?.Token ?? CancellationToken.None);
       ShowStatus("Review notes saved", "The active artifact notes and markers were saved.", InfoBarSeverity.Success);
     }
     catch (Exception ex)

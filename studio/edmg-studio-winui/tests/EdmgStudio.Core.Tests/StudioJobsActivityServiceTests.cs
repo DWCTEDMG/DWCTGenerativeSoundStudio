@@ -7,6 +7,46 @@ namespace EdmgStudio.Core.Tests;
 public sealed class StudioJobsActivityServiceTests
 {
   [TestMethod]
+  public async Task DisposeWaitsForIndependentRefreshIgnoringCancellationAndSuppressesPublication()
+  {
+    IgnoringCancellationJobsClient client = new();
+    StudioJobsActivityService service = new(client);
+    int notifications = 0;
+    service.SnapshotChanged += (_, _) => Interlocked.Increment(ref notifications);
+    Task refresh = service.RefreshAsync();
+    Task disposal = service.DisposeAsync().AsTask();
+    Task secondDisposal = service.DisposeAsync().AsTask();
+    Assert.IsFalse(disposal.IsCompleted);
+    Assert.IsFalse(secondDisposal.IsCompleted);
+    client.Completion.SetResult(new StudioJobListResponse([CreateJob("late", "project-1")]));
+    await Task.WhenAll(refresh, disposal, secondDisposal).WaitAsync(TimeSpan.FromSeconds(2));
+    Assert.AreEqual(0, notifications);
+    Assert.AreEqual(StudioJobsActivitySnapshot.Empty, service.Snapshot);
+  }
+
+  [TestMethod]
+  public async Task LifetimeCancellationDoesNotPublishARefreshFailure()
+  {
+    CancelableJobsClient client = new();
+    StudioJobsActivityService service = new(client);
+    int notifications = 0;
+    service.SnapshotChanged += (_, _) => Interlocked.Increment(ref notifications);
+    Task refresh = service.RefreshAsync();
+    await client.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    await service.DisposeAsync();
+    await refresh;
+    Assert.AreEqual(0, notifications);
+    Assert.AreEqual(StudioJobsActivitySnapshot.Empty, service.Snapshot);
+  }
+
+  private sealed class IgnoringCancellationJobsClient : IStudioJobsClient
+  {
+    public TaskCompletionSource<StudioJobListResponse> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public Task<StudioJobListResponse> GetJobsAsync(CancellationToken cancellationToken = default) => Completion.Task;
+    public Task<StudioJobListResponse> GetProjectJobsAsync(string projectId, CancellationToken cancellationToken = default) => Completion.Task;
+  }
+
+  [TestMethod]
   public async Task ConcurrentRefreshesShareOneApiRequest()
   {
     BlockingJobsClient client = new();

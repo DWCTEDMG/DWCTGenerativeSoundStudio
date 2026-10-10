@@ -87,6 +87,8 @@ public sealed partial class TimelinePage : Page
   private long _juceSnapshotRevision;
   private long _juceSeekSequence;
   private readonly SemaphoreSlim _juceTransportGate = new(1, 1);
+  // The engine is shared, so cleanup must also precede configuration by a new page instance.
+  private static readonly EdmgStudio.Core.Services.SerializedAsyncOperation AudioLifecycle = new();
   private bool _isLoaded;
   private readonly bool _isXamlInitialized;
   private bool _isBusy;
@@ -207,7 +209,7 @@ public sealed partial class TimelinePage : Page
     _pageCancellation = null;
     _ = Interlocked.Increment(ref _audioGraphGeneration);
     _configuredJuceGraphKey = null;
-    _ = StopJucePreviewAsync();
+    _ = AudioLifecycle.RunAsync(StopJucePreviewAsync);
     _ = RemoveAllVst3WorkersAsync();
   }
 
@@ -314,6 +316,7 @@ public sealed partial class TimelinePage : Page
 
     if (!forceReload &&
         _isBusy &&
+        _pageCancellation?.IsCancellationRequested == false &&
         string.Equals(_loadedProjectId, projectId, StringComparison.Ordinal))
     {
       return;
@@ -342,6 +345,7 @@ public sealed partial class TimelinePage : Page
       Task<EditorState> timelineTask = App.Services.ApiClient.GetEditorStateAsync(projectId, cancellationToken);
       Task<JsonElement> recoveryTask = App.Services.ApiClient.GetRecoveryAsync(projectId, cancellationToken);
       await Task.WhenAll(projectTask, timelineTask, recoveryTask);
+      cancellationToken.ThrowIfCancellationRequested();
 
       _project = projectTask.Result.Project;
       _loadedProjectId = projectId;
@@ -4518,6 +4522,11 @@ public sealed partial class TimelinePage : Page
   }
 
   private async Task ConfigureAudioEngineAsync(CancellationToken cancellationToken)
+  {
+    await AudioLifecycle.RunAsync(() => ConfigureAudioEngineCoreAsync(cancellationToken), cancellationToken);
+  }
+
+  private async Task ConfigureAudioEngineCoreAsync(CancellationToken cancellationToken)
   {
     CanonicalProject? project = _canonicalProject;
     string? projectId = _loadedProjectId;
