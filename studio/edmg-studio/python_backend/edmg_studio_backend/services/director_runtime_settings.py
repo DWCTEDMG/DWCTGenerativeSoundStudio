@@ -46,6 +46,12 @@ def _endpoint(value: Any) -> str:
         return ""
     if not valid or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return ""
+    if (parsed.hostname or "").endswith((".services.ai.azure.com", ".openai.azure.com")):
+        if parsed.scheme != "https":
+            return ""
+        endpoint = endpoint.removesuffix("/chat/completions")
+        if not urlsplit(endpoint).path.strip("/"):
+            endpoint += "/openai/v1"
     return endpoint
 
 

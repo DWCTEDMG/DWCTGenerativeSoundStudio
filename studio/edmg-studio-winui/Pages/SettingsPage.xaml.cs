@@ -403,7 +403,6 @@ public sealed partial class SettingsPage : Page
           $"{hardwareTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
           metricsTask.Result.Text;
       LoadBackendSettings();
-      LoadFoundrySettings();
       LoadVst3Status();
 
       string?[] failures =
@@ -446,6 +445,31 @@ public sealed partial class SettingsPage : Page
     CloudFallbackCheckBox.IsChecked = video?["cosmos_fallback"]?.GetValue<bool?>() ?? true;
   }
 
+  private async void SaveFoundryDirector_Click(object sender, RoutedEventArgs e)
+  {
+    if (!Uri.TryCreate(FoundryDirectorEndpoint.Text.Trim(), UriKind.Absolute, out Uri? endpoint)
+        || endpoint.Scheme != "https"
+        || !(endpoint.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)
+             || endpoint.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase))
+        || !string.IsNullOrEmpty(endpoint.UserInfo) || !string.IsNullOrEmpty(endpoint.Query)
+        || !string.IsNullOrEmpty(endpoint.Fragment) || string.IsNullOrWhiteSpace(FoundryDirectorModel.Text))
+    {
+      ShowStatus("Enter an HTTPS Foundry chat endpoint and deployment name, without URL credentials or query parameters.", InfoBarSeverity.Warning);
+      return;
+    }
+    await RunSaveAsync(async () =>
+    {
+      JsonObject payload = new()
+      {
+        ["primary_execution"] = "server",
+        ["primary_endpoint"] = FoundryDirectorEndpoint.Text.Trim(),
+        ["primary_server_model"] = FoundryDirectorModel.Text.Trim()
+      };
+      ApplyDirectorSettings(await _apiClient.SaveDirectorRuntimeSettingsAsync(JsonSerializer.SerializeToElement(payload)));
+      FoundryDirectorStatus.Text = "Foundry Director selected. Connection and valid draft generation remain to be verified.";
+    }, "Foundry Director endpoint saved. Generate a draft in Director or Workspace, then review and apply.");
+  }
+
   private void ApplyTranscriptionSettings(JsonElement value)
   {
     JsonObject transcription = StudioPageHelpers.ToObject(value);
@@ -471,6 +495,12 @@ public sealed partial class SettingsPage : Page
     DirectorPrimaryServerModel.Text = settings["primary_server_model"]?.GetValue<string>() ?? "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
     DirectorSpecialistEndpoint.Text = settings["specialist_endpoint"]?.GetValue<string>() ?? "https://integrate.api.nvidia.com/v1";
     DirectorSpecialistServerModel.Text = settings["specialist_server_model"]?.GetValue<string>() ?? "nvidia/cosmos-reason2-8b";
+    string primaryEndpoint = settings["primary_endpoint"]?.GetValue<string>() ?? "";
+    if (primaryEndpoint.Contains(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase) || primaryEndpoint.Contains(".openai.azure.com", StringComparison.OrdinalIgnoreCase))
+    {
+      FoundryDirectorEndpoint.Text = primaryEndpoint;
+      FoundryDirectorModel.Text = settings["primary_server_model"]?.GetValue<string>() ?? "";
+    }
     DirectorConfigurationStatus.Text = "Local catalog entries and server configurations coexist. Save selects the route; configuration alone does not prove server availability. Generated plans still require review/apply.";
   }
 
@@ -632,22 +662,6 @@ public sealed partial class SettingsPage : Page
     {
       string error = StudioPageHelpers.GetErrorMessage(exception);
       return ($"{name}{Environment.NewLine}Unavailable: {error}", $"{name}: {error}");
-    }
-  }
-
-  private void LoadFoundrySettings()
-  {
-    try
-    {
-      FoundryProjectSettings settings = BackendSettingsStore.LoadFoundrySettings();
-      FoundryProjectTextBox.Text = settings.ProjectName;
-      FoundrySubscriptionTextBox.Text = settings.SubscriptionName;
-      FoundryEndpointTextBox.Text = settings.ProjectEndpoint.AbsoluteUri;
-    }
-    catch (Exception exception) when (
-        exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
-    {
-      ShowStatus(exception.Message, InfoBarSeverity.Error);
     }
   }
 
@@ -913,30 +927,11 @@ public sealed partial class SettingsPage : Page
     }
   }
 
-  private void SaveFoundryButton_Click(object sender, RoutedEventArgs e)
-  {
-    try
-    {
-      FoundryProjectSettings settings = new(
-                FoundryProjectTextBox.Text,
-                FoundrySubscriptionTextBox.Text,
-                new Uri(FoundryEndpointTextBox.Text.Trim(), UriKind.Absolute));
-      BackendSettingsStore.SaveFoundrySettings(settings);
-      LoadFoundrySettings();
-      ShowStatus("Foundry project metadata saved.", InfoBarSeverity.Success);
-    }
-    catch (Exception exception) when (
-        exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
-    {
-      ShowStatus(exception.Message, InfoBarSeverity.Error);
-    }
-  }
-
   private async void SaveRouteButton_Click(object sender, RoutedEventArgs e)
   {
     string route = VideoRouteComboBox.SelectedItem as string ?? "auto";
-    JsonObject payload = _renderProviderSettings?.DeepClone().AsObject() ?? [];
-    JsonObject video = payload["video"] as JsonObject ?? [];
+    JsonObject payload = new();
+    JsonObject video = (_renderProviderSettings?["video"] as JsonObject)?.DeepClone().AsObject() ?? [];
     video["preference"] = route;
     video["auto_prefer_gpu"] = PreferGpuCheckBox.IsChecked == true;
     video["cosmos_fallback"] = CloudFallbackCheckBox.IsChecked == true;

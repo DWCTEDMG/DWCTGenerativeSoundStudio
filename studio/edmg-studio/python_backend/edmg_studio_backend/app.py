@@ -344,7 +344,7 @@ _apply_cuda_startup_flags()
 _ALLOWED_SECRETS: frozenset[str] = frozenset({
     "hf_token", "civitai_api_key", "openai_compat_api_key",
     "stability_api_key", "nvidia_api_key", "nvidia_service_key", "lightning_api_key",
-    "adobe_client_id", "adobe_client_secret", "imagineart_api_key", "azure_foundry_api_key",
+    "adobe_client_id", "adobe_client_secret", "imagineart_api_key", "azure_foundry_api_key", "foundry_director_api_key",
 })
 
 def _install_benign_connection_error_filter(loop: asyncio.AbstractEventLoop) -> None:
@@ -2802,8 +2802,9 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
     azure_foundry_configured = bool(
         str(azure_foundry_cfg.get("endpoint_url") or "").strip()
         and str(azure_foundry_cfg.get("deployment_name") or "").strip()
+        and str(azure_foundry_cfg.get("video_endpoint_url") or "").strip()
     )
-    has_azure_foundry_key = bool(secrets.get("azure_foundry_api_key"))
+    has_azure_foundry_key = bool(secrets.get("azure_foundry_api_key") or os.getenv("EDMG_AI_AZURE_FOUNDRY_API_KEY"))
     has_stability_key = bool(secrets.get("stability_api_key"))
     has_imagineart_key = bool(secrets.get("imagineart_api_key") or os.getenv("IMAGINEART_API_KEY"))
     has_adobe_client_id = bool(secrets.get("adobe_client_id") or os.getenv("ADOBE_CLIENT_ID"))
@@ -2937,6 +2938,8 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "has_api_key": has_azure_foundry_key,
             "allow_auto_fallback": bool(azure_foundry_cfg.get("allow_auto_fallback", False)),
             "endpoint_url": str(azure_foundry_cfg.get("endpoint_url") or ""),
+            "video_endpoint_url": str(azure_foundry_cfg.get("video_endpoint_url") or ""),
+            "video_verified": False,
             "deployment_name": str(azure_foundry_cfg.get("deployment_name") or ""),
             "resolution": str(azure_foundry_cfg.get("resolution") or "720_16_9"),
             "num_frames": int(azure_foundry_cfg.get("num_frames") or 121),
@@ -2945,15 +2948,11 @@ def _render_provider_status(hw: dict[str, Any] | None = None) -> dict[str, Any]:
             "steps": int(azure_foundry_cfg.get("steps") or 50),
             "timeout_s": int(azure_foundry_cfg.get("timeout_s") or 600),
             "note": (
-                "Not configured — set an Endpoint URL and Deployment name in Settings → "
-                "Azure AI Foundry, then add an API key."
+                "Not configured — set the resource URL, deployment name, and explicit video request URL in Settings → Azure Cosmos3-Super."
                 if not azure_foundry_configured else
                 "No API key saved — add one in Settings → Tokens → Azure Foundry API key."
                 if not has_azure_foundry_key else
-                "Azure AI Foundry configured. Requests go to {base}/managed-deployments/{name}/v1/messages.".format(
-                    base=str(azure_foundry_cfg.get("endpoint_url") or "").rstrip("/"),
-                    name=str(azure_foundry_cfg.get("deployment_name") or ""),
-                )
+                "Azure video endpoint configured; video capability is unverified until a returned clip passes media validation."
             ),
         },
         "firefly_styles": list(FIREFLY_STYLES),
@@ -3005,6 +3004,8 @@ def _azure_foundry_client() -> AzureFoundryClient:
         endpoint_url=endpoint_url,
         deployment_name=deployment_name,
         timeout_s=timeout_s,
+        video_endpoint_url=str(azure_foundry_cfg.get("video_endpoint_url") or ""),
+        ffmpeg_path=settings.ffmpeg_path,
     )
 
 

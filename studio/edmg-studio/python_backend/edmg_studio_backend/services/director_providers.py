@@ -61,6 +61,11 @@ def _server_endpoint(settings: dict[str, Any], role: str) -> ProviderEndpoint:
     key = os.getenv(variable, "")
     # Never send the general NVIDIA credential to a custom server.
     parsed = urlsplit(endpoint)
+    if parsed.scheme == "https" and (parsed.hostname or "").endswith((".services.ai.azure.com", ".openai.azure.com")):
+        from ..config import Settings
+        from .secrets import SecretStore
+
+        key = os.getenv("EDMG_FOUNDRY_DIRECTOR_API_KEY", "") or SecretStore(Settings().data_dir).get("foundry_director_api_key") or ""
     if not key and parsed.scheme == "https" and (parsed.hostname or "").endswith(".endpoints.huggingface.cloud"):
         from ..config import Settings
         from .secrets import SecretStore
@@ -201,7 +206,7 @@ class OpenAICompatibleNemotronProvider:
             body["chat_template_kwargs"] = {"enable_thinking": False}
         for attempt in range(2):
             response = requests.post(self.config.chat_url, headers=headers, json=body,
-                                     timeout=self.config.timeout_s)
+                                     timeout=self.config.timeout_s, allow_redirects=False)
             if response.status_code not in {429, 503} or attempt:
                 break
             time.sleep(1)

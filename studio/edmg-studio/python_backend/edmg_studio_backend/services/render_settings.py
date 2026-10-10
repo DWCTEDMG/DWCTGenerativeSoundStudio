@@ -73,8 +73,9 @@ DEFAULT_RENDER_PROVIDER_SETTINGS: dict[str, Any] = {
     },
     "azure_foundry": {
         "enabled": False,
-        "allow_auto_fallback": True,
+        "allow_auto_fallback": False,
         "endpoint_url": "",
+        "video_endpoint_url": "",
         "deployment_name": "",
         "resolution": "720_16_9",
         "num_frames": 121,
@@ -265,6 +266,8 @@ class RenderSettingsStore:
 
         from .cosmos_platform import _COSMOS3_SHAPES
 
+        from .azure_foundry_platform import AzureFoundryClient, validate_azure_url
+
         af_resolution = str(
             azure_foundry.get("resolution") or out["azure_foundry"]["resolution"]
         ).strip().lower()
@@ -275,10 +278,11 @@ class RenderSettingsStore:
             "allow_auto_fallback": bool(
                 azure_foundry.get("allow_auto_fallback", out["azure_foundry"]["allow_auto_fallback"])
             ),
-            "endpoint_url": str(azure_foundry.get("endpoint_url") or "").strip(),
+            "endpoint_url": validate_azure_url(azure_foundry.get("endpoint_url") or ""),
+            "video_endpoint_url": validate_azure_url(azure_foundry.get("video_endpoint_url") or ""),
             "deployment_name": str(azure_foundry.get("deployment_name") or "").strip(),
             "resolution": af_resolution,
-            "num_frames": max(25, min(480, int(azure_foundry.get("num_frames", out["azure_foundry"]["num_frames"])))),
+            "num_frames": max(5, min(400, int(azure_foundry.get("num_frames", out["azure_foundry"]["num_frames"])))),
             "fps": max(1.0, min(60.0, float(azure_foundry.get("fps", out["azure_foundry"]["fps"])))),
             "guidance_scale": max(
                 1.0, min(7.0, float(azure_foundry.get("guidance_scale", out["azure_foundry"]["guidance_scale"])))
@@ -286,6 +290,8 @@ class RenderSettingsStore:
             "steps": max(1, min(100, int(azure_foundry.get("steps", out["azure_foundry"]["steps"])))),
             "timeout_s": max(60, min(1800, int(azure_foundry.get("timeout_s", out["azure_foundry"]["timeout_s"])))),
         }
+        AzureFoundryClient(endpoint_url=out["azure_foundry"]["endpoint_url"],
+                           video_endpoint_url=out["azure_foundry"]["video_endpoint_url"])
 
         firefly_style = str(firefly.get("style") or out["firefly"]["style"]).strip().lower()
         if firefly_style not in FIREFLY_STYLES:

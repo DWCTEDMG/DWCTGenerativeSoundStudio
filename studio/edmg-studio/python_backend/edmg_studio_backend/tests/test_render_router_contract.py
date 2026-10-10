@@ -7,6 +7,7 @@ from edmg_studio_backend.app import app
 from edmg_studio_backend.revisions import RevisionRoute
 
 RENDER_ROUTES = {
+    ("POST", "/v1/settings/azure_foundry/check"),
     ("POST", "/v1/projects/{project_id}/render/cosmos/scene"),
     ("POST", "/v1/projects/{project_id}/render/cosmos/all_scenes"),
     ("POST", "/v1/projects/{project_id}/render/azure_foundry/scene"),

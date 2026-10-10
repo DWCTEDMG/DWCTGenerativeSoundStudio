@@ -303,7 +303,6 @@
                             <x:String>auto</x:String>
                             <x:String>local_gpu</x:String>
                             <x:String>cosmos_cloud</x:String>
-                            <x:String>azure_foundry_cloud</x:String>
                             <x:String>comfyui</x:String>
                             <x:String>firefly_cloud</x:String>
                             <x:String>imagineart_cloud</x:String>
@@ -355,7 +354,7 @@
                                 <x:String>stability_api_key</x:String>
                                 <x:String>nvidia_api_key</x:String>
                                 <x:String>nvidia_service_key</x:String>
-                                <x:String>azure_foundry_api_key</x:String>
+                                <x:String>foundry_director_api_key</x:String>
                                 <x:String>lightning_api_key</x:String>
                                 <x:String>adobe_client_id</x:String>
                                 <x:String>adobe_client_secret</x:String>
@@ -371,31 +370,12 @@
 
                 <Border Style="{StaticResource SettingsCardStyle}">
                     <StackPanel Spacing="12">
-                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Microsoft Foundry project" />
-                        <TextBox
-                            x:Name="FoundryProjectTextBox"
-                            AutomationProperties.AutomationId="SettingsFoundryProjectTextBox"
-                            AutomationProperties.Name="Foundry project name"
-                            Header="Project name"
-                            MaxLength="200" />
-                        <TextBox
-                            x:Name="FoundrySubscriptionTextBox"
-                            AutomationProperties.AutomationId="SettingsFoundrySubscriptionTextBox"
-                            AutomationProperties.Name="Azure subscription"
-                            Header="Subscription"
-                            MaxLength="200" />
-                        <TextBox
-                            x:Name="FoundryEndpointTextBox"
-                            AutomationProperties.AutomationId="SettingsFoundryEndpointTextBox"
-                            AutomationProperties.Name="Foundry project endpoint"
-                            Header="Project endpoint"
-                            PlaceholderText="https://resource.services.ai.azure.com/api/projects/project-name" />
-                        <Button
-                            AutomationProperties.AutomationId="SettingsSaveFoundryButton"
-                            Click="SaveFoundryButton_Click"
-                            Content="Save Foundry metadata"
-                            HorizontalAlignment="Left" />
-                        <TextBlock Opacity="0.68" Text="Authentication remains backend-managed; no credentials are stored in the WinUI source tree." TextWrapping="Wrap" />
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Foundry Director endpoint" />
+                        <TextBlock Text="Use a Foundry chat deployment to generate Director drafts for review and apply. This endpoint provides creative direction; video generation uses your selected render provider." TextWrapping="Wrap" />
+                        <TextBox x:Name="FoundryDirectorEndpoint" Header="Chat endpoint or base URL" PlaceholderText="https://dwctpart.services.ai.azure.com/openai/v1/chat/completions" />
+                        <TextBox x:Name="FoundryDirectorModel" Header="Deployment name" PlaceholderText="Your Director model deployment" />
+                        <Button Content="Use Foundry for Director" Click="SaveFoundryDirector_Click" HorizontalAlignment="Left" />
+                        <TextBlock x:Name="FoundryDirectorStatus" Text="Save the key in Secrets as foundry_director_api_key. Generated drafts still require review and apply." TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 

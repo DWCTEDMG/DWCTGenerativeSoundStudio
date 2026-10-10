@@ -224,6 +224,10 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
 
         return {"ok": True, "provider": "nvidia-cosmos", "results": results, "total": len(scenes)}
 
+    @router.post("/v1/settings/azure_foundry/check")
+    def check_azure_foundry_connection():
+        return deps.resolve("_azure_foundry_client")().check_connection()
+
     @router.post("/v1/projects/{project_id}/render/azure_foundry/scene")
     def render_azure_foundry_scene(project_id: str, payload: dict[str, Any]):
         """Generate a single video clip for one scene using the hosted Azure AI Foundry
@@ -255,6 +259,10 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
 
         provider_status = _render_provider_status()
         azure_foundry_status = provider_status.get("azure_foundry") or {}
+        if not azure_foundry_status.get("enabled"):
+            raise UserFacingError("Azure Cosmos3-Super is disabled.",
+                                  hint="Enable the optional provider in Settings before rendering.",
+                                  code="AZURE_FOUNDRY_DISABLED", status_code=400)
         if not azure_foundry_status.get("configured"):
             raise UserFacingError(
                 "Azure AI Foundry Cosmos3 is not configured.",
@@ -357,6 +365,8 @@ def create_render_router(deps: RenderRouterDependencies) -> APIRouter:
             "duration_s": result.duration_s,
             "frames": result.frames,
             "fps": result.fps,
+            "width": result.width,
+            "height": result.height,
             "seed": result.seed,
         }
 

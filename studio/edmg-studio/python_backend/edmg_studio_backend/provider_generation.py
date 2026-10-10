@@ -111,16 +111,6 @@ def generation_provider_definitions(provider_status: dict[str, Any]) -> dict[str
                 "ready": cosmos_ready,
                 "readiness_detail": cosmos_note,
             },
-            {
-                "id": AZURE_FOUNDRY_PROVIDER_ID,
-                "name": "Azure AI Foundry Cosmos",
-                "kind": "hosted",
-                "operations": list(PROVIDER_OPERATIONS[AZURE_FOUNDRY_PROVIDER_ID]),
-                "capabilities": ["text_to_video", "image_to_video", "durable_queue"],
-                "renderer_ids": [],
-                "ready": azure_ready,
-                "readiness_detail": azure_note,
-            },
         ],
     }
 

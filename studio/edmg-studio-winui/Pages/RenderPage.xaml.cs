@@ -438,8 +438,10 @@ public sealed partial class RenderPage : Page
     string runtime = string.IsNullOrWhiteSpace(_generationProvider.HardwareBackend)
         ? _generationProvider.Kind
         : _generationProvider.HardwareBackend;
-    GenerationProviderText.Text = $"{_generationProvider.Name} · {runtime} · "
-        + $"{(_generationProvider.Ready ? "ready" : "blocked")} · {_generationProvider.ReadinessDetail}";
+    string availability = _generationProvider.Ready
+        ? _generationProvider.Id == "azure.foundry.cosmos" ? "configured · video unverified" : "ready"
+        : "blocked";
+    GenerationProviderText.Text = $"{_generationProvider.Name} · {runtime} · {availability} · {_generationProvider.ReadinessDetail}";
   }
 
   private void UpdateRuntimeCapabilityUi()
@@ -867,6 +869,16 @@ public sealed partial class RenderPage : Page
   private JsonElement BuildHostedVideoRequest()
   {
     long seed = LongNumber(SeedBox, -1);
+    if (_generationProvider?.Id == "azure.foundry.cosmos")
+    {
+      // Azure's per-shot resolution, frames, fps, steps and guidance are configured
+      // together in Settings. Local render profile values do not override them.
+      return JsonSerializer.SerializeToElement(new
+      {
+        variant_index = App.Services.Session.SelectedVariantIndex,
+        seed = seed < 0 ? (long?)null : seed,
+      }, StudioJson.Options);
+    }
     return JsonSerializer.SerializeToElement(new
     {
       variant_index = App.Services.Session.SelectedVariantIndex,
@@ -1268,7 +1280,7 @@ public sealed partial class RenderPage : Page
   private async void Render_Click(object sender, RoutedEventArgs e)
   {
     await RunProjectJsonAsync(
-          "Queueing internal render",
+          "Queueing generation",
           PreflightResultBox,
           async (projectId, token) =>
           {

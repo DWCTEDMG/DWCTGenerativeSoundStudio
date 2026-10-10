@@ -169,12 +169,12 @@ def test_provider_definitions_are_complete_and_readiness_isolated() -> None:
     providers = {provider["id"]: provider for provider in definitions["providers"]}
     assert set(providers) == {
         "edmg.internal", "comfyui", "stability", "adobe.firefly", "imagineart",
-        "nvidia.cosmos", "azure.foundry.cosmos",
+        "nvidia.cosmos",
     }
     assert providers["comfyui"]["ready"] is False
     assert providers["adobe.firefly"]["ready"] is True
     assert providers["stability"]["ready"] is False
-    assert providers["azure.foundry.cosmos"]["ready"] is True
+    assert "azure.foundry.cosmos" not in providers
 
 
 def test_generation_request_rejects_credentials_recursively() -> None:

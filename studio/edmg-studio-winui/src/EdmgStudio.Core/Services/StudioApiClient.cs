@@ -2322,6 +2322,11 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     return PostJsonElementAsync("/v1/settings/render_providers", request, cancellationToken);
   }
 
+  public Task<JsonElement> CheckAzureVideoConnectionAsync(CancellationToken cancellationToken = default)
+  {
+    return SendJsonElementAsync(HttpMethod.Post, "/v1/settings/azure_foundry/check", null, true, cancellationToken);
+  }
+
   public Task<JsonElement> GetRenderRouteAsync(CancellationToken cancellationToken = default)
   {
     return SendJsonElementAsync(HttpMethod.Get, "/v1/render/route", null, true, cancellationToken);

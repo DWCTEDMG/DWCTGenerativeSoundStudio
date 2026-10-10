@@ -238,3 +238,24 @@ def test_endpoint_credentials_are_never_persisted(tmp_path):
     })
     assert settings["primary_endpoint"] == settings["specialist_endpoint"] == ""
     assert "secret" not in json.dumps(settings)
+
+
+def test_foundry_director_chat_url_normalization():
+    from edmg_studio_backend.services.director_runtime_settings import _endpoint
+    from edmg_studio_backend.services.director_providers import ProviderEndpoint
+    full = "https://dwctpart.services.ai.azure.com/openai/v1/chat/completions"
+    normalized = _endpoint(full)
+    assert normalized == "https://dwctpart.services.ai.azure.com/openai/v1"
+    assert ProviderEndpoint(normalized, "director").chat_url == full
+    assert _endpoint("https://dwctpart.services.ai.azure.com") == normalized
+    assert _endpoint("http://dwctpart.services.ai.azure.com") == ""
+
+
+def test_foundry_director_uses_dedicated_secret(monkeypatch):
+    from edmg_studio_backend.services.director_providers import _server_endpoint
+    monkeypatch.setenv("EDMG_FOUNDRY_DIRECTOR_API_KEY", "foundry-test")
+    monkeypatch.setenv("EDMG_NEMOTRON_API_KEY", "other-test")
+    result = _server_endpoint({"primary_endpoint": "https://dwctpart.services.ai.azure.com/openai/v1",
+                               "primary_server_model": "director"}, "primary")
+    assert result.api_key == "foundry-test"
+    assert result.model == "director"
