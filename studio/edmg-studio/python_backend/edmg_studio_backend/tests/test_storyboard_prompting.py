@@ -20,6 +20,23 @@ from edmg_studio_backend.services.deforum_normalize import (
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
+def test_hunyuan_preserves_reviewed_story_and_deliberate_stop() -> None:
+    prompt = (
+        "An androgynous traveler in a weathered charcoal coat walks through an old forest town. "
+        "Lanterns illuminate wooden cottages through silver fog. The oil painting texture and "
+        "muted indigo palette remain consistent while the camera slowly follows from behind. "
+        "At the central square the traveler stops beside a black obelisk for the first time. "
+        "Hundreds of faceless residents remain still; only the traveler's shadow moves independently."
+    )
+    for refine in (True, False):
+        settings = InternalVideoSettings(video_model_engine="hunyuan_video15", video_model_prompt_refine=refine)
+        actual = internal_video._refine_video_model_prompt(
+            prompt, score_info={"motion_score": 4}, settings=settings,
+            scene={"action": "traveler stops", "camera": "slow retreat"},
+        )
+        assert actual == prompt
+
+
 def test_ltx_uses_compiled_director_prompt_without_overriding_user_edits() -> None:
     scene = {
         "prompt": "Hunyuan source prompt",

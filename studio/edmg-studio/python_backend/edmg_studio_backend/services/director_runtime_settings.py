@@ -52,6 +52,10 @@ def _endpoint(value: Any) -> str:
         endpoint = endpoint.removesuffix("/chat/completions")
         if not urlsplit(endpoint).path.strip("/"):
             endpoint += "/openai/v1"
+    # Director endpoints are OpenAI base URLs. HF dashboards copy the host
+    # alone; without this suffix the adapter posts to /chat/completions (404).
+    if parsed.hostname.endswith((".endpoints.huggingface.cloud", ".hf.space")) and parsed.path in {"", "/"}:
+        endpoint += "/v1"
     return endpoint
 
 

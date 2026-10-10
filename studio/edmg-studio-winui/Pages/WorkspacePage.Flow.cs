@@ -143,7 +143,7 @@ public sealed partial class WorkspacePage
     CommandProposalSection.Visibility = Visibility.Visible;
     CommandProposalSection.IsExpanded = true;
     CommandProgress.Value = 100;
-    CommandStatus.Text = "Qwen draft ready for review. Use draft to refine it, or apply and open Render.";
+    CommandStatus.Text = "Director draft ready for review. Use draft to refine it, or apply and open Render.";
     UpdateDirectorWorkspaceAvailability();
   }
 
@@ -263,12 +263,12 @@ public sealed partial class WorkspacePage
 
     if (GetComboTag(CommandProvider, "internal_qwen") != "internal_qwen")
     {
-      CommandQwenStatus.Text = "Internal Qwen readiness is not applicable while BYOM is selected.";
+      CommandQwenStatus.Text = "Managed Director readiness is not applicable while BYOM is selected.";
       return;
     }
 
     string modelId = GetComboTag(CommandDirectorModel, "");
-    CommandQwenStatus.Text = "Qwen: checking configuration and runtime evidence";
+    CommandQwenStatus.Text = "Director: checking configuration and runtime evidence";
     try
     {
       if (TryGetActiveProjectId(out string projectId))
@@ -277,12 +277,12 @@ public sealed partial class WorkspacePage
             projectId, "automatic", "automatic", token,
             string.IsNullOrWhiteSpace(modelId) ? null : modelId);
         JsonElement director = readiness.GetProperty("director");
-        string label = ReadString(director, "label", "Audio-native Qwen");
+        string label = ReadString(director, "label", "Studio Director");
         string reason = ReadString(director, "reason", "Readiness evidence unavailable.");
         bool ready = director.TryGetProperty("ready", out JsonElement readyValue) && readyValue.GetBoolean();
         CommandQwenStatus.Text = ready
-            ? $"Qwen: ready - {(string.IsNullOrWhiteSpace(modelId) ? "Automatic selected " : "")}{label}. {reason}"
-            : $"Qwen: unavailable - {label}. {reason}";
+            ? $"Director: configured - {(string.IsNullOrWhiteSpace(modelId) ? "Automatic selected " : "")}{label}. {reason}"
+            : $"Director: unavailable - {label}. {reason}";
         return;
       }
       if (string.IsNullOrWhiteSpace(modelId))
@@ -291,12 +291,12 @@ public sealed partial class WorkspacePage
       }
 
       ModelRuntimeStatus status = await App.Services.ApiClient.GetModelRuntimeReadinessAsync(modelId, token);
-      CommandQwenStatus.Text = WorkspaceReadinessSummary.Model("Qwen", status);
+      CommandQwenStatus.Text = WorkspaceReadinessSummary.Model("Director", status);
     }
     catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-    catch (HttpRequestException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.Message}"; }
-    catch (StudioApiException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.UserFacingMessage}"; }
-    catch (InvalidOperationException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.Message}"; }
-    catch (JsonException error) { CommandQwenStatus.Text = $"Qwen: unavailable - readiness could not be read: {error.Message}"; }
+    catch (HttpRequestException error) { CommandQwenStatus.Text = $"Director: unavailable - readiness could not be read: {error.Message}"; }
+    catch (StudioApiException error) { CommandQwenStatus.Text = $"Director: unavailable - readiness could not be read: {error.UserFacingMessage}"; }
+    catch (InvalidOperationException error) { CommandQwenStatus.Text = $"Director: unavailable - readiness could not be read: {error.Message}"; }
+    catch (JsonException error) { CommandQwenStatus.Text = $"Director: unavailable - readiness could not be read: {error.Message}"; }
   }
 }

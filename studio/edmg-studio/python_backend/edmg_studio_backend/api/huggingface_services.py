@@ -5,7 +5,7 @@ import base64
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 
 import requests
 from fastapi import APIRouter, HTTPException
@@ -17,8 +17,8 @@ from ..services.hf_auth import hf_token_candidates
 class HostedSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     namespace: str = "gulle1155"
-    nemotron_endpoint: str = "https://6ac87f4453d27c9b5cb0cba8.endpoints.huggingface.cloud/v1"
-    hunyuan_endpoint: str = "https://6ac883da53d27c9b5cb0cbf7.endpoints.huggingface.cloud"
+    nemotron_endpoint: str = "https://gulle1155-nemotron-3-nano-omni-zerogpu.hf.space/v1"
+    hunyuan_endpoint: str = "https://gulle1155-hunyuan-video-1-5-zerogpu.hf.space"
     webhook_url: str = ""
     webhook_id: str = ""
 
@@ -34,10 +34,10 @@ class HostedSettings(BaseModel):
     def endpoint_valid(cls, value):
         parsed = urlsplit(value)
         if (parsed.scheme != "https" or not parsed.hostname
-                or not parsed.hostname.endswith(".endpoints.huggingface.cloud")
+                or not parsed.hostname.endswith((".endpoints.huggingface.cloud", ".hf.space"))
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
                 or parsed.port not in (None, 443)):
-            raise ValueError("Use an HTTPS Hugging Face dedicated endpoint URL")
+            raise ValueError("Use an HTTPS Hugging Face endpoint or Space URL")
         return value.rstrip("/")
 
     @field_validator("webhook_url")
@@ -146,7 +146,8 @@ def create_huggingface_services_router(data_dir: Path, secrets_store):
             "mcp_servers": {
                 "hub": "https://huggingface.co/mcp",
                 "hunyuan": f"https://{namespace}-hunyuan-video-1-5-zerogpu.hf.space/gradio_api/mcp/",
-                "nemotron": f"https://{namespace}-nemotron-3-nano-omni-zerogpu.hf.space/gradio_api/mcp/"}}
+                "nemotron": f"https://{namespace}-nemotron-3-nano-omni-zerogpu.hf.space/gradio_api/mcp/",
+                "cosmos": f"https://{namespace}-cosmos-reason2-8b.hf.space/gradio_api/mcp/"}}
 
     @router.post("/settings")
     def save_settings(payload: SaveHostedSettings):
@@ -212,7 +213,49 @@ def create_huggingface_services_router(data_dir: Path, secrets_store):
 
     @router.post("/hunyuan/preview")
     def preview(payload: PreviewRequest):
-        with request("POST", load().hunyuan_endpoint, json={"inputs": payload.prompt,
+        endpoint = load().hunyuan_endpoint
+        if urlsplit(endpoint).hostname.endswith(".hf.space"):
+            with request("POST", endpoint + "/gradio_api/call/generate", json={"data": [
+                    payload.prompt, payload.seed, payload.frames, payload.steps]}, timeout=30) as response:
+                event_id = response_json(response).get("event_id", "")
+            if not re.fullmatch(r"[a-zA-Z0-9_-]+", event_id):
+                raise HTTPException(502, "Space returned an invalid generation event")
+            output = None
+            event = ""
+            with request("GET", endpoint + "/gradio_api/call/generate/" + event_id,
+                         stream=True, timeout=600) as response:
+                for line in response.iter_lines(decode_unicode=True):
+                    if line and line.startswith("event:"):
+                        event = line[6:].strip()
+                    elif line and line.startswith("data:"):
+                        if event == "error":
+                            raise HTTPException(503, "ZeroGPU generation failed: " + line[5:][:300])
+                        if event == "complete":
+                            output = json.loads(line[5:].strip())
+                            break
+            if not isinstance(output, list) or not output:
+                raise HTTPException(502, "Space returned no completed video")
+            file_data = output[0].get("video", output[0]) if isinstance(output[0], dict) else {}
+            file_path = file_data.get("path", "") if isinstance(file_data, dict) else ""
+            if not file_path.startswith("/tmp/") or ".." in file_path.split("/"):
+                raise HTTPException(502, "Space returned an invalid video path")
+            with request("GET", endpoint + "/gradio_api/file=" + quote(file_path, safe="/"),
+                         stream=True, timeout=120) as response:
+                chunks = []
+                length = 0
+                for chunk in response.iter_content(1024 * 1024):
+                    length += len(chunk)
+                    if length > 48 * 1024 * 1024:
+                        raise HTTPException(502, "Preview exceeded the 48 MB limit")
+                    chunks.append(chunk)
+            video = b"".join(chunks)
+            if len(video) < 12 or video[4:8] != b"ftyp":
+                raise HTTPException(502, "Space did not return an MP4")
+            return {"video_base64": base64.b64encode(video).decode("ascii"),
+                    "frames": payload.frames, "fps": 24,
+                    "model": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v",
+                    "device": "huggingface_zerogpu", "generation_details": output[1] if len(output) > 1 else ""}
+        with request("POST", endpoint, json={"inputs": payload.prompt,
                 "parameters": {"seed": payload.seed, "num_frames": payload.frames,
                     "num_inference_steps": payload.steps}}, timeout=600) as response:
             result = response_json(response)

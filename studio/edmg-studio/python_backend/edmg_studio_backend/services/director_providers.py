@@ -66,7 +66,7 @@ def _server_endpoint(settings: dict[str, Any], role: str) -> ProviderEndpoint:
         from .secrets import SecretStore
 
         key = os.getenv("EDMG_FOUNDRY_DIRECTOR_API_KEY", "") or SecretStore(Settings().data_dir).get("foundry_director_api_key") or ""
-    if not key and parsed.scheme == "https" and (parsed.hostname or "").endswith(".endpoints.huggingface.cloud"):
+    if not key and parsed.scheme == "https" and (parsed.hostname or "").endswith((".endpoints.huggingface.cloud", ".hf.space")):
         from ..config import Settings
         from .secrets import SecretStore
         from .hf_auth import resolve_hf_token
@@ -192,6 +192,28 @@ def _merge_server_document(raw: str, source: dict[str, Any]) -> str:
     return json.dumps(candidate, separators=(",", ":"))
 
 
+def _server_plan_schema() -> dict[str, Any]:
+    """A bounded edit envelope; the complete source metadata is merged locally."""
+    text = {"type": "string", "maxLength": 600}
+    camera = {"type": "object", "additionalProperties": False, "properties": {
+        "shot_type": text, "movement": text, "stability": text,
+        "motion_strength": {"type": "number", "minimum": 0, "maximum": 1}}}
+    scene = {"type": "object", "additionalProperties": False,
+        "required": ["scene_id", "intent"], "properties": {
+            "scene_id": {"type": "string", "maxLength": 128}, "intent": text,
+            "camera": camera, "actions": {"type": "array", "maxItems": 6, "items": text}}}
+    return {"type": "object", "additionalProperties": False,
+        "required": ["schema_version", "correlation_id", "director_model", "mode", "document"],
+        "properties": {"schema_version": {"const": "1.0"},
+            "correlation_id": {"type": "string", "maxLength": 128},
+            "director_model": {"type": "string", "maxLength": 256},
+            "mode": {"enum": ["fast", "standard", "advanced"]},
+            "document": {"type": "object", "additionalProperties": False,
+                "required": ["version", "scenes"], "properties": {
+                    "version": {"const": 1}, "scenes": {
+                        "type": "array", "minItems": 1, "maxItems": 64, "items": scene}}}}}
+
+
 class OpenAICompatibleNemotronProvider:
     def __init__(self, config: ProviderEndpoint):
         self.config = config
@@ -202,6 +224,13 @@ class OpenAICompatibleNemotronProvider:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         body = {"model": self.config.model, "messages": messages, "temperature": 0.2,
                 "max_tokens": 8192, "response_format": {"type": "json_object"}}
+        if (urlsplit(self.config.endpoint).hostname or "").endswith(".endpoints.huggingface.cloud"):
+            # The dedicated vLLM service supports schema-constrained decoding.
+            # JSON-object mode alone allows unrelated timeline fields to escape
+            # the DirectorPlan envelope on real multi-scene Workspace requests.
+            body["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "director_plan", "schema": _server_plan_schema()}}
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         if urlsplit(self.config.endpoint).hostname == "integrate.api.nvidia.com":
             body["chat_template_kwargs"] = {"enable_thinking": False}
         for attempt in range(2):
@@ -221,32 +250,50 @@ class OpenAICompatibleNemotronProvider:
             "You are the EDMG Director. Return only JSON matching DirectorPlan schema version 1.0. "
             "You propose a complete DirectorDocument but never mutate state, execute commands, choose "
             "arbitrary paths, or make network calls. Respect locked scenes and timeline locks. Cosmos "
-            "results are non-authoritative evidence. director_model must identify the active model."
+            "results are non-authoritative evidence. director_model must identify the active model. "
+            "Keep the response concise: document.scenes may contain only changed fields and scene_id. "
+            "Studio merges these edits into the complete source document. Do not repeat source metadata, "
+            "timeline clips, audio arrays, the request, or the schema. Complete the JSON within 4096 tokens."
         )
         request = {
             "schema_version": "1.0", "correlation_id": correlation_id, "mode": mode,
             "instruction": instruction, "context": server_context,
             "specialist_results": [item.model_dump(mode="json") for item in specialist_results],
-            "response_schema": DirectorPlan.model_json_schema(),
+            "response_schema": _server_plan_schema(),
             "required_shape": {
                 "schema_version": "1.0", "correlation_id": correlation_id,
                 "director_model": self.config.model, "mode": mode,
-                "document": server_context.get("source_document", {}), "decisions": [],
-                "specialist_results": [], "diagnostics": {},
+                "document": {"version": 1, "scenes": []},
             },
         }
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(request, separators=(",", ":"))}]
         raw = self._request(messages)
+        def parse_plan(response_text):
+            candidate = json.loads(response_text)
+            # Some servers return the document itself. Wrap only this known
+            # contract; scene, timing, and lock validation still run below.
+            if isinstance(candidate, dict) and "document" not in candidate and "scenes" in candidate:
+                metadata = {key: candidate.pop(key) for key in
+                            ("decisions", "specialist_results", "diagnostics") if key in candidate}
+                candidate = {"schema_version": "1.0", "correlation_id": correlation_id,
+                             "director_model": self.config.model, "mode": mode,
+                             "document": candidate, **metadata}
+            return DirectorPlan.model_validate_json(_merge_server_document(
+                json.dumps(candidate), context["source_document"]))
         try:
-            plan = DirectorPlan.model_validate_json(_merge_server_document(raw, context["source_document"]))
+            plan = parse_plan(raw)
         except (ValidationError, ValueError, json.JSONDecodeError) as first_error:
             repair = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": f"Repair this response to the required JSON schema. Validation error: {first_error}"},
             ]
-            plan = DirectorPlan.model_validate_json(_merge_server_document(
-                self._request(repair), context["source_document"]))
+            try:
+                plan = parse_plan(self._request(repair))
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                raise UserFacingError("Director returned an invalid plan.",
+                    hint="Retry Director planning; the model response did not match the required schema.",
+                    code="DIRECTOR_PLAN_INVALID", status_code=502) from exc
         if plan.document == DirectorDocument.model_validate(context["source_document"]):
             plan.diagnostics["no_scene_edits"] = True
         plan.director_model = self.config.model

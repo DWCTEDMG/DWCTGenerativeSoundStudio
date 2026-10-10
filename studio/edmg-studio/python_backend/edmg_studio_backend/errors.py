@@ -26,6 +26,10 @@ def hint_from_exception(e: Exception) -> str | None:
     s = str(e)
     sl = s.lower()
 
+    # Pydantic's extra_forbidden is a schema error, not HTTP authorization.
+    if getattr(e, "errors", None) and type(e).__module__.startswith(("pydantic", "pydantic_core")):
+        return "The Director response did not match the required plan schema. Retry the Director request."
+
     if "401" in sl or "403" in sl or "unauthorized" in sl or "forbidden" in sl:
         if "civitai" in sl:
             return "Set CIVITAI_API_KEY in Settings → Tokens (some downloads require auth), then retry."

@@ -146,4 +146,3 @@ curl -X POST https://gulle1155-cosmos-reason2-8b.hf.space/call/v2/chat -s -H "Co
   | awk -F'"' '{ print $4}' \
   | read EVENT_ID; curl -N https://gulle1155-cosmos-reason2-8b.hf.space/call/chat/$EVENT_ID
 ```
-
