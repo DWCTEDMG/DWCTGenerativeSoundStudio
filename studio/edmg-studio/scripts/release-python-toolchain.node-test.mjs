@@ -917,7 +917,7 @@ test("build-tool transitive security overrides stay on audited patched releases"
       xmldom08: "0.8.15",
       fastUri3: "3.1.8",
       httpCacheSemantics: "4.3.0",
-      joi18: "18.2.6",
+      joi18: "18.2.9",
       jsYaml4: "4.3.2",
       nanoid3: "3.3.18",
     },
@@ -929,7 +929,7 @@ test("build-tool transitive security overrides stay on audited patched releases"
     "'@xmldom/xmldom@0.8.15':",
     "fast-uri@3.1.8:",
     "http-cache-semantics@4.3.0:",
-    "joi@18.2.6:",
+    "joi@18.2.9:",
     "js-yaml@4.3.2:",
     "nanoid@3.3.18:",
   ]) {

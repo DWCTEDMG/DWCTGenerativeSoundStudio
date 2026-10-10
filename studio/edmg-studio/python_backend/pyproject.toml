@@ -129,6 +129,9 @@ constraint-dependencies = [
   "PyJWT>=2.15,<3",
   "urllib3>=2.8,<3",
   "virtualenv>=21.7.12,<22",
+  "Werkzeug>=3.1.9,<4",
+  "Mako>=1.4.2,<2",
+  "multidict>=6.9.1,<7",
 ]
 conflicts = [
   [{ extra = "cpu" }, { extra = "directml" }],
