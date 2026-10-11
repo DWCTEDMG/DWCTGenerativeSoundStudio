@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import errno
 import json
 import logging
@@ -2144,19 +2145,26 @@ class ModelManager:
                 for filename in entry.get("required_files") or ["config.json", "tokenizer_config.json"]:
                     if not isinstance(filename, str) or Path(filename).name != filename:
                         return False
-                    metadata = json.loads((path / filename).read_text(encoding="utf-8"))
-                    if not isinstance(metadata, dict) or not metadata:
-                        return False
+                    content = (path / filename).read_text(encoding="utf-8")
+                    if Path(filename).suffix == ".py":
+                        if not content.strip():
+                            return False
+                        ast.parse(content, filename=filename)
+                    else:
+                        metadata = json.loads(content)
+                        if not isinstance(metadata, dict) or not metadata:
+                            return False
                 for filename in entry.get("required_binary_files") or []:
                     if not isinstance(filename, str) or Path(filename).name != filename:
                         return False
                     if not self._is_model_weight_file(path / filename):
                         return False
                 config = json.loads((path / "config.json").read_text(encoding="utf-8"))
-                if entry.get("family") and config.get("model_type") != entry["family"]:
+                expected_model_type = entry.get("hf_model_type") or entry.get("family")
+                if expected_model_type and config.get("model_type") != expected_model_type:
                     return False
                 return self._internal_component_has_weights(path, weight_format="safetensors")
-            except (OSError, ValueError, TypeError):
+            except (OSError, ValueError, TypeError, SyntaxError):
                 return False
         if kind == "motion_adapter":
             try:

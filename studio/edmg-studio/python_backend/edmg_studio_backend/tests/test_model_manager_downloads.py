@@ -79,6 +79,33 @@ def test_director_catalog_is_pinned_and_requires_complete_snapshot(tmp_path, mon
     assert _hf_profile_matches_path("model-00001-of-00004.safetensors", profile)
 
 
+@pytest.mark.parametrize("model_id", ["hf_nemotron3_nano_omni_30b_a3b_reasoning_bf16", "hf_cosmos_reason2_8b"])
+def test_nvidia_director_validates_python_support_without_executing_it(tmp_path, monkeypatch, model_id):
+    from edmg_studio_backend.services.model_catalog import built_in_catalog
+
+    entry = next(item for item in built_in_catalog() if item["id"] == model_id)
+    manager = _manager(tmp_path, monkeypatch)
+    _, destination = manager._models_dest(entry)
+    destination.mkdir(parents=True)
+    for filename in entry["required_files"]:
+        content = 'raise RuntimeError("must not execute")\n' if filename.endswith('.py') else json.dumps({"fixture": True})
+        (destination / filename).write_text(content, encoding="utf-8")
+    assert entry["hf_model_type"] != entry["family"]
+    (destination / "config.json").write_text(json.dumps({"model_type": entry["hf_model_type"]}), encoding="utf-8")
+    (destination / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {"weight": "model-00001-of-00001.safetensors"}}), encoding="utf-8")
+    write_minimal_safetensors(destination / "model-00001-of-00001.safetensors")
+    assert manager._internal_asset_installed(entry, destination)
+    (destination / "config.json").write_text(json.dumps({"model_type": "wrong_model"}), encoding="utf-8")
+    assert not manager._internal_asset_installed(entry, destination)
+    (destination / "config.json").write_text(json.dumps({"model_type": entry["hf_model_type"]}), encoding="utf-8")
+    if "modeling.py" not in entry["required_files"]:
+        return
+    (destination / "modeling.py").write_text("def broken(\n", encoding="utf-8")
+    assert not manager._internal_asset_installed(entry, destination)
+    (destination / "modeling.py").write_text("", encoding="utf-8")
+    assert not manager._internal_asset_installed(entry, destination)
+
+
 def test_audio_native_director_requires_binary_companion(tmp_path, monkeypatch):
     from edmg_studio_backend.services.model_catalog import built_in_catalog
 
