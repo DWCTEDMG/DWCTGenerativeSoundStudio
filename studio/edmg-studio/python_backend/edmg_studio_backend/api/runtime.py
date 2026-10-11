@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,7 @@ from ..runtime.policy import RuntimePolicy
 from ..runtime.service import runtime_status
 from ..execution.policy import ExecutionSettings
 from ..execution.status import execution_inventory_summary
+from ..execution.hybrid import HybridVideoSettings, LinuxVideoTransport
 from ..services.model_load_coordinator import ModelLoadTimeout, model_load_lock
 
 
@@ -32,6 +34,46 @@ class RuntimeJobRequest(BaseModel):
 
 def create_runtime_router(settings, get_store, get_jobs, render_settings, hardware):
     router = APIRouter(tags=["runtime"])
+    hybrid_path = settings.data_dir / "config" / "hybrid-video.json"
+    os.environ["EDMG_HYBRID_CONFIG_PATH"] = str(hybrid_path.resolve())
+
+    def hybrid_settings():
+        if not hybrid_path.is_file():
+            return HybridVideoSettings()
+        return HybridVideoSettings.model_validate_json(hybrid_path.read_text(encoding="utf-8"))
+
+    @router.get("/v1/execution/hybrid")
+    def get_hybrid():
+        return hybrid_settings().model_dump(mode="json")
+
+    @router.put("/v1/execution/hybrid")
+    def save_hybrid(payload: HybridVideoSettings):
+        for node, wsl in ((payload.remote, False), (payload.wsl_backup, True)):
+            if node.enabled:
+                try:
+                    LinuxVideoTransport(node, wsl=wsl)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
+        hybrid_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(hybrid_path, payload.model_dump_json(indent=2).encode("utf-8"))
+        return payload.model_dump(mode="json")
+
+    @router.post("/v1/execution/hybrid/probe")
+    def probe_hybrid():
+        payload = hybrid_settings()
+        reports = {}
+        for name, node, wsl in (("remote", payload.remote, False), ("wsl_backup", payload.wsl_backup, True)):
+            if not node.enabled:
+                reports[name] = {"enabled": False, "reachable": False}
+                continue
+            try:
+                report = LinuxVideoTransport(node, wsl=wsl).probe()
+                reports[name] = {"enabled": True, "reachable": True, "probe": report,
+                                 "inference_qualified": False}
+            except Exception as exc:
+                reports[name] = {"enabled": True, "reachable": False, "error": type(exc).__name__,
+                                 "inference_qualified": False}
+        return reports
 
     @router.get("/v1/runtime/status")
     def status():

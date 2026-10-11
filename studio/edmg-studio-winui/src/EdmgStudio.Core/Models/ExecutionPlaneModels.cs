@@ -3,6 +3,29 @@ using System.Text.Json.Serialization;
 
 namespace EdmgStudio.Core.Models;
 
+public sealed record LinuxVideoNode
+{
+  [JsonPropertyName("enabled")] public bool Enabled { get; init; }
+  [JsonPropertyName("host")] public string Host { get; init; } = "";
+  [JsonPropertyName("port")] public int Port { get; init; } = 22;
+  [JsonPropertyName("user")] public string User { get; init; } = "root";
+  [JsonPropertyName("identity_file")] public string IdentityFile { get; init; } = "";
+  [JsonPropertyName("python")] public string Python { get; init; } = "";
+  [JsonPropertyName("backend_root")] public string BackendRoot { get; init; } = "";
+  [JsonPropertyName("models_root")] public string ModelsRoot { get; init; } = "";
+  [JsonPropertyName("staging_root")] public string StagingRoot { get; init; } = "/tmp/edmg-hybrid";
+  [JsonPropertyName("distro")] public string Distro { get; init; } = "Ubuntu";
+}
+
+public sealed record HybridVideoSettings
+{
+  [JsonPropertyName("remote")] public LinuxVideoNode Remote { get; init; } = new();
+  [JsonPropertyName("wsl_backup")] public LinuxVideoNode WslBackup { get; init; } = new();
+  [JsonPropertyName("engines")] public string[] Engines { get; init; } = ["svd", "animatediff", "ltx_25", "hunyuan_video15"];
+  [JsonPropertyName("allow_local_fallback")] public bool AllowLocalFallback { get; init; } = true;
+  [JsonPropertyName("timeout_seconds")] public int TimeoutSeconds { get; init; } = 7200;
+}
+
 public sealed record ExecutionProfile
 {
   [JsonPropertyName("runtime_profile")] public string RuntimeProfile { get; init; } = "standard";

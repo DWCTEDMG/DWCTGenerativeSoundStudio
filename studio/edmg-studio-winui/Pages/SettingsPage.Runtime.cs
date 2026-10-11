@@ -9,6 +9,7 @@ public sealed partial class SettingsPage
 {
   private RuntimeSettings _runtimePolicy = new();
   private RuntimeStatusResponse? _runtimeStatus;
+  private HybridVideoSettings _hybridVideo = new();
 
   private async Task RefreshExecutionPlaneAsync()
   {
@@ -18,6 +19,29 @@ public sealed partial class SettingsPage
       ExecutionProfileComboBox.SelectedItem = ExecutionProfileComboBox.Items.OfType<ComboBoxItem>()
           .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), profile.RuntimeProfile, StringComparison.Ordinal));
       ApplyExecutionInventory(await _apiClient.GetExecutionInventoryAsync());
+      try
+      {
+        _hybridVideo = await _apiClient.GetHybridVideoAsync();
+        HybridRemoteEnabled.IsChecked = _hybridVideo.Remote.Enabled;
+        HybridHost.Text = _hybridVideo.Remote.Host;
+        HybridPort.Value = _hybridVideo.Remote.Port;
+        HybridUser.Text = _hybridVideo.Remote.User;
+        HybridKey.Text = _hybridVideo.Remote.IdentityFile;
+        HybridPython.Text = _hybridVideo.Remote.Python;
+        HybridBackendRoot.Text = _hybridVideo.Remote.BackendRoot;
+        HybridModelsRoot.Text = _hybridVideo.Remote.ModelsRoot;
+        HybridWslEnabled.IsChecked = _hybridVideo.WslBackup.Enabled;
+        HybridWslDistro.Text = _hybridVideo.WslBackup.Distro;
+        HybridWslPython.Text = _hybridVideo.WslBackup.Python;
+        HybridWslBackendRoot.Text = _hybridVideo.WslBackup.BackendRoot;
+        HybridWslModelsRoot.Text = _hybridVideo.WslBackup.ModelsRoot;
+        HybridLocalFallback.IsChecked = _hybridVideo.AllowLocalFallback;
+        HybridSvd.IsChecked = _hybridVideo.Engines.Contains("svd");
+        HybridAnimateDiff.IsChecked = _hybridVideo.Engines.Contains("animatediff");
+        HybridLtx.IsChecked = _hybridVideo.Engines.Contains("ltx_25");
+        HybridHunyuan.IsChecked = _hybridVideo.Engines.Contains("hunyuan_video15");
+      }
+      catch (Exception ex) { HybridStatus.Text = $"Worker settings unavailable: {ex.Message}"; }
     }
     catch (Exception ex)
     {
@@ -46,6 +70,46 @@ public sealed partial class SettingsPage
   private async void ProbeWslExecution_Click(object sender, RoutedEventArgs e)
   {
     ApplyExecutionInventory(await _apiClient.ProbeWslExecutionAsync());
+  }
+
+  private async void SaveHybridVideo_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      _hybridVideo = await _apiClient.SaveHybridVideoAsync(_hybridVideo with
+      {
+        Remote = _hybridVideo.Remote with { Enabled = HybridRemoteEnabled.IsChecked == true,
+          Host = HybridHost.Text.Trim(), Port = (int)HybridPort.Value, User = HybridUser.Text.Trim(),
+          IdentityFile = HybridKey.Text.Trim(), Python = HybridPython.Text.Trim(),
+          BackendRoot = HybridBackendRoot.Text.Trim(), ModelsRoot = HybridModelsRoot.Text.Trim() },
+        WslBackup = _hybridVideo.WslBackup with { Enabled = HybridWslEnabled.IsChecked == true,
+          Distro = HybridWslDistro.Text.Trim(), Python = HybridWslPython.Text.Trim(),
+          BackendRoot = HybridWslBackendRoot.Text.Trim(), ModelsRoot = HybridWslModelsRoot.Text.Trim() },
+        AllowLocalFallback = HybridLocalFallback.IsChecked == true,
+        Engines = new[] { ("svd", HybridSvd.IsChecked), ("animatediff", HybridAnimateDiff.IsChecked),
+          ("ltx_25", HybridLtx.IsChecked), ("hunyuan_video15", HybridHunyuan.IsChecked) }
+          .Where(item => item.Item2 == true).Select(item => item.Item1).ToArray()
+      });
+      HybridStatus.Text = "Workers saved. Probe connectivity, then qualify a render before relying on the route.";
+    }
+    catch (Exception ex) { HybridStatus.Text = $"Could not save workers: {ex.Message}"; }
+  }
+
+  private async void ProbeHybridVideo_Click(object sender, RoutedEventArgs e)
+  {
+    try
+    {
+      JsonElement reports = await _apiClient.ProbeHybridVideoAsync();
+      HybridStatus.Text = string.Join(Environment.NewLine, new[] { ("remote", "Remote Linux"), ("wsl_backup", "WSL backup") }
+        .Select(node =>
+        {
+          if (!reports.TryGetProperty(node.Item1, out JsonElement report)) return $"{node.Item2}: status unavailable.";
+          bool enabled = report.TryGetProperty("enabled", out JsonElement enabledValue) && enabledValue.GetBoolean();
+          bool reachable = report.TryGetProperty("reachable", out JsonElement reachableValue) && reachableValue.GetBoolean();
+          return $"{node.Item2}: {(enabled ? reachable ? "connection and CUDA probe passed; render qualification still required" : "probe failed; check connection and runtime settings" : "disabled")}.";
+        }));
+    }
+    catch (Exception ex) { HybridStatus.Text = $"Worker probe failed: {ex.Message}"; }
   }
 
   private async Task RefreshRuntimeAsync()

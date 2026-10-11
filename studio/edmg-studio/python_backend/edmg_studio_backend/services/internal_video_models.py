@@ -857,6 +857,20 @@ def generate_video_model_frames(
     """
     if num_frames <= 0:
         return []
+    if os.getenv("EDMG_HYBRID_CONFIG_PATH"):
+        from ..execution.hybrid import try_generate
+        remote_frames = try_generate(dict(
+            engine=engine, video_model_dir=video_model_dir, base_model_dir=base_model_dir,
+            init_image=init_image, prompt=prompt, negative_prompt=negative_prompt,
+            width=width, height=height, num_frames=num_frames, fps=fps, steps=steps,
+            cfg=cfg, seed=seed, device=device, dtype=dtype, motion_bucket_id=motion_bucket_id,
+            noise_aug_strength=noise_aug_strength, decode_chunk_size=decode_chunk_size,
+            cpu_offload=cpu_offload, workspace=workspace, cancel_check=cancel_check,
+            generation_mode=generation_mode, chunk_frames=chunk_frames, chunk_overlap=chunk_overlap,
+            image_conditioning_strength=image_conditioning_strength,
+        ))
+        if remote_frames is not None:
+            return remote_frames
     if not video_model_dir.exists():
         raise UserFacingError(
             "Internal video model is not installed",

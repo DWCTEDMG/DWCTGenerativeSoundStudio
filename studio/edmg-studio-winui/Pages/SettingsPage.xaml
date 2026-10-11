@@ -50,6 +50,35 @@
                         </CommandBar>
                     </StackPanel>
                 </Expander>
+                <Expander Header="Hybrid Windows and Linux video workers" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="The selected backend owns projects and jobs. Video generation prefers the remote Linux worker, then WSL before launch. Each worker needs matching model folder names and its own qualified runtime. Failed or disconnected running attempts require a job retry." TextWrapping="Wrap" />
+                        <CheckBox x:Name="HybridRemoteEnabled" Content="Use remote Linux video worker" />
+                        <TextBox x:Name="HybridHost" Header="SSH host or Tailscale address" />
+                        <NumberBox x:Name="HybridPort" Header="SSH port" Value="22" Minimum="1" Maximum="65535" />
+                        <TextBox x:Name="HybridUser" Header="SSH username" Text="root" />
+                        <TextBox x:Name="HybridKey" Header="Private key path on the coordinator" />
+                        <TextBox x:Name="HybridPython" Header="Remote Linux Python executable" />
+                        <TextBox x:Name="HybridBackendRoot" Header="Remote python_backend directory" />
+                        <TextBox x:Name="HybridModelsRoot" Header="Remote models directory" />
+                        <CheckBox x:Name="HybridWslEnabled" Content="Use WSL backup video worker" />
+                        <TextBox x:Name="HybridWslDistro" Header="WSL distribution on the coordinator" Text="Ubuntu" />
+                        <TextBox x:Name="HybridWslPython" Header="WSL Python executable" />
+                        <TextBox x:Name="HybridWslBackendRoot" Header="WSL python_backend directory" />
+                        <TextBox x:Name="HybridWslModelsRoot" Header="WSL models directory" />
+                        <CheckBox x:Name="HybridLocalFallback" Content="Allow the existing local route when neither Linux worker is reachable" IsChecked="True" />
+                        <TextBlock Text="Route only models qualified on the selected workers:" />
+                        <CheckBox x:Name="HybridSvd" Content="SVD" IsChecked="True" />
+                        <CheckBox x:Name="HybridAnimateDiff" Content="AnimateDiff" IsChecked="True" />
+                        <CheckBox x:Name="HybridLtx" Content="LTX-2.5" IsChecked="True" />
+                        <CheckBox x:Name="HybridHunyuan" Content="HunyuanVideo 1.5" IsChecked="True" />
+                        <CommandBar DefaultLabelPosition="Right" HorizontalAlignment="Left">
+                            <AppBarButton Label="Save workers" Icon="Save" Click="SaveHybridVideo_Click" />
+                            <AppBarButton Label="Probe workers" Icon="Refresh" Click="ProbeHybridVideo_Click" />
+                        </CommandBar>
+                        <TextBlock x:Name="HybridStatus" Text="Worker configuration is not inference qualification." TextWrapping="Wrap" />
+                    </StackPanel>
+                </Expander>
                 <Expander x:Name="HfServicesPanel" Header="Hugging Face Spaces MCP" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <StackPanel Spacing="10">
                         <TextBlock Text="Connect to your ZeroGPU Spaces through MCP. Spaces use request quotas and must be running before tools can respond." TextWrapping="Wrap" />

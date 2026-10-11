@@ -2327,6 +2327,15 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     return SendJsonElementAsync(HttpMethod.Post, "/v1/settings/azure_foundry/check", null, true, cancellationToken);
   }
 
+  public Task<HybridVideoSettings> GetHybridVideoAsync(CancellationToken cancellationToken = default)
+    => SendJsonAsync<HybridVideoSettings>(HttpMethod.Get, "/v1/execution/hybrid", null, true, cancellationToken);
+
+  public Task<HybridVideoSettings> SaveHybridVideoAsync(HybridVideoSettings settings, CancellationToken cancellationToken = default)
+    => SendJsonAsync<HybridVideoSettings>(HttpMethod.Put, "/v1/execution/hybrid", JsonContent.Create(settings, StudioJson.GetTypeInfo<HybridVideoSettings>()), true, cancellationToken);
+
+  public Task<JsonElement> ProbeHybridVideoAsync(CancellationToken cancellationToken = default)
+    => SendJsonAsync<JsonElement>(HttpMethod.Post, "/v1/execution/hybrid/probe", null, true, cancellationToken);
+
   public Task<JsonElement> GetRenderRouteAsync(CancellationToken cancellationToken = default)
   {
     return SendJsonElementAsync(HttpMethod.Get, "/v1/render/route", null, true, cancellationToken);

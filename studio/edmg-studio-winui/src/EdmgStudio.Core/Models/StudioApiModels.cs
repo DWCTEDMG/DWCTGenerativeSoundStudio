@@ -1120,5 +1120,6 @@ public static class StudioJson
 [JsonSerializable(typeof(PerformerWorkflowPlanRequest))]
 [JsonSerializable(typeof(PerformerWorkflowRunRequest))]
 [JsonSerializable(typeof(ExecutionProfile))]
+[JsonSerializable(typeof(HybridVideoSettings))]
 [JsonSerializable(typeof(ExecutionInventory))]
 public sealed partial class StudioJsonContext : JsonSerializerContext;

@@ -7789,6 +7789,9 @@ def _run_job_in_subprocess(job) -> None:
     jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
     from .automatic_gpu_admission import worker_environment
     popen_kwargs: dict[str, Any] = {"env": worker_environment()}
+    preference = (job.payload or {}).get("execution_preference") or {}
+    if preference.get("environment", "auto") != "auto":
+        popen_kwargs["env"]["EDMG_HYBRID_DISABLED_FOR_JOB"] = "1"
     if os.name == "nt":
         # Keep the foreground API/UI snappy while the render grinds.
         popen_kwargs["creationflags"] = (
