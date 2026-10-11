@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STUDIO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 BACKEND_DIR="${STUDIO_ROOT}/python_backend"
 BACKEND_ENV_MODE="${EDMG_BACKEND_ENV_MODE:-auto}" # auto|active
-BACKEND_ACCELERATOR_PROFILE="${EDMG_BACKEND_ACCELERATOR_PROFILE:-cpu}"
+BACKEND_ACCELERATOR_PROFILE="${EDMG_BACKEND_ACCELERATOR_PROFILE:-auto}"
 
 warn_if_unset() {
   local key="$1"
@@ -21,8 +21,8 @@ UV_BIN="$(edmg_require_uv)"
 UV_ACTIVE_ARGS=()
 
 case "${BACKEND_ACCELERATOR_PROFILE}" in
-  cpu|cuda) ;;
-  *) echo "Unsupported EDMG_BACKEND_ACCELERATOR_PROFILE=${BACKEND_ACCELERATOR_PROFILE}. Use cpu or cuda on Linux." >&2; exit 1 ;;
+  auto|cpu|cuda) ;;
+  *) echo "Unsupported EDMG_BACKEND_ACCELERATOR_PROFILE=${BACKEND_ACCELERATOR_PROFILE}. Use auto, cpu or cuda on Linux." >&2; exit 1 ;;
 esac
 
 export EDMG_STUDIO_HOME="${EDMG_STUDIO_HOME:-${HOME}/edmg-studio-home}"
@@ -91,6 +91,13 @@ else
 fi
 
 "${UV_BIN}" lock --check
+# Resolve with the shared policy before sync, without importing torch or
+# synchronizing packages. Inspect the active environment when explicitly used.
+PREFLIGHT_PYTHON="$("${UV_BIN}" python find 3.12)"
+BACKEND_ACCELERATOR_PROFILE="$("${PREFLIGHT_PYTHON}" "${SCRIPT_DIR}/linux_backend_preflight.py" \
+  --profile "${BACKEND_ACCELERATOR_PROFILE}" --env-mode "${BACKEND_ENV_MODE}")"
+export EDMG_BACKEND_ACCELERATOR_PROFILE="${BACKEND_ACCELERATOR_PROFILE}"
+export NVIDIA_TENSORRT_DISABLE_INTERNAL_PIP=1
 if [[ "${EDMG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
   echo "[setup] synchronizing frozen ${BACKEND_ACCELERATOR_PROFILE} backend profile"
   "${UV_BIN}" sync --frozen "${UV_ACTIVE_ARGS[@]}" \
