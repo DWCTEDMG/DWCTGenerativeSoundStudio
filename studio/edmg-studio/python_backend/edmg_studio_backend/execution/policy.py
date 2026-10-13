@@ -82,6 +82,17 @@ def resolve_execution_environment(
     requested = request.preference.environment
     supported = capabilities.environments_for(request.engine)
 
+    # External is client-relative: a Linux backend can execute on its own
+    # native worker, but a Windows client cannot claim that capability.
+    if "external" in supported and requested in {"auto", "external"}:
+        if not _is_usable("external", request, capabilities, supported):
+            return _blocked(requested, "GPU_ENVIRONMENT_UNAVAILABLE")
+        return ExecutionResolution(
+            requested_environment=requested,
+            resolved_environment="external",
+            reason_code="BACKEND_NATIVE_EXECUTION",
+        )
+
     if settings.runtime_profile == "external_linux" or requested == "external":
         return _blocked(requested, "EXTERNAL_BACKEND_CLIENT_ONLY")
 

@@ -7881,9 +7881,10 @@ def _resolve_job_execution(job) -> None:
     ).strip()
     execution_config = render_settings.get().get("execution") or {}
     selected_settings = ExecutionSettings.model_validate(execution_config)
-    supported: set[str] = {"windows"}
-    worker_runtime = "windows-native"
-    if engine == "hunyuan_video15":
+    is_linux = platform.system().strip().lower() == "linux"
+    supported: set[str] = {"external" if is_linux else "windows"}
+    worker_runtime = "linux-native" if is_linux else "windows-native"
+    if engine == "hunyuan_video15" and not is_linux:
         try:
             runner = internal_video_models.hunyuan_runner_config()
         except (ValueError, TypeError):

@@ -105,6 +105,54 @@ def test_external_linux_profile_is_not_a_local_worker_selection() -> None:
     assert resolution.reason_code == "EXTERNAL_BACKEND_CLIENT_ONLY"
 
 
+@pytest.mark.parametrize("profile", ["standard", "hybrid_gpu", "external_linux"])
+@pytest.mark.parametrize("preference", ["auto", "external"])
+def test_linux_backend_admits_native_director_worker(profile, preference) -> None:
+    resolution = resolve_execution_environment(
+        ExecutionRequestContext(
+            engine="qwen_director",
+            preference=ExecutionPreference(environment=preference),
+        ),
+        ExecutionSettings(runtime_profile=profile),
+        ExecutionCapabilities(
+            supported_environments={"qwen_director": frozenset({"external"})},
+            gpu_environments=frozenset({"external"}),
+        ),
+    )
+    assert not resolution.blocked
+    assert resolution.resolved_environment == "external"
+    assert resolution.reason_code == "BACKEND_NATIVE_EXECUTION"
+
+
+def test_linux_backend_preserves_gpu_admission_requirement() -> None:
+    resolution = resolve_execution_environment(
+        ExecutionRequestContext(engine="qwen_director"),
+        ExecutionSettings(runtime_profile="external_linux"),
+        ExecutionCapabilities(
+            supported_environments={"qwen_director": frozenset({"external"})},
+        ),
+    )
+    assert resolution.blocked
+    assert resolution.reason_code == "GPU_ENVIRONMENT_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("preference", ["windows", "wsl"])
+def test_linux_backend_rejects_unavailable_explicit_workers(preference) -> None:
+    resolution = resolve_execution_environment(
+        ExecutionRequestContext(
+            engine="qwen_director",
+            preference=ExecutionPreference(environment=preference),
+        ),
+        ExecutionSettings(),
+        ExecutionCapabilities(
+            supported_environments={"qwen_director": frozenset({"external"})},
+            gpu_environments=frozenset({"external"}),
+        ),
+    )
+    assert resolution.blocked
+    assert resolution.reason_code == "EXPLICIT_ENVIRONMENT_UNAVAILABLE"
+
+
 def test_model_preference_is_used_for_auto_and_fallback_is_explicit() -> None:
     settings = ExecutionSettings(
         runtime_profile="hybrid_gpu",
