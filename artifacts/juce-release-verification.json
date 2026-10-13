@@ -1,0 +1,39 @@
+{
+  "deviceCount": 11,
+  "transport": {
+    "projectRevision": 0,
+    "positionSamples": 0,
+    "sampleRate": 48000,
+    "state": "stopped",
+    "loopEnabled": false,
+    "loopStartSample": 0,
+    "loopEndSample": 0,
+    "seekSequence": 0
+  },
+  "exitCode": 0,
+  "host": "D:\\DWCTGenerativeSoundStudio\\studio\\edmg-studio-winui\\bin\\x64\\Release\\net10.0-windows10.0.26100.0\\win-x64\\EdmgStudio.JuceAudioHost.exe",
+  "configuredDevice": {
+    "configured": true,
+    "diagnostic": null,
+    "deviceId": "DirectSound:Primary Sound Driver",
+    "sampleRate": 48000,
+    "bufferFrames": 512,
+    "outputChannels": 2
+  },
+  "handshake": {
+    "protocolVersion": 1,
+    "hostBuildIdentity": "edmg-juce-audio-host/0.2.0",
+    "architecture": "x64",
+    "featureFlags": [
+      "lifecycle",
+      "device_enumeration",
+      "generated_tone_transport",
+      "prepared_timeline_v1",
+      "file_backed_prepared_media_v1"
+    ],
+    "engineState": "ready_without_device",
+    "compatible": true,
+    "diagnostic": ""
+  },
+  "verifiedUtc": "2026-10-07T02:01:47.1074798Z"
+}
