@@ -18,6 +18,18 @@ Run those commands from this directory. By default CMake fetches JUCE 8.0.0; set
 existing compatible checkout for an offline build. Installation places the executable under `bin`
 and copies JUCE's license text under `licenses`.
 
+For a local JUCE checkout at `C:/JUCE`, configure with
+`cmake -S . -B build -A x64 -DJUCE_ROOT=C:/JUCE`, then build and install as above.
+The WinUI build automatically includes `out/bin/EdmgStudio.JuceAudioHost.exe`
+when installed here, including the installed JUCE license. An explicitly supplied
+`EdmgJuceAudioHostPath` still overrides automatic discovery. This path was verified
+with JUCE 9.0.3; the network-fetch default remains JUCE 8.0.0.
+
+From the repository root, verify an installed host with PowerShell 7:
+`pwsh -File scripts/verify-juce-install.ps1 -HostPath studio/edmg-studio-winui/native/juce-audio-host/out/bin/EdmgStudio.JuceAudioHost.exe`.
+The check opens and closes an output device and verifies the protocol and clean
+process exit. It does not validate audible Timeline playback.
+
 ## Implemented contract
 
 The host reads one bounded JSON protocol envelope per standard-input line and emits correlated events

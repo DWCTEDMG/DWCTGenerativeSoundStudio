@@ -1,4 +1,9 @@
 <Project>
+  <PropertyGroup>
+    <EdmgJuceAudioHostNoticePath Condition="'$(EdmgJuceAudioHostNoticePath)' == '' and Exists('$(MSBuildThisFileDirectory)native\juce-audio-host\out\licenses\JUCE-LICENSE.md')">$(MSBuildThisFileDirectory)native\juce-audio-host\out\licenses\JUCE-LICENSE.md</EdmgJuceAudioHostNoticePath>
+    <EdmgJuceAudioHostNoticePath Condition="'$(EdmgJuceAudioHostNoticePath)' == ''">$(MSBuildThisFileDirectory)native\juce-audio-host\THIRD-PARTY-NOTICES.txt</EdmgJuceAudioHostNoticePath>
+    <EdmgJuceAudioHostPath Condition="'$(EdmgJuceAudioHostPath)' == '' and Exists('$(MSBuildThisFileDirectory)native\juce-audio-host\out\bin\EdmgStudio.JuceAudioHost.exe')">$(MSBuildThisFileDirectory)native\juce-audio-host\out\bin\EdmgStudio.JuceAudioHost.exe</EdmgJuceAudioHostPath>
+  </PropertyGroup>
   <!-- Optional local tooling must not make a clean checkout depend on one user's profile. -->
   <ItemGroup Condition="'$(EdmgWinUIAnalyzerDirectory)' != '' and Exists('$(EdmgWinUIAnalyzerDirectory)\Microsoft.WindowsAppSDK.Analyzers.dll')">
     <Analyzer Include="$(EdmgWinUIAnalyzerDirectory)\Microsoft.WindowsAppSDK.Analyzers.dll" />

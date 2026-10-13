@@ -148,6 +148,8 @@ Desktop.ini
 .vs/
 .vscode/
 .winapp/
+/artifacts/juce-local-build/
+/studio/edmg-studio-winui/native/juce-audio-host/out/
 .secrets/
 DWCTGenerativeSoundStudio-main/
 Untitled-2 copy 2.jpg

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(EdmgStudioJuceAudioHost VERSION 0.1.0 LANGUAGES CXX)
+project(EdmgStudioJuceAudioHost VERSION 0.1.0 LANGUAGES C CXX)
 
 include(FetchContent)
 if(JUCE_ROOT)
