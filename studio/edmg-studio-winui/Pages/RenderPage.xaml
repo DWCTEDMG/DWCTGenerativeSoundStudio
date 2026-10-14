@@ -772,11 +772,19 @@
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
-                                        <TextBlock Text="Maximum storyboard shot (seconds)" Style="{StaticResource FieldLabelStyle}" />
+                                        <TextBlock Text="Minimum storyboard scene (seconds)" Style="{StaticResource FieldLabelStyle}" />
+                                        <NumberBox x:Name="StoryboardSceneMinBox" Value="10" Minimum="10" Maximum="120" SmallChange="1"
+                                                   AutomationProperties.AutomationId="RenderStoryboardSceneMinBox" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="3" Spacing="4">
+                                        <TextBlock Text="Maximum model generation window (seconds)" Style="{StaticResource FieldLabelStyle}" />
                                         <NumberBox x:Name="StoryboardShotMaxBox" Value="4" Minimum="1" Maximum="12" SmallChange="0.5"
                                                    AutomationProperties.AutomationId="RenderStoryboardShotMaxBox" />
+                                        <TextBlock Text="Short model windows are stitched continuously inside each longer storyboard scene."
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="4">
+                                    <StackPanel Grid.Row="3" Grid.Column="1" Spacing="4">
                                         <TextBlock Text="Keyframe continuity" Style="{StaticResource FieldLabelStyle}" />
                                         <ComboBox x:Name="KeyframeContinuityModeComboBox"
                                                   SelectedIndex="0"

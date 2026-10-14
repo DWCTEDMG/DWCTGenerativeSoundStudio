@@ -29,6 +29,7 @@ public sealed class InternalVideoRenderRequestBuilderTests
     });
 
     Assert.IsTrue(enabled.GetProperty("include_audio").GetBoolean());
+    Assert.AreEqual(10.0, enabled.GetProperty("storyboard_scene_min_s").GetDouble());
     Assert.IsFalse(disabled.GetProperty("include_audio").GetBoolean());
   }
 

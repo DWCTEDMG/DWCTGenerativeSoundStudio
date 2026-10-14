@@ -317,6 +317,7 @@ class InternalVideoRenderRequest(BaseModel):
     resume_existing_frames: bool = True
     include_audio: bool = True
     motion_strategy: Literal["manual","storyboard_full_motion"] = "manual"
+    storyboard_scene_min_s: float = Field(default=10.0, ge=10.0, le=120.0)
     storyboard_shot_max_s: float = Field(default=4.0, ge=1.0, le=12.0)
     video_model_engine: Literal["auto","svd","animatediff","hunyuan_video15","ltx_25"] = "auto"
     video_model_id: str | None = None

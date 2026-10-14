@@ -213,8 +213,21 @@ Invoke-Checked "pnpm install --frozen-lockfile" {
 }
 
 Write-Host "[2/2] Building and finalizing one candidate-bound Windows release..."
-Invoke-Checked "prepare locked DirectML release bundle" { & $PnpmExe run prepare:release-bundle:directml }
-Invoke-Checked "release metadata checks" { & $PnpmExe run check:release-metadata }
+# WinUI ships the backend, not the Electron staged app or Director web bundle.
+# Select the packaging profile only in this child process; preserve the caller's
+# active CUDA runtime and its environment settings.
+$previousAcceleratorProfile = $env:EDMG_BACKEND_ACCELERATOR_PROFILE
+try {
+  $env:EDMG_BACKEND_ACCELERATOR_PROFILE = "directml"
+  Invoke-Checked "prepare locked DirectML backend bundle" { & $PnpmExe run prepare:release-bundle:directml --backend-only }
+} finally {
+  if ($null -eq $previousAcceleratorProfile) {
+    Remove-Item Env:\EDMG_BACKEND_ACCELERATOR_PROFILE -ErrorAction SilentlyContinue
+  } else {
+    $env:EDMG_BACKEND_ACCELERATOR_PROFILE = $previousAcceleratorProfile
+  }
+}
+Invoke-Checked "backend release manifest checks" { & $NodeExe (Join-Path $StudioDir "scripts\check-backend-release-manifest.mjs") }
 $stageScript = Join-Path $StudioDir "packaging\windows\stage_winui_msix.ps1"
 $vst3HostPath = [string]$env:EDMG_VST3_HOST_PATH
 if ([string]::IsNullOrWhiteSpace($vst3HostPath)) { throw "EDMG_VST3_HOST_PATH must identify the clean-built Release/x64 native host." }

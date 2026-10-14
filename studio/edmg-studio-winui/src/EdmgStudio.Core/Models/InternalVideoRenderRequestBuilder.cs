@@ -44,6 +44,7 @@ public sealed record InternalVideoRenderSettings
   public bool ResumeExistingFrames { get; init; } = true;
   public bool IncludeAudio { get; init; } = true;
   public string MotionStrategy { get; init; } = "manual";
+  public double StoryboardSceneMinSeconds { get; init; } = 10.0;
   public double StoryboardShotMaxSeconds { get; init; } = 4.0;
   public string VideoModelEngine { get; init; } = "auto";
   public string? VideoModelId { get; init; }
@@ -140,6 +141,7 @@ public static class InternalVideoRenderRequestBuilder
       ["resume_existing_frames"] = !tensorRt && settings.ResumeExistingFrames,
       ["include_audio"] = settings.IncludeAudio,
       ["motion_strategy"] = tensorRt ? "manual" : settings.MotionStrategy,
+      ["storyboard_scene_min_s"] = settings.StoryboardSceneMinSeconds,
       ["storyboard_shot_max_s"] = settings.StoryboardShotMaxSeconds,
       ["video_model_engine"] = settings.VideoModelEngine,
       ["video_model_id"] = Optional(settings.VideoModelId),
@@ -222,7 +224,8 @@ public static class InternalVideoRenderRequestBuilder
     OptionalRange(settings.TemporalSteps, 1, 80, "Temporal steps");
     Range(settings.RefineEveryNFrames, 1, 30, "Refine every N frames");
     Range(settings.AnchorStrength, 0.0, 1.0, "Anchor strength");
-    Range(settings.StoryboardShotMaxSeconds, 1.0, 12.0, "Storyboard shot maximum");
+    Range(settings.StoryboardSceneMinSeconds, 10.0, 120.0, "Storyboard scene minimum");
+    Range(settings.StoryboardShotMaxSeconds, 1.0, 12.0, "Model generation window maximum");
     Range(settings.VideoModelMaxFramesPerScene, 8, 96, "Video model frames per scene");
     Range(settings.LtxSceneWorkerCap, 1, 16, "LTX scene worker cap");
     Enum(settings.LtxExecutionMode, ["auto", "single", "scene_parallel", "model_parallel"], "LTX execution mode");

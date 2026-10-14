@@ -9732,6 +9732,10 @@ def _internal_settings_from_payload(
         storyboard_shot_max_s = float(payload.get("storyboard_shot_max_s", 4.0))
     except Exception:
         storyboard_shot_max_s = 4.0
+    try:
+        storyboard_scene_min_s = float(payload.get("storyboard_scene_min_s", 10.0))
+    except Exception:
+        storyboard_scene_min_s = 10.0
     return InternalVideoSettings(
         fps_render=int(payload.get("fps_render", 2)),
         fps_output=int(payload.get("fps_output", 24)),
@@ -9762,6 +9766,7 @@ def _internal_settings_from_payload(
         prompt_blend=bool(payload.get("prompt_blend", True)),
         resume_existing_frames=bool(payload.get("resume_existing_frames", True)),
         motion_strategy=motion_strategy,
+        storyboard_scene_min_s=max(10.0, min(120.0, storyboard_scene_min_s)),
         storyboard_shot_max_s=max(1.0, min(12.0, storyboard_shot_max_s)),
         video_model_engine=str(payload.get("video_model_engine") or "auto"),
         video_model_id=(str(payload.get("video_model_id")).strip() or None) if payload.get("video_model_id") is not None else None,
@@ -11047,6 +11052,7 @@ def _internal_render_preflight_data(project_id: str, payload: dict[str, Any]) ->
             "anchor_strength_schedule": settings_obj.anchor_strength_schedule,
             "motion_strategy": normalize_internal_motion_strategy(settings_obj.motion_strategy),
             "storyboard_shot_max_s": settings_obj.storyboard_shot_max_s,
+            "storyboard_scene_min_s": settings_obj.storyboard_scene_min_s,
             "temporal_steps": settings_obj.temporal_steps,
             "interpolation_engine": settings_obj.interpolation_engine,
             "render_mode": "diffusion",

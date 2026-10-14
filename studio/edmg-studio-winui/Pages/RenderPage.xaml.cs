@@ -815,6 +815,7 @@ public sealed partial class RenderPage : Page
       ResumeExistingFrames = ResumeFramesToggle.IsOn,
       IncludeAudio = IncludeAudioToggle.IsOn,
       MotionStrategy = Selected(MotionStrategyComboBox, "manual"),
+      StoryboardSceneMinSeconds = Number(StoryboardSceneMinBox, 10.0),
       StoryboardShotMaxSeconds = Number(StoryboardShotMaxBox, 4.0),
       VideoModelEngine = Selected(VideoModelEngineComboBox, "auto"),
       VideoModelId = EmptyToNull(VideoModelBox.Text),

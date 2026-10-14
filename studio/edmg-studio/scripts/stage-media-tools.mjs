@@ -357,7 +357,9 @@ function assertMediaToolLaunch(toolPath, toolName) {
     encoding: "utf8",
     maxBuffer: 2 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: 15000,
+    // Fresh Windows binaries can spend longer in first-launch scanning on the
+    // packaging volume. Keep the probe bounded and still require valid output.
+    timeout: process.platform === "win32" ? 60000 : 15000,
     windowsHide: true,
   });
   if (result.error) throw result.error;

@@ -101,6 +101,7 @@ class InternalVideoSettings:
     prompt_blend: bool = True
     resume_existing_frames: bool = True
     motion_strategy: str = "manual"  # manual|storyboard_full_motion
+    storyboard_scene_min_s: float = 10.0
     storyboard_shot_max_s: float = 4.0
     deforum_overrides: dict[str, Any] | None = None
     # Internal video-model adapter. SVD is image-to-video from generated
@@ -1177,6 +1178,7 @@ def _render_signature(
         "anchor_strength": float(settings.anchor_strength),
         "prompt_blend": bool(settings.prompt_blend),
         "motion_strategy": normalize_internal_motion_strategy(settings.motion_strategy),
+        "storyboard_scene_min_s": float(_storyboard_scene_min_s(settings)),
         "storyboard_shot_max_s": float(_storyboard_shot_max_s(settings)),
         "video_model_engine": str(settings.video_model_engine),
         "video_model_id": str(settings.video_model_id or ""),
@@ -4148,6 +4150,7 @@ def render_internal_video_variant(
             "anchor_strength": float(settings.anchor_strength),
             "prompt_blend": bool(settings.prompt_blend),
             "motion_strategy": normalize_internal_motion_strategy(settings.motion_strategy),
+            "storyboard_scene_min_s": float(_storyboard_scene_min_s(settings)),
             "storyboard_shot_max_s": float(_storyboard_shot_max_s(settings)),
             "video_model_engine": str(settings.video_model_engine),
             "video_model_id": str(settings.video_model_id or ""),
@@ -4861,6 +4864,95 @@ def _storyboard_shot_max_s(settings: InternalVideoSettings) -> float:
     return max(1.0, min(12.0, value))
 
 
+def _storyboard_scene_min_s(settings: InternalVideoSettings) -> float:
+    try:
+        value = float(settings.storyboard_scene_min_s or 10.0)
+    except Exception:
+        value = 10.0
+    return max(10.0, min(120.0, value))
+
+
+def _merge_short_storyboard_scenes(
+    scenes: list[dict[str, Any]],
+    *,
+    duration_s: float,
+    minimum_s: float,
+) -> list[dict[str, Any]]:
+    """Group authored cues into editorial scenes that meet the minimum duration.
+
+    Authored cue records remain separate so prompt schedules and deliberate
+    transitions survive. Every cue receives the bounds of its longer editorial
+    scene; model-native technical windows are produced from those cues later.
+    """
+    normalized: list[dict[str, Any]] = []
+    for scene_index, source in enumerate(scenes):
+        scene = dict(source)
+        try:
+            start_s = max(0.0, float(scene.get("start_s", 0.0) or 0.0))
+        except Exception:
+            start_s = 0.0
+        try:
+            end_s = float(scene.get("end_s", 0.0) or 0.0)
+        except Exception:
+            end_s = 0.0
+        if end_s <= start_s:
+            next_start = (
+                float(scenes[scene_index + 1].get("start_s", duration_s) or duration_s)
+                if scene_index + 1 < len(scenes)
+                else duration_s
+            )
+            end_s = max(start_s + 0.5, next_start)
+        if duration_s > 0:
+            start_s = min(start_s, duration_s)
+            end_s = min(max(start_s + 0.001, end_s), duration_s)
+        scene["start_s"] = start_s
+        scene["end_s"] = end_s
+        scene["_storyboard_source_scene_indices"] = [scene_index]
+        normalized.append(scene)
+
+    if not normalized:
+        return []
+
+    groups: list[list[int]] = []
+    pending_indices: list[int] = []
+    for scene_index, scene in enumerate(normalized):
+        pending_indices.append(scene_index)
+        group_start = float(normalized[pending_indices[0]]["start_s"])
+        group_end = float(scene["end_s"])
+        if group_end - group_start >= minimum_s:
+            groups.append(pending_indices)
+            pending_indices = []
+
+    if pending_indices:
+        if groups:
+            groups[-1].extend(pending_indices)
+        else:
+            groups.append(pending_indices)
+
+    for editorial_index, group in enumerate(groups):
+        editorial_start = float(normalized[group[0]]["start_s"])
+        editorial_end = float(normalized[group[-1]]["end_s"])
+        source_indices = [
+            source_index
+            for member in group
+            for source_index in normalized[member]["_storyboard_source_scene_indices"]
+        ]
+        exception = (
+            "project_shorter_than_minimum"
+            if len(groups) == 1 and editorial_end - editorial_start < minimum_s
+            else None
+        )
+        for member in group:
+            scene = normalized[member]
+            scene["_storyboard_source_scene_indices"] = list(source_indices)
+            scene["_storyboard_editorial_scene_index"] = editorial_index
+            scene["_storyboard_editorial_start_s"] = editorial_start
+            scene["_storyboard_editorial_end_s"] = editorial_end
+            scene["_storyboard_minimum_s"] = float(minimum_s)
+            scene["_storyboard_minimum_exception"] = exception
+    return normalized
+
+
 def _normalize_storyboard_transition(scene: dict[str, Any] | None) -> str:
     if not isinstance(scene, dict):
         return "dissolve"
@@ -4903,6 +4995,12 @@ def _storyboard_scene_windows(
     ]
     strategy = normalize_internal_motion_strategy(settings.motion_strategy)
     max_shot_s = _storyboard_shot_max_s(settings)
+    if strategy == "storyboard_full_motion":
+        valid_scenes = _merge_short_storyboard_scenes(
+            valid_scenes,
+            duration_s=duration_s,
+            minimum_s=_storyboard_scene_min_s(settings),
+        )
     windows: list[dict[str, Any]] = []
 
     for scene_index, scene in enumerate(valid_scenes):
@@ -4934,7 +5032,24 @@ def _storyboard_scene_windows(
             shot = dict(scene)
             shot["start_s"] = round(float(shot_start), 3)
             shot["end_s"] = round(float(shot_end), 3)
-            shot["_storyboard_source_scene_index"] = scene_index
+            source_scene_indices = list(
+                scene.get("_storyboard_source_scene_indices") or [scene_index]
+            )
+            shot["_storyboard_source_scene_index"] = int(source_scene_indices[0])
+            shot["_storyboard_source_scene_indices"] = source_scene_indices
+            shot["_storyboard_editorial_scene_index"] = int(
+                scene.get("_storyboard_editorial_scene_index", scene_index)
+            )
+            shot["_storyboard_editorial_start_s"] = float(
+                scene.get("_storyboard_editorial_start_s", start_s)
+            )
+            shot["_storyboard_editorial_end_s"] = float(
+                scene.get("_storyboard_editorial_end_s", end_s)
+            )
+            shot["_storyboard_minimum_s"] = float(
+                scene.get("_storyboard_minimum_s", _storyboard_scene_min_s(settings))
+            )
+            shot["_storyboard_minimum_exception"] = scene.get("_storyboard_minimum_exception")
             shot["_storyboard_shot_index"] = shot_index
             shot["_storyboard_shot_count"] = shot_count
             shot["_storyboard_original_start_s"] = float(start_s)
@@ -5116,6 +5231,16 @@ def describe_storyboard_motion_plan(
                 "shot_count": shot_count,
                 "start_s": round(start_s, 3),
                 "end_s": round(end_s, 3),
+                "editorial_scene_index": int(
+                    shot.get("_storyboard_editorial_scene_index", source_scene_index) or 0
+                ),
+                "editorial_start_s": round(
+                    float(shot.get("_storyboard_editorial_start_s", start_s) or start_s), 3
+                ),
+                "editorial_end_s": round(
+                    float(shot.get("_storyboard_editorial_end_s", end_s) or end_s), 3
+                ),
+                "minimum_duration_exception": shot.get("_storyboard_minimum_exception"),
                 "prompt": " ".join(refined_prompt.split())[:1200],
                 "shot_phase": _storyboard_shot_phase(shot),
                 "setting": _storyboard_scene_text(
@@ -5198,7 +5323,14 @@ def describe_storyboard_motion_plan(
             else None
         ),
         "shot_max_s": _storyboard_shot_max_s(settings),
+        "scene_min_s": _storyboard_scene_min_s(settings),
         "scene_count": len([scene for scene in scenes if isinstance(scene, dict)]),
+        "editorial_scene_count": len(
+            {
+                int(shot.get("_storyboard_editorial_scene_index", 0) or 0)
+                for shot in windows
+            }
+        ),
         "shot_count": len(shots),
         "shots": shots,
     }
