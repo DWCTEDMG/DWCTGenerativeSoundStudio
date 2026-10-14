@@ -276,7 +276,12 @@ if ($StoreIdentityFile) {
   $buildArguments += "-p:UapAppxPackageBuildMode=CI"
 }
 $buildArguments += "-warnaserror"
-& $dotnet.Source @buildArguments
+Push-Location $winUiDirectory
+try {
+  & $dotnet.Source @buildArguments
+} finally {
+  Pop-Location
+}
 if ($LASTEXITCODE -ne 0) {
   throw "WinUI Release/x64 MSIX build failed with exit code $LASTEXITCODE."
 }
