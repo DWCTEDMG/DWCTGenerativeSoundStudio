@@ -357,7 +357,11 @@ try {
   if ($IncludeProductionBackend) {
     $bundleManifest = Get-Content -Raw -LiteralPath (Join-Path $backendPayloadPath "backend-bundle-manifest.json") | ConvertFrom-Json
     $entryMap = @{}
-    foreach ($entry in $archive.Entries) { $entryMap[$entry.FullName.Replace("\", "/")] = $entry }
+    foreach ($entry in $archive.Entries) {
+      $decodedName = [Uri]::UnescapeDataString($entry.FullName.Replace("\", "/"))
+      if ($entryMap.ContainsKey($decodedName)) { throw "Duplicate decoded MSIX payload entry: $decodedName" }
+      $entryMap[$decodedName] = $entry
+    }
     foreach ($file in @($bundleManifest.bundleEntries | Where-Object { $_.type -eq "file" })) {
       $entry = $entryMap["backend/" + $file.path]
       if (-not $entry -or $entry.Length -ne $file.size) { throw "Packaged backend inventory mismatch: $($file.path)" }
