@@ -1,7 +1,7 @@
 {
   "products": [
     {
-      "name": "dwct-edmg-studio-backend",
+      "name": "edmgaistudio",
       "label": "EDMG Studio Backend",
       "product_kind": "solution",
       "provider_name": "Driftwoodcraftthing / DWCT Productions",
