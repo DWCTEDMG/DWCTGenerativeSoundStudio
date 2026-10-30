@@ -1,0 +1,7 @@
+resource_group_id = "replace-with-existing-resource-group-id"
+image_id = "replace-with-regional-ubuntu-24-04-amd64-image-id"
+ssh_key_id = "replace-with-regional-ssh-key-id"
+admin_cidr = "192.0.2.1/32"
+backend_image = "ghcr.io/customer/edmg-backend@sha256:REPLACE_WITH_DIGEST"
+region = "us-south"
+zone = "us-south-1"

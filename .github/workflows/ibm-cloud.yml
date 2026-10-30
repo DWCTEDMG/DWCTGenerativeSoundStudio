@@ -1,0 +1,45 @@
+name: IBM Cloud candidate
+on:
+  pull_request:
+    paths:
+      - 'deployment/ibm-cloud/**'
+      - 'ibm_catalog.json'
+      - '.github/workflows/ibm-cloud.yml'
+      - 'studio/edmg-studio/python_backend/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform -chdir=deployment/ibm-cloud fmt -check -recursive
+      - run: terraform -chdir=deployment/ibm-cloud init -backend=false
+      - run: terraform -chdir=deployment/ibm-cloud validate
+      - run: python deployment/ibm-cloud/tests/check_package.py
+      - run: python deployment/ibm-cloud/scripts/package.py
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t edmg-ibm-test -f studio/edmg-studio/python_backend/Dockerfile studio/edmg-studio/python_backend
+      - name: Health and authentication smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          token=$(openssl rand -hex 32)
+          echo "::add-mask::$token"
+          docker run -d --name edmg -p 127.0.0.1:7863:7863 -e EDMG_BACKEND_AUTH_MODE=required -e EDMG_BACKEND_AUTH_TOKEN="$token" -e EDMG_BACKEND_ACCELERATOR_PROFILE=cpu -e EDMG_AI_PROVIDER=rule_based edmg-ibm-test
+          trap 'docker logs edmg; docker rm -f edmg' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:7863/health; then break; fi
+            sleep 5
+          done
+          curl -fsS http://127.0.0.1:7863/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7863/v1/projects)" = 401
+          curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:7863/v1/projects
