@@ -1,0 +1,23 @@
+{
+  "products": [
+    {
+      "name": "dwct-edmg-studio-backend",
+      "label": "EDMG Studio Backend",
+      "product_kind": "solution",
+      "provider_name": "Driftwoodcraftthing / DWCT Productions",
+      "short_description": "Customer-owned CPU backend infrastructure for EDMG Studio.",
+      "version": "1.0.0",
+      "tags": [
+        "dev_ops"
+      ],
+      "flavors": [
+        {
+          "name": "standard",
+          "label": "EDMG Studio Backend - Standard",
+          "install_type": "fullstack",
+          "working_directory": "deployment/ibm-cloud"
+        }
+      ]
+    }
+  ]
+}

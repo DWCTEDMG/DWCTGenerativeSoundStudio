@@ -1,0 +1,67 @@
+#cloud-config
+write_files:
+  - path: /etc/nginx/sites-available/edmg
+    permissions: '0644'
+    content: |
+      server {
+        listen 127.0.0.1:8443 ssl;
+        ssl_certificate /etc/edmg/tls.crt;
+        ssl_certificate_key /etc/edmg/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        client_max_body_size 2048m;
+        location / {
+          proxy_pass http://127.0.0.1:7863;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_read_timeout 3600s;
+          proxy_buffering off;
+        }
+      }
+  - path: /etc/systemd/system/edmg.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=EDMG Studio backend
+      Requires=docker.service
+      After=docker.service network-online.target
+      [Service]
+      Restart=always
+      RestartSec=15
+      ExecStartPre=-/usr/bin/docker rm -f edmg
+      ExecStart=/usr/bin/docker run --name edmg --pull=always --env-file /etc/edmg/backend.env --publish 127.0.0.1:7863:7863 --mount type=bind,src=/srv/edmg,dst=/studio --security-opt=no-new-privileges --cap-drop=ALL --log-opt max-size=10m --log-opt max-file=3 ${backend_image}
+      ExecStop=/usr/bin/docker stop -t 30 edmg
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - |
+    set -eu
+    ready=0
+    for attempt in $(seq 1 60); do
+      if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io openssl nginx; then
+        ready=1
+        break
+      fi
+      sleep 10
+    done
+    test "$ready" = 1
+  - install -d -m 0700 /etc/edmg
+  - install -d -o 10001 -g 10001 /srv/edmg
+  - |
+    set -eu
+    umask 077
+    printf 'EDMG_BACKEND_AUTH_MODE=required\nEDMG_BACKEND_AUTH_TOKEN=%s\nEDMG_BACKEND_ACCELERATOR_PROFILE=cpu\nEDMG_AI_PROVIDER=rule_based\n' "$(openssl rand -hex 32)" > /etc/edmg/backend.env
+  - systemctl enable --now docker
+  - |
+    set -eu
+    umask 077
+    openssl req -x509 -newkey rsa:3072 -nodes -days 365 -keyout /etc/edmg/tls.key -out /etc/edmg/tls.crt -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/edmg /etc/nginx/sites-enabled/edmg
+    nginx -t
+    systemctl enable nginx
+    systemctl restart nginx
+  - systemctl daemon-reload
+  - systemctl enable --now edmg
