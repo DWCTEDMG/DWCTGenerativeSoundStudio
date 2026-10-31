@@ -31,7 +31,13 @@ write_files:
       Restart=always
       RestartSec=15
       ExecStartPre=-/usr/bin/docker rm -f edmg
-      ExecStart=/usr/bin/docker run --name edmg --pull=always --env-file /etc/edmg/backend.env --publish 127.0.0.1:7863:7863 --mount type=bind,src=/srv/edmg,dst=/studio --security-opt=no-new-privileges --cap-drop=ALL --log-opt max-size=10m --log-opt max-file=3 ${backend_image}
+%{ if nvidia_vgpu_enabled }
+      ExecStartPre=/usr/bin/test -s /etc/nvidia/ClientConfigToken/client_configuration_token.tok
+%{ endif }
+%{ if gpu_enabled }
+      ExecStartPre=/usr/bin/nvidia-smi -L
+%{ endif }
+      ExecStart=/usr/bin/docker run --name edmg --pull=always %{ if gpu_enabled }--gpus all %{ endif }--env-file /etc/edmg/backend.env --publish 127.0.0.1:7863:7863 --mount type=bind,src=/srv/edmg,dst=/studio --security-opt=no-new-privileges --cap-drop=ALL --log-opt max-size=10m --log-opt max-file=3 ${backend_image}
       ExecStop=/usr/bin/docker stop -t 30 edmg
       [Install]
       WantedBy=multi-user.target
@@ -40,19 +46,40 @@ runcmd:
     set -eu
     ready=0
     for attempt in $(seq 1 60); do
-      if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io openssl nginx; then
+      if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io openssl nginx curl gnupg; then
         ready=1
         break
       fi
       sleep 10
     done
     test "$ready" = 1
+%{ if gpu_enabled }
+  - |
+    set -eu
+    install -d -m 0755 /usr/share/keyrings
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+      | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
+      > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
+%{ if cuda_driver_enabled }
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-580-server
+%{ endif }
+    nvidia-ctk runtime configure --runtime=docker
+    systemctl restart docker
+%{ endif }
+%{ if gpu_enabled }
+  - install -d -m 0700 /etc/nvidia/ClientConfigToken
+%{ endif }
   - install -d -m 0700 /etc/edmg
   - install -d -o 10001 -g 10001 /srv/edmg
   - |
     set -eu
     umask 077
-    printf 'EDMG_BACKEND_AUTH_MODE=required\nEDMG_BACKEND_AUTH_TOKEN=%s\nEDMG_BACKEND_ACCELERATOR_PROFILE=cpu\nEDMG_AI_PROVIDER=rule_based\n' "$(openssl rand -hex 32)" > /etc/edmg/backend.env
+    accelerator='${accelerator_profile}'
+    case "$accelerator" in cpu) backend_accelerator=cpu ;; cuda|nvidia-vgpu) backend_accelerator=cuda ;; *) exit 2 ;; esac
+    printf 'EDMG_BACKEND_AUTH_MODE=required\nEDMG_BACKEND_AUTH_TOKEN=%s\nEDMG_BACKEND_ACCELERATOR_PROFILE=%s\nEDMG_AI_PROVIDER=rule_based\n' "$(openssl rand -hex 32)" "$backend_accelerator" > /etc/edmg/backend.env
   - systemctl enable --now docker
   - |
     set -eu

@@ -1,6 +1,8 @@
 FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
 FROM python:3.12-slim
 
+ARG EDMG_TORCH_EXTRA=cpu
+
 COPY --from=uv /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -33,8 +35,9 @@ WORKDIR /opt/edmg/python_backend
 COPY . /opt/edmg/python_backend
 
 RUN uv lock --check \
+    && case "$EDMG_TORCH_EXTRA" in cpu|cuda) ;; *) echo "Unsupported EDMG_TORCH_EXTRA=$EDMG_TORCH_EXTRA" >&2; exit 2 ;; esac \
     && uv sync --frozen --no-dev \
-        --extra cpu --extra core --extra audio --extra asr \
+        --extra "$EDMG_TORCH_EXTRA" --extra core --extra audio --extra asr \
         --extra internal-video --extra aws
 
 RUN mkdir -p /studio/data /studio/models /studio/cache /studio/logs /studio/external \

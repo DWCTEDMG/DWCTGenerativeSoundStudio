@@ -1,6 +1,9 @@
 locals {
-  name = "${var.prefix}-${var.environment}"
-  tags = ["application:edmg-studio", "environment:${var.environment}"]
+  name                = "${var.prefix}-${var.environment}"
+  tags                = ["application:edmg-studio", "environment:${var.environment}"]
+  gpu_enabled         = var.accelerator_profile != "cpu"
+  cuda_driver_enabled = var.accelerator_profile == "cuda"
+  nvidia_vgpu_enabled = var.accelerator_profile == "nvidia-vgpu"
 }
 resource "ibm_is_vpc" "studio" {
   name           = local.name
@@ -65,7 +68,11 @@ resource "ibm_is_instance" "studio" {
     security_groups = [ibm_is_security_group.studio.id]
   }
   user_data = templatefile("${path.module}/scripts/cloud-init.yaml.tftpl", {
-    backend_image = var.backend_image
+    backend_image       = var.backend_image
+    accelerator_profile = var.accelerator_profile
+    gpu_enabled         = local.gpu_enabled
+    cuda_driver_enabled = local.cuda_driver_enabled
+    nvidia_vgpu_enabled = local.nvidia_vgpu_enabled
   })
   depends_on = [ibm_is_security_group_rule.web, ibm_is_security_group_rule.dns]
 }

@@ -2,20 +2,20 @@
 
 Publisher: Driftwoodcraftthing / DWCT Productions. Store product: 9NKHCN1H1B13.
 
-This candidate provisions a VPC, subnet, restricted security group, CPU virtual server and floating IP. It runs the existing Python 3.12 Studio backend on 7863, with persistent boot-disk storage and authentication. See architecture.md for security and limitations. This is not yet a qualified Catalog release.
+This candidate provisions a VPC, subnet, restricted security group, virtual server and floating IP. The default profile is CPU; optional CUDA and NVIDIA vGPU modes are configured with `accelerator_profile`. It runs the existing Python 3.12 Studio backend on 7863, with persistent boot-disk storage and authentication. See architecture.md for security and qualification limits. This is not yet a qualified GPU Catalog release.
 
 ## Prerequisites
 
 Install Terraform >=1.9,<2, IBM CLI, SSH and Docker with a Linux daemon. Supply `IC_API_KEY` privately through the environment. Never commit credentials, state or tfvars. Use encrypted, access-controlled remote state with locking for team deployments.
 
-Provide an existing resource group, regional SSH key and Ubuntu 24.04 amd64 VPC image ID. Verify image, profile and zone availability with `ibmcloud is images`, `ibmcloud is instance-profiles`, and `ibmcloud is zones`. The deployer needs resource-group Viewer and VPC Infrastructure Services Editor scoped to the target group, with lookup access to the existing image/key. Verify least-privilege permissions against customer account policies. Catalog management permissions are separate. The application receives no IBM API key.
+Provide an existing resource group, regional SSH key and Ubuntu 24.04 amd64 VPC image ID. Verify image, profile and zone availability with `ibmcloud is images`, `ibmcloud is instance-profiles`, and `ibmcloud is zones`. A100 profiles are select availability in `us-east`; visible profiles do not guarantee service entitlement, quota or capacity. The single-GPU profile is `gx3d-24x120x1a100p` with 80 GB GPU memory. Use a separate Schematics workspace and state for the GPU region; do not change the region of the running Dallas workspace. The deployer needs resource-group Viewer and VPC Infrastructure Services Editor scoped to the target group, with lookup access to the existing image/key. Verify least-privilege permissions against customer account policies. Catalog management permissions are separate. The application receives no IBM API key.
 
 ## Build and deploy
 
-From repository root, build the actual backend using its existing lockfile and CPU Dockerfile:
+From repository root, build the CPU backend using its existing lockfile:
 
 ```sh
-docker build -t YOUR_REGISTRY/edmg-backend:ibm-1.0.0 -f studio/edmg-studio/python_backend/Dockerfile studio/edmg-studio/python_backend
+docker build --build-arg EDMG_TORCH_EXTRA=cpu -t YOUR_REGISTRY/edmg-backend:ibm-1.0.0 -f studio/edmg-studio/python_backend/Dockerfile studio/edmg-studio/python_backend
 docker push YOUR_REGISTRY/edmg-backend:ibm-1.0.0
 cd deployment/ibm-cloud
 ```
@@ -32,6 +32,12 @@ terraform output ssh_tunnel
 ```
 
 Apply creates billable resources. No apply was run during development. Budget VSI uptime, boot storage, floating IP, bandwidth, registry and external inference charges using IBM's current estimator. No paid load balancer or managed logging service is created.
+
+### NVIDIA GPU image and activation
+
+For CUDA, build with `--build-arg EDMG_TORCH_EXTRA=cuda`, publish as a separate immutable image, and set `backend_image` to its `@sha256:` digest. The `ibm-cloud.yml` manual workflow builds and publishes `v1-cuda`; use the digest printed in the workflow summary. For an A100 deployment, set `region = us-east`, `zone = us-east-1`, `profile = gx3d-24x120x1a100p`, and `accelerator_profile = nvidia-vgpu` in a new workspace. Do not apply these values to the Dallas workspace.
+
+`nvidia-vgpu` mode installs NVIDIA Container Toolkit but intentionally does not install a generic NVIDIA driver. Obtain the licensed Linux vGPU guest driver and client configuration token from the NVIDIA Licensing Portal/CLS under the account's entitlement. For the Ubuntu VM, install the `.deb` guest driver with `sudo apt-get install ./nvidia-linux-grid-580_580.178.04_amd64.deb` after transferring it over verified SSH. Reboot, then place the token at `/etc/nvidia/ClientConfigToken/client_configuration_token.tok` with root-only permissions. Set `/etc/nvidia/gridd.conf` `FeatureType=2` for RTX Virtual Workstation on a physical GPU. Keep driver packages and token out of Git, the container image, Terraform variables/state, and chat. The backend service is gated on both the NVIDIA driver (`nvidia-smi -L`) and token file, so it will restart until licensing setup is complete. After setup run `sudo systemctl restart edmg`, check `nvidia-smi`, then verify `torch.cuda.is_available()` inside the backend container. NVIDIA describes IBM Cloud vGPU as BYOL; the customer must supply the vGPU license and client configuration. See https://docs.nvidia.com/vgpu/faq/latest/nls.html and https://docs.nvidia.com/vgpu/latest/grid-licensing-user-guide/configuring-nls-licensed-client.html.
 
 ## Windows connectivity and verification
 

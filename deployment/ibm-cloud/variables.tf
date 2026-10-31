@@ -35,6 +35,18 @@ variable "profile" {
   description = "profile"
   default     = "bx2-2x8"
 }
+variable "accelerator_profile" {
+  type        = string
+  description = "Backend compute mode. Use CUDA modes only with a CUDA-enabled image and a compatible NVIDIA GPU profile."
+  default     = "cpu"
+  validation {
+    condition = contains(["cpu", "cuda", "nvidia-vgpu"], var.accelerator_profile) && (
+      var.accelerator_profile == "cpu" ||
+      can(regex("^gx[23].*(a100p|h100|h200|l40s|l4|v100)$", var.profile))
+    )
+    error_message = "Choose cpu, cuda, or nvidia-vgpu; GPU modes require a compatible NVIDIA GPU profile."
+  }
+}
 variable "image_id" {
   type        = string
   description = "Customer-selected IBM Ubuntu 24.04 amd64 VPC image ID in the target region."
