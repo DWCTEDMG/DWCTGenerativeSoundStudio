@@ -1,0 +1,40 @@
+name: IBM Cloud CUDA backend image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish CUDA backend image
+        id: publish
+        uses: docker/build-push-action@v6
+        with:
+          context: studio/edmg-studio/python_backend
+          file: studio/edmg-studio/python_backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: EDMG_TORCH_EXTRA=cuda
+          tags: ghcr.io/dwctedmg/edmg-studio-backend:v1-cuda
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Report immutable image digest
+        run: |
+          {
+            echo '### Published CUDA backend image'
+            echo
+            echo '`ghcr.io/dwctedmg/edmg-studio-backend@${{ steps.publish.outputs.digest }}`'
+          } >> "$GITHUB_STEP_SUMMARY"
