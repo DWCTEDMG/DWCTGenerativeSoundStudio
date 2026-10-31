@@ -6,5 +6,5 @@ backend_image = "ghcr.io/dwctedmg/edmg-studio-backend@sha256:REPLACE_WITH_CUDA_D
 region = "us-east"
 zone = "us-east-1"
 profile = "gx3d-24x120x1a100p"
-accelerator_profile = "nvidia-vgpu"
+accelerator_profile = "nvidia-compute"
 prefix = "edmg-a100"

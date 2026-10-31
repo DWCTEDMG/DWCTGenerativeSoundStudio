@@ -3,7 +3,7 @@ locals {
   tags                = ["application:edmg-studio", "environment:${var.environment}"]
   gpu_enabled         = var.accelerator_profile != "cpu"
   cuda_driver_enabled = var.accelerator_profile == "cuda"
-  nvidia_vgpu_enabled = var.accelerator_profile == "nvidia-vgpu"
+  nvidia_compute_enabled = var.accelerator_profile == "nvidia-compute"
 }
 resource "ibm_is_vpc" "studio" {
   name           = local.name
@@ -72,7 +72,7 @@ resource "ibm_is_instance" "studio" {
     accelerator_profile = var.accelerator_profile
     gpu_enabled         = local.gpu_enabled
     cuda_driver_enabled = local.cuda_driver_enabled
-    nvidia_vgpu_enabled = local.nvidia_vgpu_enabled
+    nvidia_compute_enabled = local.nvidia_compute_enabled
   })
   depends_on = [ibm_is_security_group_rule.web, ibm_is_security_group_rule.dns]
 }

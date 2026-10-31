@@ -1,5 +1,11 @@
 #cloud-config
 write_files:
+%{ if nvidia_compute_enabled }
+  - path: /etc/nvidia/gridd.conf
+    permissions: '0644'
+    content: |
+      FeatureType=4
+%{ endif }
   - path: /etc/nginx/sites-available/edmg
     permissions: '0644'
     content: |
@@ -31,7 +37,7 @@ write_files:
       Restart=always
       RestartSec=15
       ExecStartPre=-/usr/bin/docker rm -f edmg
-%{ if nvidia_vgpu_enabled }
+%{ if nvidia_compute_enabled }
       ExecStartPre=/usr/bin/test -s /etc/nvidia/ClientConfigToken/client_configuration_token.tok
 %{ endif }
 %{ if gpu_enabled }
@@ -78,7 +84,7 @@ runcmd:
     set -eu
     umask 077
     accelerator='${accelerator_profile}'
-    case "$accelerator" in cpu) backend_accelerator=cpu ;; cuda|nvidia-vgpu) backend_accelerator=cuda ;; *) exit 2 ;; esac
+    case "$accelerator" in cpu) backend_accelerator=cpu ;; cuda|nvidia-compute) backend_accelerator=cuda ;; *) exit 2 ;; esac
     printf 'EDMG_BACKEND_AUTH_MODE=required\nEDMG_BACKEND_AUTH_TOKEN=%s\nEDMG_BACKEND_ACCELERATOR_PROFILE=%s\nEDMG_AI_PROVIDER=rule_based\n' "$(openssl rand -hex 32)" "$backend_accelerator" > /etc/edmg/backend.env
   - systemctl enable --now docker
   - |
