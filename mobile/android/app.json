@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "DWCT Studio Mobile",
+    "slug": "dwct-studio-mobile",
+    "scheme": "dwctstudio",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "org.driftwoodcraftthing.studio",
+      "permissions": [
+        "INTERNET"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}
