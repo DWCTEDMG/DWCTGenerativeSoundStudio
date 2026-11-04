@@ -1,4 +1,4 @@
-# EDMG Studio IBM Cloud candidate 1.0.1
+# EDMG Studio IBM Cloud candidate 1.0.2
 
 Publisher: Driftwoodcraftthing / DWCT Productions. Store product: 9NKHCN1H1B13.
 
@@ -61,10 +61,10 @@ For cleanup, export and verify data first, review `terraform plan -destroy`, the
 
 Run Terraform fmt/init/validate, manifest checks and container smoke tests. IBM manifest schema validation and a real private-catalog deployment are still required. JSON parsing alone is not schema validation. No tag should be created until available checks pass and the runtime is qualified.
 
-Package the repository-root ibm_catalog.json with deployment/ibm-cloud under a single archive root. Terraform working directory is `deployment/ibm-cloud`; the root manifest is authoritative and the local copy must match. Recommended variation: **EDMG Studio Backend - Standard**. Recommended version: **1.0.1**.
+Package the repository-root ibm_catalog.json with deployment/ibm-cloud under a single archive root. Terraform working directory is `deployment/ibm-cloud`; the root manifest is authoritative and the local copy must match. Recommended variation: **EDMG Studio Backend - Standard**. Recommended version: **1.0.2**.
 
-After qualification and release approval, create/push `ibm-v1.0.1`, download its archive, inspect its structure and repeat validation from the extracted working directory. Intended URL, not yet submission-ready:
-`https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio/archive/refs/tags/ibm-v1.0.1.tar.gz`
+After qualification and release approval, create/push `ibm-v1.0.2`, download its archive, inspect its structure and repeat validation from the extracted working directory. Intended URL, not yet submission-ready:
+`https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio/archive/refs/tags/ibm-v1.0.2.tar.gz`
 
 1. Create/select an IBM private catalog.
 2. Import a Terraform deployable architecture from the verified tag archive.
