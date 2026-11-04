@@ -26,6 +26,8 @@ from ..domain.director_plan import (
 from ..domain.director_scene import DirectorDocument
 from ..errors import UserFacingError
 
+_LOCAL_NEMOTRON_ENDPOINT_HOSTS = {"127.0.0.1", "localhost", "::1", "172.17.0.1"}
+
 
 class DirectorProvider(Protocol):
     def plan(
@@ -217,8 +219,9 @@ def _server_plan_schema() -> dict[str, Any]:
 class OpenAICompatibleNemotronProvider:
     def __init__(self, config: ProviderEndpoint):
         self.config = config
+        self.audio_input = "analyzed_evidence"
 
-    def _request(self, messages: list[dict[str, str]]) -> str:
+    def _request(self, messages: list[dict[str, Any]]) -> str:
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
@@ -231,7 +234,8 @@ class OpenAICompatibleNemotronProvider:
             body["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "director_plan", "schema": _server_plan_schema()}}
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        if urlsplit(self.config.endpoint).hostname == "integrate.api.nvidia.com":
+        endpoint_host = (urlsplit(self.config.endpoint).hostname or "").lower()
+        if endpoint_host == "integrate.api.nvidia.com" or endpoint_host in _LOCAL_NEMOTRON_ENDPOINT_HOSTS:
             body["chat_template_kwargs"] = {"enable_thinking": False}
         for attempt in range(2):
             response = requests.post(self.config.chat_url, headers=headers, json=body,
@@ -266,8 +270,26 @@ class OpenAICompatibleNemotronProvider:
                 "document": {"version": 1, "scenes": []},
             },
         }
+        request_text = json.dumps(request, separators=(",", ":"))
+        user_content: str | list[dict[str, Any]] = request_text
+        endpoint_host = (urlsplit(self.config.endpoint).hostname or "").lower()
+        audio_path = str(context.get("audio_path") or "").strip()
+        if endpoint_host in _LOCAL_NEMOTRON_ENDPOINT_HOSTS and audio_path:
+            audio_file = Path(audio_path).resolve()
+            allowed_root = Path("/studio/data/projects").resolve()
+            try:
+                audio_file.relative_to(allowed_root)
+            except ValueError as exc:
+                raise ValueError("Nemotron audio input must be inside the Studio projects directory") from exc
+            if not audio_file.is_file():
+                raise ValueError(f"Nemotron audio input is missing: {audio_file.name}")
+            user_content = [
+                {"type": "audio_url", "audio_url": {"url": audio_file.as_uri()}},
+                {"type": "text", "text": request_text},
+            ]
+            self.audio_input = "native_audio"
         messages = [{"role": "system", "content": system},
-                    {"role": "user", "content": json.dumps(request, separators=(",", ":"))}]
+                    {"role": "user", "content": user_content}]
         raw = self._request(messages)
         def parse_plan(response_text):
             candidate = json.loads(response_text)
@@ -484,7 +506,7 @@ def run_nemotron_director_job(
         primary_path, model_id=primary_model,
         device_map=str(settings.get("dense_device_map") or "balanced_low_0"),
     )
-    plan = provider.plan(context={k: v for k, v in context.items() if k != "audio_path"} if primary_server else context,
+    plan = provider.plan(context=context,
                          instruction=str(payload["instruction"]), mode=mode,
                          specialist_results=specialist_results, correlation_id=correlation_id)
     latency_ms = round((time.monotonic() - started) * 1000)
@@ -494,7 +516,7 @@ def run_nemotron_director_job(
         "provenance": {
             "provider": "nemotron", "model_id": primary_model,
             "execution": "server" if primary_server else "local",
-            "audio_input": "analyzed_evidence" if primary_server else "local_audio",
+            "audio_input": provider.audio_input if primary_server else "local_audio",
             "correlation_id": correlation_id, "mode": mode, "plan_validation": "passed",
             "specialist": {"model_id": settings.get("specialist_server_model") if settings.get("specialist_execution") == "server" else settings.get("specialist_model", COSMOS_MODEL_ID),
                            "execution": settings.get("specialist_execution") or "local",
