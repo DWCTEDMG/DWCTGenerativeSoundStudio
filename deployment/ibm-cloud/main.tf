@@ -73,6 +73,8 @@ resource "ibm_is_instance" "studio" {
     gpu_enabled         = local.gpu_enabled
     cuda_driver_enabled = local.cuda_driver_enabled
     nvidia_compute_enabled = local.nvidia_compute_enabled
+    gpu_coordinator_python = file("${path.module}/scripts/gpu_coordinator.py")
+    gpu_coordinator_service = file("${path.module}/scripts/edmg-gpu-coordinator.service")
   })
   depends_on = [ibm_is_security_group_rule.web, ibm_is_security_group_rule.dns]
 }

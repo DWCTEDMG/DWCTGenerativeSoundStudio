@@ -105,6 +105,22 @@ The backend includes executable adapters for five managed packages:
 | LTX-2.5 Distilled | Isolated `ltx-pipelines==1.3.0` Python runtime | CUDA and real video inference |
 | HunyuanVideo-1.5 | Official runtime through WSL2 or external Linux | CUDA, companion assets, and real video inference |
 
+### A100 default motion-video rendering
+
+On the IBM A100 deployment, HunyuanVideo-1.5 is the default isolated motion-video
+worker once its companion assets have passed their own runtime qualification. The
+CUDA backend image includes a C compiler because PyTorch/Triton may compile an
+optimized kernel during first inference. GPU deployments also install a local,
+host-owned lease coordinator. When a resident Nemotron Director container exists,
+an admitted render temporarily releases that container's GPU allocation, checks
+that render memory is available, and restores the Director when the render lease
+ends. Deployments without a resident Director retain normal single-runtime
+behavior; the coordinator does not grant Docker access to the Studio container.
+
+Rendering remains checkpointed and resumable. A successful image publish or GPU
+visibility check is not proof of a completed video: verify the actual job output
+and final media artifact before treating a render as complete.
+
 Installation is not readiness. Studio reports `runtime_ready` only after a Level-5 smoke test completes
 real inference and writes a `runtime-validation.json` receipt matching the installed package,
 dependencies, runner, hardware, and selected device. Until then the Models pages show the package as

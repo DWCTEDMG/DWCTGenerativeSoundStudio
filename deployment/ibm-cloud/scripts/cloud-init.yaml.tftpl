@@ -6,6 +6,16 @@ write_files:
     content: |
       FeatureType=4
 %{ endif }
+%{ if gpu_enabled }
+  - path: /usr/local/lib/edmg/gpu_coordinator.py
+    permissions: '0755'
+    content: |
+${indent(6, gpu_coordinator_python)}
+  - path: /etc/systemd/system/edmg-gpu-coordinator.service
+    permissions: '0644'
+    content: |
+${indent(6, gpu_coordinator_service)}
+%{ endif }
   - path: /etc/nginx/sites-available/edmg
     permissions: '0644'
     content: |
@@ -79,6 +89,9 @@ runcmd:
   - install -d -m 0700 /etc/nvidia/ClientConfigToken
 %{ endif }
   - install -d -m 0700 /etc/edmg
+%{ if gpu_enabled }
+  - install -d -m 0755 /usr/local/lib/edmg
+%{ endif }
   - install -d -o 10001 -g 10001 /srv/edmg
   - |
     set -eu
@@ -86,6 +99,9 @@ runcmd:
     accelerator='${accelerator_profile}'
     case "$accelerator" in cpu) backend_accelerator=cpu ;; cuda|nvidia-compute) backend_accelerator=cuda ;; *) exit 2 ;; esac
     printf 'EDMG_BACKEND_AUTH_MODE=required\nEDMG_BACKEND_AUTH_TOKEN=%s\nEDMG_BACKEND_ACCELERATOR_PROFILE=%s\nEDMG_AI_PROVIDER=rule_based\n' "$(openssl rand -hex 32)" "$backend_accelerator" > /etc/edmg/backend.env
+%{ if gpu_enabled }
+    printf 'EDMG_GPU_COORDINATOR_SOCKET=/studio/data/.gpu-coordinator.sock\n' >> /etc/edmg/backend.env
+%{ endif }
   - systemctl enable --now docker
   - |
     set -eu
@@ -97,4 +113,7 @@ runcmd:
     systemctl enable nginx
     systemctl restart nginx
   - systemctl daemon-reload
+%{ if gpu_enabled }
+  - systemctl enable --now edmg-gpu-coordinator
+%{ endif }
   - systemctl enable --now edmg

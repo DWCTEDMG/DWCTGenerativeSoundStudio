@@ -5,8 +5,8 @@
       "label": "EDMG Studio Backend",
       "product_kind": "solution",
       "provider_name": "Driftwoodcraftthing / DWCT Productions",
-      "short_description": "Customer-owned NVIDIA A100 GPU backend infrastructure for EDMG Studio, with CPU as an option.",
-      "version": "1.0.0",
+      "short_description": "Customer-owned EDMG Studio backend infrastructure with optional CUDA and A100 motion rendering.",
+      "version": "1.0.1",
       "tags": [
         "dev_ops"
       ],

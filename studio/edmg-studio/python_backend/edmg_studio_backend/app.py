@@ -8028,6 +8028,12 @@ def _dispatch_job_impl(job) -> None:
 
 
 def _dispatch_admitted_job(job) -> None:
+    from .services.resident_gpu import resident_gpu_lease
+    with resident_gpu_lease(job):
+        _dispatch_resident_admitted_job(job)
+
+
+def _dispatch_resident_admitted_job(job) -> None:
     """Worker entry point: run the job in a child process when enabled."""
     if job.type in {"qwen_director", "runtime_optimization"}:
         # Director inference must never fall back into the API process.
