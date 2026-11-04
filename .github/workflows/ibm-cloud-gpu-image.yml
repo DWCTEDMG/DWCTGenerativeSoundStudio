@@ -27,7 +27,6 @@ jobs:
           file: studio/edmg-studio/python_backend/Dockerfile
           platforms: linux/amd64
           push: true
-          build-args: EDMG_TORCH_EXTRA=cuda
           tags: ghcr.io/dwctedmg/edmg-studio-backend:v1-cuda
           cache-from: type=gha
           cache-to: type=gha,mode=max
