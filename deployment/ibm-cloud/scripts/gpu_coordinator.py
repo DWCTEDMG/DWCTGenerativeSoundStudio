@@ -67,8 +67,8 @@ def serve(client: socket.socket) -> None:
             logging.exception("GPU handoff error")
             try:
                 client.sendall(b'{"ready":false,"error":"See gpu-coordinator service log"}\n')
-            except OSError:
-                pass
+            except OSError as exc:
+                logging.debug("Client disconnected before error response: %s", exc)
         finally:
             if suspended:
                 try:
