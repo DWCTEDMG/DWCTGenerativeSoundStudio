@@ -1016,6 +1016,11 @@ public sealed class StudioApiClient : IStudioJobsClient, IDisposable
     return PostJsonAsync<DirectorReactiveReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/reactive/review", request, cancellationToken);
   }
 
+  public Task<JsonElement> ApplyReactiveWorkflowAsync(string projectId, DirectorReactiveApplyRequest request, CancellationToken cancellationToken = default)
+  {
+    return PostJsonAsync<DirectorReactiveApplyRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/reactive/apply", request, cancellationToken);
+  }
+
   public Task<JsonElement> ApplyDirectorWorkflowAsync(string projectId, DirectorWorkflowReviewRequest request, CancellationToken cancellationToken = default)
   {
     return PostJsonAsync<DirectorWorkflowReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/apply", request, cancellationToken);

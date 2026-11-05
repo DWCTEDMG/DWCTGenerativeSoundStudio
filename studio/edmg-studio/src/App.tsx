@@ -34,6 +34,7 @@ const Models = lazy(() => import("./pages/Models"));
 const EdmgDirector = lazy(() => import("./pages/EdmgDirector"));
 const AiPlannerLab = lazy(() => import("./pages/AiPlannerLab"));
 const ReactiveLab = lazy(() => import("./pages/ReactiveLab"));
+const AIStudio = lazy(() => import("./pages/AIStudio"));
 const StudioForge = lazy(() => import("./pages/StudioForge"));
 
 function getInitialPage(): Page {
@@ -316,6 +317,8 @@ export default function App() {
     content = <AiPlannerLab {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "reactiveLab")
     content = <ReactiveLab {...commonProps} onNavigate={navigateToPage as any} />;
+  if (page === "aiStudio")
+    content = <AIStudio {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "studioForge" && isStudioForgeEnabled())
     content = <StudioForge {...commonProps} onNavigate={navigateToPage as any} />;
   if (page === "studioForge" && !isStudioForgeEnabled())

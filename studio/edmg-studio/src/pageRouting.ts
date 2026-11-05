@@ -16,6 +16,7 @@ export type Page =
   | "directorLab"
   | "plannerLab"
   | "reactiveLab"
+  | "aiStudio"
   | "studioForge";
 
 export type StudioNavigationGroupId = "flow" | "delivery" | "labs" | "system";
@@ -50,6 +51,7 @@ const PAGE_LABELS: Record<Page, string> = {
   directorLab: "EDMG Director",
   plannerLab: "AI Planner Lab",
   reactiveLab: "Reactive Lab",
+  aiStudio: "AI Studio",
   studioForge: "Studio Forge",
 };
 
@@ -69,6 +71,7 @@ const PAGE_LOADING_DETAILS: Record<Page, string> = {
   directorLab: "Preparing combined planning, reactive, and optional ChatGPT handoff controls.",
   plannerLab: "Preparing AI planning tools and Studio handoff controls.",
   reactiveLab: "Preparing audio-reactive scheduling and handoff controls.",
+  aiStudio: "Preparing the evidence, direction, motion, review, and render handoff flow.",
   studioForge: "Checking live Studio readiness, project state, and guided handoff routes.",
 };
 
@@ -85,13 +88,14 @@ const PAGE_LOADERS: Partial<Record<Page, () => Promise<unknown>>> = {
   directorLab: () => import("./pages/EdmgDirector"),
   plannerLab: () => import("./pages/AiPlannerLab"),
   reactiveLab: () => import("./pages/ReactiveLab"),
+  aiStudio: () => import("./pages/AIStudio"),
   studioForge: () => import("./pages/StudioForge"),
 };
 
 const PRELOAD_BY_PAGE: Record<Page, Page[]> = {
   dashboard: ["projects", "workspace", "setup"],
   projects: ["workspace", "dashboard"],
-  workspace: ["timeline", "render", "directorLab", "plannerLab", "reactiveLab"],
+  workspace: ["timeline", "render", "aiStudio"],
   timeline: ["render", "outputs", "workspace"],
   render: ["queue", "review", "outputs", "timeline"],
   queue: ["review", "outputs", "render"],
@@ -104,6 +108,7 @@ const PRELOAD_BY_PAGE: Record<Page, Page[]> = {
   directorLab: ["workspace", "timeline", "render"],
   plannerLab: ["workspace", "timeline", "render"],
   reactiveLab: ["workspace", "timeline", "outputs"],
+  aiStudio: ["workspace", "timeline", "render", "outputs"],
   studioForge: ["workspace", "setup", "models", "render", "review", "outputs"],
 };
 
@@ -123,27 +128,16 @@ const BASE_PAGES: Page[] = [
   "directorLab",
   "plannerLab",
   "reactiveLab",
+  "aiStudio",
 ];
 
 export function getStudioNavigationGroups(): StudioNavigationGroup[] {
   const labs: StudioNavigationItem[] = [
     {
-      page: "directorLab",
-      label: "EDMG Director",
-      hint: "Combined planning and reactive direction",
-      keywords: ["orchestrator", "director", "plan", "reactive", "creative"],
-    },
-    {
-      page: "plannerLab",
-      label: "AI Planner Lab",
-      hint: "Deep prompt and storyboard authoring",
-      keywords: ["prompt", "storyboard", "plan", "scene", "ai"],
-    },
-    {
-      page: "reactiveLab",
-      label: "Reactive Lab",
-      hint: "Audio-reactive schedules and cues",
-      keywords: ["audio", "beat", "bpm", "cue", "schedule", "motion"],
+      page: "aiStudio",
+      label: "AI Studio",
+      hint: "Evidence, direction, motion, review, and render handoff",
+      keywords: ["ai", "analysis", "planner", "director", "reactive", "motion", "review"],
     },
   ];
   if (isStudioForgeEnabled()) {
