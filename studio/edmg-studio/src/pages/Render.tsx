@@ -309,7 +309,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [keyframeContinuityMode, setKeyframeContinuityMode] = useState<KeyframeContinuityMode>(() => (
     normalizeKeyframeContinuityMode(
       savedRenderDefaults.keyframeContinuityMode
-      ?? (savedRenderDefaults.internalMotionStrategy === "storyboard_full_motion" ? "project" : "scene"),
+      ?? ((savedRenderDefaults.internalMotionStrategy || "storyboard_full_motion") === "storyboard_full_motion" ? "project" : "scene"),
     )
   ));
 

@@ -521,7 +521,7 @@ describe("Render page", () => {
 
     expect(await screen.findByText("Unit 1")).toBeTruthy();
     expect(await screen.findByRole("option", { name: /SDXL Canny ControlNet/ })).toBeTruthy();
-    expect(await screen.findByText("assets/refs/source.png")).toBeTruthy();
+    expect((await screen.findAllByText("assets/refs/source.png")).length).toBeGreaterThan(0);
     expect(await screen.findByRole("button", { name: "Duplicate" })).toBeTruthy();
   }, 10000);
 
