@@ -13,8 +13,8 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.9.8
       - run: terraform -chdir=deployment/ibm-cloud fmt -check -recursive
@@ -31,7 +31,7 @@ jobs:
     env:
       BACKEND_IMAGE: ghcr.io/dwctedmg/edmg-studio-backend:v1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build backend image
         run: docker build -t "$BACKEND_IMAGE" -f studio/edmg-studio/python_backend/Dockerfile studio/edmg-studio/python_backend
       - name: Health and authentication smoke
@@ -51,7 +51,7 @@ jobs:
           curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:7863/v1/projects
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'workflow_dispatch'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
