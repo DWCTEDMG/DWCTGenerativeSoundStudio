@@ -276,7 +276,6 @@ describe("Studio Forge", () => {
       await screen.findByRole("heading", { name: /Studio Forge/i }, { timeout: 10_000 }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Studio Forge/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /AI Planner Lab/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Reactive Lab/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /AI Studio/i })).toBeTruthy();
   });
 });
