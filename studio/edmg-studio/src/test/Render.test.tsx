@@ -533,6 +533,7 @@ describe("Render page", () => {
     expect(await screen.findByDisplayValue("Internal video model")).toBeTruthy();
     expect(await screen.findByDisplayValue("Storyboard full motion")).toBeTruthy();
     expect((await screen.findByLabelText("Keyframe continuity") as HTMLSelectElement).value).toBe("project");
+    expect(await screen.findByRole("option", { name: /NVIDIA OFA \/ FRUC/i })).toBeTruthy();
   }, 10000);
 
   it("keeps explicit internal video engines coupled to compatible models", async () => {

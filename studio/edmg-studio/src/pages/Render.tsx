@@ -266,7 +266,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalFpsOut, setInternalFpsOut] = useState<number>(24);
   const [internalFpsRender, setInternalFpsRender] = useState<number>(2);
   const [internalKeyInterval, setInternalKeyInterval] = useState<number>(5);
-  const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife">("auto");
+  const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife"|"fruc">("auto");
   const [internalModelId, setInternalModelId] = useState<string>("auto");
   const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt">("auto");
   const [operationRuntime, setOperationRuntime] = useState("inherit");
@@ -2752,10 +2752,11 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                   <div style={{ minWidth: 170 }}>
                     <div className="small">Interpolation</div>
                     <select value={internalInterp} onChange={(e) => setInternalInterp(e.target.value as any)}>
-                      <option value="auto">Auto</option>
+                      <option value="auto">Auto (RIFE, NVIDIA FRUC, then CPU)</option>
                       <option value="minterpolate">FFmpeg minterpolate</option>
                       <option value="fps">Frame duplicate</option>
-                      <option value="rife">RIFE (EDMG_RIFE_CMD)</option>
+                      <option value="rife">RIFE CUDA (EDMG_RIFE_CMD)</option>
+                      <option value="fruc">NVIDIA OFA / FRUC + NVENC (EDMG_FRUC_CMD)</option>
                     </select>
                   </div>
 <div style={{ minWidth: 240 }}>
