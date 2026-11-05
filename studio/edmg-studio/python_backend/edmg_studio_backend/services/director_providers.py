@@ -403,6 +403,8 @@ def _local_transformers_json(
 class LocalNemotronProvider:
     def __init__(self, model_path: str, *, model_id: str, device_map: str):
         self.model_path, self.model_id, self.device_map = model_path, model_id, device_map
+        self.accepts_local_audio_path = True
+        self.audio_input = "local_audio"
 
     def plan(self, *, context: dict[str, Any], instruction: str, mode: str,
              specialist_results: list[SpecialistResult], correlation_id: str) -> DirectorPlan:

@@ -525,12 +525,14 @@ describe("Render page", () => {
     expect(await screen.findByRole("button", { name: "Duplicate" })).toBeTruthy();
   }, 10000);
 
-  it("defaults internal video temporal mode to frame img2img motion", async () => {
+  it("defaults internal rendering to storyboard full motion", async () => {
     installRenderMocks();
 
     renderWithStudio(<Render />);
 
-    expect(await screen.findByDisplayValue("Internal motion (frame img2img)")).toBeTruthy();
+    expect(await screen.findByDisplayValue("Internal video model")).toBeTruthy();
+    expect(await screen.findByDisplayValue("Storyboard full motion")).toBeTruthy();
+    expect((await screen.findByLabelText("Keyframe continuity") as HTMLSelectElement).value).toBe("project");
   }, 10000);
 
   it("keeps explicit internal video engines coupled to compatible models", async () => {
@@ -679,7 +681,7 @@ describe("Render page", () => {
     fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
 
     const continuitySelect = await screen.findByLabelText("Keyframe continuity") as HTMLSelectElement;
-    expect(continuitySelect.value).toBe("scene");
+    expect(continuitySelect.value).toBe("project");
     expect(within(continuitySelect).getByRole("option", { name: "Scene resets" })).toBeTruthy();
     expect(within(continuitySelect).getByRole("option", { name: "Project-wide identity lock" })).toBeTruthy();
 

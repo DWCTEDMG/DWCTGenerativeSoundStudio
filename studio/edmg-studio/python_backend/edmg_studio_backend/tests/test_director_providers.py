@@ -249,6 +249,34 @@ def test_server_job_does_not_load_local_weights_or_send_local_audio_path(monkeyp
     assert result["provenance"]["model_id"] == "served-nemotron"
 
 
+def test_local_job_keeps_native_audio_path_for_local_provider(monkeypatch):
+    calls = []
+
+    class Local:
+        accepts_local_audio_path = True
+        audio_input = "local_audio"
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan(self, **kwargs):
+            calls.append(kwargs)
+            assert kwargs["context"]["audio_path"] == "C:/studio/song.wav"
+            return DirectorPlan.model_validate(_plan())
+
+    monkeypatch.setattr(director_providers, "LocalNemotronProvider", Local)
+    result = director_providers.run_nemotron_director_job({
+        "document": _document(), "instruction": "Direct", "source_revision": 4,
+        "audio_path": "C:/studio/song.wav", "audio_evidence": {"sections": ["intro"]},
+        "director_provider_settings": {
+            "primary_model_path": "C:/models/nemotron", "specialist_enabled": False,
+        },
+    })
+    assert len(calls) == 1
+    assert result["provenance"]["execution"] == "local"
+    assert result["provenance"]["audio_input"] == "local_audio"
+
+
 def test_server_cosmos_and_local_nemotron_can_coexist(monkeypatch):
     class Local:
         def __init__(self, *a, **k): pass

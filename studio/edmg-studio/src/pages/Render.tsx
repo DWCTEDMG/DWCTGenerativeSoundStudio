@@ -278,14 +278,18 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [executionEnvironment, setExecutionEnvironment] = useState<ExecutionEnvironment>("auto");
   const [executionAllowFallback, setExecutionAllowFallback] = useState(true);
 
-  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">("frame_img2img");
+  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">(
+    savedRenderDefaults.internalMotionStrategy === "manual" ? "frame_img2img" : "video_model",
+  );
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
   const [internalTemporalSteps, setInternalTemporalSteps] = useState<number>(12);
   const [internalRefineEvery, setInternalRefineEvery] = useState<number>(1);
   const [internalAnchorStrength, setInternalAnchorStrength] = useState<number>(0.2);
   const [internalPromptBlend, setInternalPromptBlend] = useState<boolean>(true);
   const [internalResumeExisting, setInternalResumeExisting] = useState<boolean>(savedRenderDefaults.internalResumeExisting ?? true);
-  const [internalMotionStrategy, setInternalMotionStrategy] = useState<"manual"|"storyboard_full_motion">((savedRenderDefaults.internalMotionStrategy as any) || "manual");
+  const [internalMotionStrategy, setInternalMotionStrategy] = useState<"manual"|"storyboard_full_motion">(
+    (savedRenderDefaults.internalMotionStrategy as any) || "storyboard_full_motion",
+  );
   const [internalStoryboardShotMax, setInternalStoryboardShotMax] = useState<number>(Number(savedRenderDefaults.internalStoryboardShotMaxS ?? 4));
   const [internalVideoModelEngine, setInternalVideoModelEngine] = useState<InternalVideoModelEngine>("auto");
   const [internalVideoModelId, setInternalVideoModelId] = useState<string>("");
