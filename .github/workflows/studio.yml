@@ -78,9 +78,9 @@ jobs:
       - name: Provision pinned FFmpeg
         shell: pwsh
         env:
-          FFMPEG_LINUX_ASSET: ffmpeg-N-126905-gb87602a63a-linux64-gpl.tar.xz
-          FFMPEG_LINUX_SHA256: 731a9a0616c6bf4f97858038b53ae6f959fc2e2c7fc40b5d535cc96d6ef93055
-          FFMPEG_LINUX_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-27-13-04/ffmpeg-N-126905-gb87602a63a-linux64-gpl.tar.xz
+          FFMPEG_LINUX_ASSET: ffmpeg-N-128406-g1fe6854fd9-linux64-gpl.tar.xz
+          FFMPEG_LINUX_SHA256: f13d92c6364ec8da7f0e2fdb430686cb86c7724d4da31dce5396c07480d0f2f3
+          FFMPEG_LINUX_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-04-12-51/ffmpeg-N-128406-g1fe6854fd9-linux64-gpl.tar.xz
           FFMPEG_WINDOWS_ASSET: ffmpeg-7.0.2-essentials_build.zip
           FFMPEG_WINDOWS_SHA256: d5308d30872b2739cf53169df61faba8639d39a19b20b91e611c177ef676f64c
           FFMPEG_WINDOWS_URL: https://github.com/GyanD/codexffmpeg/releases/download/7.0.2/ffmpeg-7.0.2-essentials_build.zip
