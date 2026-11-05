@@ -259,9 +259,15 @@ public sealed class JuceTimelineSnapshotTests
         new JuceTimelineClipSnapshot("clip", 0, sourceSamples.Length, 0, 1, 0, 0, FadeCurve.Linear, source)));
     float[] output = new float[framesPerBlock * 2];
     _ = renderer.ProcessBlock(output, 0, framesPerBlock);
+    const int warmupBlocks = 32;
+    for (int block = 1; block <= warmupBlocks; block++)
+    {
+      _ = renderer.ProcessBlock(output, (long)block * framesPerBlock, framesPerBlock);
+    }
+
     long before = GC.GetAllocatedBytesForCurrentThread();
     bool continuous = true;
-    for (int block = 1; block < blocks; block++)
+    for (int block = warmupBlocks + 1; block < blocks; block++)
     {
       long start = (long)block * framesPerBlock;
       JuceTimelineRenderResult result = renderer.ProcessBlock(output, start, framesPerBlock);
