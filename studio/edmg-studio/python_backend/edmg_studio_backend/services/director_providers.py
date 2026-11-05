@@ -220,6 +220,7 @@ class OpenAICompatibleNemotronProvider:
     def __init__(self, config: ProviderEndpoint):
         self.config = config
         self.audio_input = "analyzed_evidence"
+        self.accepts_local_audio_path = True
 
     def _request(self, messages: list[dict[str, Any]]) -> str:
         headers = {"Content-Type": "application/json"}
@@ -506,7 +507,10 @@ def run_nemotron_director_job(
         primary_path, model_id=primary_model,
         device_map=str(settings.get("dense_device_map") or "balanced_low_0"),
     )
-    plan = provider.plan(context=context,
+    provider_context = context if getattr(provider, "accepts_local_audio_path", False) else {
+        key: value for key, value in context.items() if key != "audio_path"
+    }
+    plan = provider.plan(context=provider_context,
                          instruction=str(payload["instruction"]), mode=mode,
                          specialist_results=specialist_results, correlation_id=correlation_id)
     latency_ms = round((time.monotonic() - started) * 1000)
