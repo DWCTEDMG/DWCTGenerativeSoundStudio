@@ -74,7 +74,12 @@ def built_in_catalog() -> list[dict[str, Any]]:
             kind="transformers",
             source="hf",
             hf_repo_id="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
-            hf_revision="e5e9932441de940c9a62185c870ea5bcd4cd24e2",
+            # Last NVIDIA snapshot compatible with Studio's locked
+            # Transformers 4.x runtime. Later snapshots require Transformers
+            # 5.6 and cannot share the current Whisper/Qwen/Diffusers worker.
+            # The weight shard objects are identical across these revisions;
+            # only the model-side Python/config files changed.
+            hf_revision="0bf01a9145d72a39679eec0146765b0c2b0e8557",
             target={"engine": "internal", "folder": "director-nvidia"},
             license_id="nvidia-open-model-license",
             license_url="https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",

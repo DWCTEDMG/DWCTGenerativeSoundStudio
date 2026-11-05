@@ -11,7 +11,7 @@ def test_nvidia_director_models_are_pinned_installable_catalog_entries():
     entries = {entry["id"]: entry for entry in built_in_catalog()}
     nemotron, cosmos = entries[NEMOTRON_ID], entries[COSMOS_ID]
     assert nemotron["recommended"] == "default"
-    assert nemotron["hf_revision"] == "e5e9932441de940c9a62185c870ea5bcd4cd24e2"
+    assert nemotron["hf_revision"] == "0bf01a9145d72a39679eec0146765b0c2b0e8557"
     assert cosmos["hf_revision"] == "a9fae2cf89dc64db96b12860417f0eb403013bb9"
     assert nemotron["installable"] is True and cosmos["installable"] is True
     assert "configuration.py" in nemotron["required_files"]
