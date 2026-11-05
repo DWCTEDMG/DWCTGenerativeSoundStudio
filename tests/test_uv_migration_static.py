@@ -46,6 +46,7 @@ SIDECAR_UV_PIP_ALLOWLIST = {
     STUDIO_ROOT / "scripts" / "setup_linux_comfyui.sh",
     STUDIO_ROOT / "scripts" / "setup_linux_hf_bucket.sh",
     STUDIO_ROOT / "scripts" / "setup_linux_s3_model_cache.sh",
+    REPO_ROOT / "scripts" / "setup_local_nvidia_director.sh",
 }
 
 LEGACY_INSTALL_PATTERNS = (
