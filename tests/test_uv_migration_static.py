@@ -46,6 +46,7 @@ SIDECAR_UV_PIP_ALLOWLIST = {
     STUDIO_ROOT / "scripts" / "setup_linux_comfyui.sh",
     STUDIO_ROOT / "scripts" / "setup_linux_hf_bucket.sh",
     STUDIO_ROOT / "scripts" / "setup_linux_s3_model_cache.sh",
+    REPO_ROOT / "scripts" / "setup_local_nvidia_director.sh",
 }
 
 LEGACY_INSTALL_PATTERNS = (
@@ -274,8 +275,8 @@ def test_ci_and_release_paths_are_frozen() -> None:
             "uv run --frozen",
             "pnpm run dist:linux",
             "Verify Linux AppImage",
-            "autobuild-2026-09-27-13-04/ffmpeg-N-126905-gb87602a63a-linux64-gpl.tar.xz",
-            "731a9a0616c6bf4f97858038b53ae6f959fc2e2c7fc40b5d535cc96d6ef93055",
+            "autobuild-2026-11-04-12-51/ffmpeg-N-128406-g1fe6854fd9-linux64-gpl.tar.xz",
+            "f13d92c6364ec8da7f0e2fdb430686cb86c7724d4da31dce5396c07480d0f2f3",
         ),
         STUDIO_ROOT / "scripts" / "release-python-toolchain.mjs": (
             'return ["lock", "--check"]',

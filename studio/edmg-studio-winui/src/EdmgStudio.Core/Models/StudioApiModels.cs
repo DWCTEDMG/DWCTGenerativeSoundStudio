@@ -1015,6 +1015,7 @@ public static class StudioJson
 [JsonSerializable(typeof(DirectorApplyRequest))]
 [JsonSerializable(typeof(DirectorWorkflowReviewRequest))]
 [JsonSerializable(typeof(DirectorReactiveReviewRequest))]
+[JsonSerializable(typeof(DirectorReactiveApplyRequest))]
 [JsonSerializable(typeof(ReviewRequest))]
 [JsonSerializable(typeof(DirectorReviewResponse))]
 [JsonSerializable(typeof(DirectorReviewListResponse))]

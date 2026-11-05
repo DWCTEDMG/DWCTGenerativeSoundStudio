@@ -211,6 +211,23 @@ def test_reactive_value_refinements_survive_reanalysis_and_common_apply(workspac
     assert loaded.meta["timeline"] == timeline
 
 
+def test_motion_plan_review_is_separate_from_explicit_apply(workspace):
+    _, store, _, project, _ = workspace
+    state = _analyze(workspace)
+    before = deepcopy(store.get(project.id).meta["timeline"])
+    reviewed = _review_reactive(workspace, state, deepcopy(state["reactive"]))
+    assert reviewed["motion_plan"]["status"] == "reviewed"
+    assert reviewed["draft"]["motion_plan"]["status"] == "reviewed"
+    assert store.get(project.id).meta["timeline"] == before
+
+    applied = _post(workspace, "/director/workflow/reactive/apply", {
+        "draft_id": reviewed["draft"]["draft_id"], "expected_revision": reviewed["revision"],
+    }, expected_revision=reviewed["revision"])
+    assert applied["status"] == "applied"
+    assert applied["motion_plan"]["status"] == "applied"
+    assert store.get(project.id).meta["motion_plan"]["status"] == "applied"
+
+
 def test_analysis_only_schedule_read_and_regenerate_use_shared_draft(workspace):
     client, store, _, project, _ = workspace
     state = _analyze(workspace)

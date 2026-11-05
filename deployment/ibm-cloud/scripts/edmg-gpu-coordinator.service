@@ -1,0 +1,17 @@
+[Unit]
+Description=EDMG shared GPU Director/render handoff
+After=docker.service
+Requires=docker.service
+RequiresMountsFor=/srv/edmg
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/edmg/gpu_coordinator.py
+ExecStopPost=-/usr/bin/docker start nemotron-vllm
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/edmg
+
+[Install]
+WantedBy=multi-user.target

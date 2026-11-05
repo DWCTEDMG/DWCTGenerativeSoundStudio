@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="690" viewBox="0 0 1100 690" role="img" aria-labelledby="t d">
+<title id="t">EDMG Studio IBM Cloud Backend Architecture</title>
+<desc id="d">Windows EDMG Studio client connects over a restricted SSH tunnel to an IBM Cloud VPC Ubuntu virtual server hosting Nginx and the Docker FastAPI backend with local storage.</desc>
+<rect width="1100" height="690" fill="#f8fafc"/>
+<text x="55" y="65" font-family="Arial,sans-serif" font-size="30" font-weight="700" fill="#17233b">EDMG Studio — IBM Cloud Backend</text>
+<text x="55" y="96" font-family="Arial,sans-serif" font-size="16" fill="#465670">Customer-owned CPU deployment · SSH-based remote access</text>
+<rect x="64" y="155" width="290" height="150" rx="14" fill="#fff" stroke="#64748b" stroke-width="2"/>
+<text x="209" y="206" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="21" fill="#14233e">EDMG Studio Desktop</text>
+<text x="209" y="240" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" fill="#44546b">Windows client</text>
+<text x="209" y="268" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#44546b">https://127.0.0.1:17863</text>
+<path d="M354 230 H490" stroke="#1d4ed8" stroke-width="4" fill="none"/>
+<polygon points="490,230 476,222 476,238" fill="#1d4ed8"/>
+<text x="422" y="201" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" font-weight="bold" fill="#1d4ed8">SSH tunnel</text>
+<text x="422" y="254" text-anchor="middle" font-family="Arial,sans-serif" font-size="13" fill="#465670">TCP 22</text>
+<rect x="497" y="132" width="536" height="480" rx="18" fill="#eaf2ff" stroke="#1d4ed8" stroke-width="2.5"/>
+<text x="523" y="170" font-family="Arial,sans-serif" font-size="22" font-weight="bold" fill="#173a75">IBM Cloud VPC</text>
+<text x="523" y="196" font-family="Arial,sans-serif" font-size="14" fill="#3b5677">Subnet · Security group · Floating IP (SSH only)</text>
+<rect x="533" y="224" width="463" height="340" rx="13" fill="#ffffff" stroke="#6682a6" stroke-width="2"/>
+<text x="558" y="258" font-family="Arial,sans-serif" font-size="19" font-weight="bold" fill="#17233b">Ubuntu Virtual Server (CPU)</text>
+<rect x="563" y="284" width="402" height="68" rx="10" fill="#e0e7ff" stroke="#818cf8"/>
+<text x="764" y="310" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" font-weight="bold" fill="#243c7d">Nginx / TLS</text>
+<text x="764" y="334" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#344b78">127.0.0.1:8443</text>
+<path d="M764 352 V383" stroke="#334155" stroke-width="3"/>
+<polygon points="764,391 757,378 771,378" fill="#334155"/>
+<rect x="563" y="394" width="402" height="70" rx="10" fill="#d1fae5" stroke="#10b981"/>
+<text x="764" y="421" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" font-weight="bold" fill="#065f46">Docker · FastAPI Backend</text>
+<text x="764" y="447" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#065f46">127.0.0.1:7863 · token authentication</text>
+<path d="M764 464 V488" stroke="#334155" stroke-width="3"/>
+<polygon points="764,496 757,483 771,483" fill="#334155"/>
+<rect x="563" y="499" width="402" height="48" rx="10" fill="#f1f5f9" stroke="#94a3b8"/>
+<text x="764" y="528" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" fill="#26364a">Local application data / boot volume</text>
+<text x="65" y="642" font-family="Arial,sans-serif" font-size="15" fill="#475569">Terraform provisions infrastructure. Cloud-init configures services. GPU generation and public HTTPS API are not included.</text>
+</svg>

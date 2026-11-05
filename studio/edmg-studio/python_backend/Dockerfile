@@ -1,6 +1,8 @@
 FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
 FROM python:3.12-slim
 
+ARG EDMG_TORCH_EXTRA=cpu
+
 COPY --from=uv /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,6 +22,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    gcc \
+    libc6-dev \
     ffmpeg \
     git \
     libgomp1 \
@@ -32,18 +36,19 @@ WORKDIR /opt/edmg/python_backend
 
 COPY . /opt/edmg/python_backend
 
-ENV EDMG_BACKEND_ACCELERATOR_PROFILE=cuda
-
 RUN uv lock --check \
+    && case "$EDMG_TORCH_EXTRA" in cpu|cuda) ;; *) echo "Unsupported EDMG_TORCH_EXTRA=$EDMG_TORCH_EXTRA" >&2; exit 2 ;; esac \
     && uv sync --frozen --no-dev \
-        --extra cuda \
+        --extra "$EDMG_TORCH_EXTRA" \
         --extra core \
         --extra audio \
         --extra asr \
         --extra internal-video \
         --extra aws \
-    && uv run --frozen --no-sync python -c \
-        "import torch; assert torch.version.cuda is not None, 'ERROR: CPU-only PyTorch installed'; print('CUDA-enabled PyTorch:', torch.version.cuda)"
+    && if [ "$EDMG_TORCH_EXTRA" = cuda ]; then \
+         uv run --frozen --no-sync python -c \
+           "import torch; assert torch.version.cuda is not None, 'ERROR: CPU-only PyTorch installed'; print('CUDA-enabled PyTorch:', torch.version.cuda)"; \
+       fi
 
 RUN mkdir -p /studio/data /studio/models /studio/cache /studio/logs /studio/external \
     && chown -R edmg:edmg /studio /home/edmg

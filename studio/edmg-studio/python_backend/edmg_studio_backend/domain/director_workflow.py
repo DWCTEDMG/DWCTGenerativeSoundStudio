@@ -19,6 +19,7 @@ from .director_scene import (
     variant_prompt_source_hash,
 )
 from .editor_commands import digest, execute
+from .motion_plan import MotionPlan
 from .planner_schedule import apply_schedule, compile_schedule
 from .project_time import ProjectClock, int64
 from .workspace_reactive import apply_overrides, reactive_projection
@@ -39,6 +40,7 @@ class DirectionDraft(ExtensibleModel):
     variant_index: int = Field(default=0, ge=0)
     reactive_overrides: dict = Field(default_factory=dict)
     reactive_extensions: dict = Field(default_factory=dict)
+    motion_plan: MotionPlan = Field(default_factory=MotionPlan)
     timeline_context: dict = Field(default_factory=dict)
     context_digest: str = ""
     context_revision: int | None = Field(default=None, ge=1)
@@ -54,6 +56,11 @@ class DirectionDraft(ExtensibleModel):
                 raise ValueError(f"Unsupported Director workflow version {version}; this server supports versions 1-2")
             if value.get("handoff_version", 1) != 1:
                 raise ValueError("Unsupported Director/Reactive handoff version")
+            if "motion_plan" not in value:
+                value["motion_plan"] = MotionPlan(
+                    reactive_overrides=deepcopy(value.get("reactive_overrides") or {}),
+                    reactive_extensions=deepcopy(value.get("reactive_extensions") or {}),
+                ).model_dump(mode="json")
         return value
 
 
@@ -192,9 +199,13 @@ def workflow_state(project) -> dict:
     elif draft.variant_index == len(variants):
         variants.append(variant)
     plan["duration_s"] = draft.schedule["transport"]["duration_s"]
+    motion_plan = draft.motion_plan.model_copy(deep=True)
+    if motion_plan.status == "draft" and (draft.reactive_overrides or draft.reactive_extensions):
+        motion_plan = MotionPlan.from_reactive_projection(draft, reactive_projection(draft, clock))
     return {"ok": True, "revision": project.revision,
             "status": "stale" if stale else draft.status, "draft": draft.model_dump(mode="json"),
             "reactive": reactive_projection(draft, clock), "plan": plan,
+            "motion_plan": motion_plan.model_dump(mode="json"),
             "timeline_context": deepcopy(draft.timeline_context),
             "context_revision": draft.context_revision,
             "director_job": deepcopy(project.meta.get("director_job"))}
@@ -333,6 +344,7 @@ def prepare_workflow(project, plan_builder, *, resulting_revision: int,
                     "frame_rate": clock.to_dict()["frame_rate"]},
         warnings=list(schedule.get("warnings") or []),
     )
+    draft.motion_plan = MotionPlan.from_reactive_projection(draft, reactive_projection(draft, clock))
     if saved.scenes or variants:
         draft.warnings.append("Existing scene timing and creative choices were retained; review the updated music schedule.")
     active_ids = {key["id"] for kind in ("camera_keys", "motion_keys") for key in schedule[kind]}
@@ -400,6 +412,11 @@ def apply_workflow(project, draft: DirectionDraft) -> None:
     clock = ProjectClock.from_timeline(project.meta.get("timeline") or {})
     timeline = apply_schedule(project.meta.get("timeline") or {}, draft.schedule)
     reactive = reactive_projection(draft, clock)
+    draft.motion_plan = MotionPlan.from_reactive_projection(
+        draft, reactive,
+        status="applied" if draft.motion_plan.status in {"reviewed", "applied"} else "draft",
+        review=draft.motion_plan.review,
+    )
     timeline["reactive_lab"] = deepcopy(reactive)
     execute(project.meta, {"operation_id": "director-workflow:" + draft.draft_id,
                           "action": "replace", "label": "Apply Director scene schedule", "timeline": timeline})
@@ -423,5 +440,6 @@ def apply_workflow(project, draft: DirectionDraft) -> None:
     project.meta.setdefault("reactive_lab_history", []).append(deepcopy(project.meta.get("last_reactive_lab") or {}))
     project.meta["reactive_lab_history"] = project.meta["reactive_lab_history"][-10:]
     project.meta["last_reactive_lab"] = reactive
+    project.meta["motion_plan"] = draft.motion_plan.model_dump(mode="json")
     draft.status = "applied"
     project.meta["director_workflow"] = draft.model_dump(mode="json")

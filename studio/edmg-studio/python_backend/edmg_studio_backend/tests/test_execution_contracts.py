@@ -155,7 +155,7 @@ def test_legacy_internal_video_request_keeps_normalized_fingerprint_and_omits_pr
     encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     assert "execution_preference" not in normalized
-    assert hashlib.sha256(encoded).hexdigest() == "6331a99869eb3b33ae812f1d37bddb5558f96911b27c278e15b8fa114ec9626c"
+    assert hashlib.sha256(encoded).hexdigest() == "fdec800e22e916f4edc7eb7c27944a587d92356b09672fd7f58c29560a6202f2"
 
 
 def test_explicit_execution_preference_serializes_without_mutating_defaults() -> None:

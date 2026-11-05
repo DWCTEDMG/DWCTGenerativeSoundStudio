@@ -266,7 +266,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [internalFpsOut, setInternalFpsOut] = useState<number>(24);
   const [internalFpsRender, setInternalFpsRender] = useState<number>(2);
   const [internalKeyInterval, setInternalKeyInterval] = useState<number>(5);
-  const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife">("auto");
+  const [internalInterp, setInternalInterp] = useState<"auto"|"minterpolate"|"fps"|"rife"|"fruc">("auto");
   const [internalModelId, setInternalModelId] = useState<string>("auto");
   const [internalRenderMode, setInternalRenderMode] = useState<"auto"|"diffusion"|"hosted"|"tensorrt">("auto");
   const [operationRuntime, setOperationRuntime] = useState("inherit");
@@ -278,14 +278,18 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [executionEnvironment, setExecutionEnvironment] = useState<ExecutionEnvironment>("auto");
   const [executionAllowFallback, setExecutionAllowFallback] = useState(true);
 
-  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">("frame_img2img");
+  const [internalTemporalMode, setInternalTemporalMode] = useState<"off"|"keyframes"|"frame_img2img"|"video_model">(
+    savedRenderDefaults.internalMotionStrategy === "manual" ? "frame_img2img" : "video_model",
+  );
   const [internalTemporalStrength, setInternalTemporalStrength] = useState<number>(0.35);
   const [internalTemporalSteps, setInternalTemporalSteps] = useState<number>(12);
   const [internalRefineEvery, setInternalRefineEvery] = useState<number>(1);
   const [internalAnchorStrength, setInternalAnchorStrength] = useState<number>(0.2);
   const [internalPromptBlend, setInternalPromptBlend] = useState<boolean>(true);
   const [internalResumeExisting, setInternalResumeExisting] = useState<boolean>(savedRenderDefaults.internalResumeExisting ?? true);
-  const [internalMotionStrategy, setInternalMotionStrategy] = useState<"manual"|"storyboard_full_motion">((savedRenderDefaults.internalMotionStrategy as any) || "manual");
+  const [internalMotionStrategy, setInternalMotionStrategy] = useState<"manual"|"storyboard_full_motion">(
+    (savedRenderDefaults.internalMotionStrategy as any) || "storyboard_full_motion",
+  );
   const [internalStoryboardShotMax, setInternalStoryboardShotMax] = useState<number>(Number(savedRenderDefaults.internalStoryboardShotMaxS ?? 4));
   const [internalVideoModelEngine, setInternalVideoModelEngine] = useState<InternalVideoModelEngine>("auto");
   const [internalVideoModelId, setInternalVideoModelId] = useState<string>("");
@@ -305,7 +309,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [keyframeContinuityMode, setKeyframeContinuityMode] = useState<KeyframeContinuityMode>(() => (
     normalizeKeyframeContinuityMode(
       savedRenderDefaults.keyframeContinuityMode
-      ?? (savedRenderDefaults.internalMotionStrategy === "storyboard_full_motion" ? "project" : "scene"),
+      ?? ((savedRenderDefaults.internalMotionStrategy || "storyboard_full_motion") === "storyboard_full_motion" ? "project" : "scene"),
     )
   ));
 
@@ -2748,10 +2752,11 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                   <div style={{ minWidth: 170 }}>
                     <div className="small">Interpolation</div>
                     <select value={internalInterp} onChange={(e) => setInternalInterp(e.target.value as any)}>
-                      <option value="auto">Auto</option>
+                      <option value="auto">Auto (RIFE, NVIDIA FRUC, then CPU)</option>
                       <option value="minterpolate">FFmpeg minterpolate</option>
                       <option value="fps">Frame duplicate</option>
-                      <option value="rife">RIFE (EDMG_RIFE_CMD)</option>
+                      <option value="rife">RIFE CUDA (EDMG_RIFE_CMD)</option>
+                      <option value="fruc">NVIDIA OFA / FRUC + NVENC (EDMG_FRUC_CMD)</option>
                     </select>
                   </div>
 <div style={{ minWidth: 240 }}>

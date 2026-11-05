@@ -42,6 +42,10 @@ public sealed record DirectorReactiveReviewRequest(
     [property: JsonPropertyName("draft_id")] string DraftId,
     [property: JsonPropertyName("payload")] JsonElement Payload);
 
+public sealed record DirectorReactiveApplyRequest(
+    [property: JsonPropertyName("expected_revision")] long ExpectedRevision,
+    [property: JsonPropertyName("draft_id")] string DraftId);
+
 public sealed record EditorCommandRequest(
     [property: JsonPropertyName("operation_id")] string OperationId,
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision,

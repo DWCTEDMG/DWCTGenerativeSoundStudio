@@ -1,12 +1,12 @@
 variable "region" {
   type        = string
-  description = "region"
-  default     = "us-south"
+  description = "IBM Cloud region; defaults to the A100-enabled us-east deployment."
+  default     = "us-east"
 }
 variable "zone" {
   type        = string
-  description = "zone"
-  default     = "us-south-1"
+  description = "A100-enabled IBM VPC zone. The default is us-east-1; confirm account availability before applying."
+  default     = "us-east-1"
 }
 variable "resource_group_id" {
   type        = string
@@ -32,8 +32,20 @@ variable "environment" {
 }
 variable "profile" {
   type        = string
-  description = "profile"
-  default     = "bx2-2x8"
+  description = "IBM VPC profile; defaults to one A100 80 GB GPU."
+  default     = "gx3d-24x120x1a100p"
+}
+variable "accelerator_profile" {
+  type        = string
+  description = "Backend compute mode; defaults to IBM A100 with NVIDIA Virtual Compute Server licensing."
+  default     = "nvidia-compute"
+  validation {
+    condition = contains(["cpu", "cuda", "nvidia-compute"], var.accelerator_profile) && (
+      var.accelerator_profile == "cpu" ||
+      can(regex("^gx[23].*(a100p|h100|h200|l40s|l4|v100)$", var.profile))
+    )
+    error_message = "Choose cpu, cuda, or nvidia-compute; GPU modes require a compatible NVIDIA GPU profile."
+  }
 }
 variable "image_id" {
   type        = string
@@ -54,6 +66,7 @@ variable "admin_cidr" {
 variable "backend_image" {
   type        = string
   description = "Public customer-built backend image pinned by sha256 digest."
+  default     = "ghcr.io/dwctedmg/edmg-studio-backend@sha256:bd2f64cedefb0a21faa29a399fed3226ec59bdc58dda1ec96a84184e1c721d1d"
   validation {
     condition     = can(regex("^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$", var.backend_image))
     error_message = "Use a public OCI image pinned by sha256 digest."

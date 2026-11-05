@@ -11,8 +11,9 @@ from ..domain.director_workflow import (
     workflow_state,
 )
 from ..domain.editor_commands import digest
+from ..domain.motion_plan import MotionPlan
 from ..domain.project_time import ProjectClock
-from ..domain.workspace_reactive import apply_overrides, review_reactive
+from ..domain.workspace_reactive import apply_overrides, reactive_projection, review_reactive
 from ..revisions import RevisionRoute, record_revision, revision_context
 from ..store.projects import StaleProjectRevisionError
 
@@ -31,6 +32,10 @@ class ReviewDirectionRequest(PrepareDirectionRequest):
 class ReviewReactiveRequest(PrepareDirectionRequest):
     draft_id: str = Field(min_length=1, max_length=128)
     payload: dict
+
+
+class ApplyReactiveRequest(PrepareDirectionRequest):
+    draft_id: str = Field(min_length=1, max_length=128)
 
 
 def create_workflow_router(get_store, plan_builder, get_jobs=None):
@@ -140,12 +145,31 @@ def create_workflow_router(get_store, plan_builder, get_jobs=None):
             draft = reviewed_draft(current, request.draft_id, None)
             draft.reactive_overrides = review_reactive(draft, request.payload, ProjectClock.from_timeline(current.meta.get("timeline") or {}))
             draft.schedule = apply_overrides(draft.schedule, draft.reactive_overrides)
+            projection = reactive_projection(draft, ProjectClock.from_timeline(current.meta.get("timeline") or {}))
+            draft.motion_plan = MotionPlan.from_reactive_projection(
+                draft,
+                projection,
+                status="reviewed",
+                review={"reviewed_at_revision": current.revision + 1},
+            )
             draft.source_revision = current.revision + 1
             if draft.timeline_context:
                 draft.context_revision = current.revision + 1
             draft.draft_id = digest({"source": draft.source_fingerprint,
                                      "document": draft.document.model_dump(mode="json"), "schedule": draft.schedule})
+            draft.motion_plan.source_direction_draft_id = draft.draft_id
             current.meta["director_workflow"] = draft.model_dump(mode="json")
+        current = mutate(project_id, request.expected_revision, action)
+        return workflow_state(current)
+
+    @router.post("/v1/projects/{project_id}/director/workflow/reactive/apply")
+    def reactive_apply(project_id: str, request: ApplyReactiveRequest):
+        def action(current):
+            draft = reviewed_draft(current, request.draft_id, None)
+            if draft.motion_plan.status != "reviewed":
+                raise ValueError("Review the motion plan before applying it")
+            apply_workflow(current, draft)
+
         current = mutate(project_id, request.expected_revision, action)
         return workflow_state(current)
 

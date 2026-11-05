@@ -931,6 +931,18 @@ def _project_variant_for_render(proj: Any, variant_index: int) -> tuple[dict[str
 
 def _active_parseq_manifest(proj: Any) -> dict[str, Any] | None:
     meta = proj.meta if isinstance(getattr(proj, "meta", None), dict) else {}
+    motion_plan = meta.get("motion_plan")
+    if isinstance(motion_plan, dict):
+        manifest = motion_plan.get("parseq_manifest")
+        if isinstance(manifest, dict) and motion_plan.get("status") in {"reviewed", "applied"}:
+            return manifest
+    workflow = meta.get("director_workflow")
+    if isinstance(workflow, dict):
+        plan = workflow.get("motion_plan")
+        if isinstance(plan, dict):
+            manifest = plan.get("parseq_manifest")
+            if isinstance(manifest, dict) and plan.get("status") in {"reviewed", "applied"}:
+                return manifest
     manifest = meta.get("active_parseq_manifest")
     return manifest if isinstance(manifest, dict) else None
 
@@ -8028,6 +8040,12 @@ def _dispatch_job_impl(job) -> None:
 
 
 def _dispatch_admitted_job(job) -> None:
+    from .services.resident_gpu import resident_gpu_lease
+    with resident_gpu_lease(job):
+        _dispatch_resident_admitted_job(job)
+
+
+def _dispatch_resident_admitted_job(job) -> None:
     """Worker entry point: run the job in a child process when enabled."""
     if job.type in {"qwen_director", "runtime_optimization"}:
         # Director inference must never fall back into the API process.

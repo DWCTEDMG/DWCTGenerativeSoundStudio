@@ -1,21 +1,21 @@
-# EDMG Studio IBM Cloud candidate 1.0.0
+# EDMG Studio IBM Cloud candidate 1.0.2
 
 Publisher: Driftwoodcraftthing / DWCT Productions. Store product: 9NKHCN1H1B13.
 
-This candidate provisions a VPC, subnet, restricted security group, CPU virtual server and floating IP. It runs the existing Python 3.12 Studio backend on 7863, with persistent boot-disk storage and authentication. See architecture.md for security and limitations. This is not yet a qualified Catalog release.
+This candidate provisions a VPC, subnet, restricted security group, virtual server and floating IP. The default profile is CPU; optional CUDA and NVIDIA vGPU modes are configured with `accelerator_profile`. It runs the existing Python 3.12 Studio backend on 7863, with persistent boot-disk storage and authentication. See architecture.md for security and qualification limits. Catalog publication remains a separate administrative release step.
 
 ## Prerequisites
 
 Install Terraform >=1.9,<2, IBM CLI, SSH and Docker with a Linux daemon. Supply `IC_API_KEY` privately through the environment. Never commit credentials, state or tfvars. Use encrypted, access-controlled remote state with locking for team deployments.
 
-Provide an existing resource group, regional SSH key and Ubuntu 24.04 amd64 VPC image ID. Verify image, profile and zone availability with `ibmcloud is images`, `ibmcloud is instance-profiles`, and `ibmcloud is zones`. The deployer needs resource-group Viewer and VPC Infrastructure Services Editor scoped to the target group, with lookup access to the existing image/key. Verify least-privilege permissions against customer account policies. Catalog management permissions are separate. The application receives no IBM API key.
+Provide an existing resource group, regional SSH key and Ubuntu 24.04 amd64 VPC image ID. Verify image, profile and zone availability with `ibmcloud is images`, `ibmcloud is instance-profiles`, and `ibmcloud is zones`. A100 profiles are select availability in `us-east`; visible profiles do not guarantee service entitlement, quota or capacity. The single-GPU profile is `gx3d-24x120x1a100p` with 80 GB GPU memory. Use a separate Schematics workspace and state for the GPU region; do not change the region of the running Dallas workspace. The deployer needs resource-group Viewer and VPC Infrastructure Services Editor scoped to the target group, with lookup access to the existing image/key. Verify least-privilege permissions against customer account policies. Catalog management permissions are separate. The application receives no IBM API key.
 
 ## Build and deploy
 
-From repository root, build the actual backend using its existing lockfile and CPU Dockerfile:
+From repository root, build the CPU backend using its existing lockfile:
 
 ```sh
-docker build -t YOUR_REGISTRY/edmg-backend:ibm-1.0.0 -f studio/edmg-studio/python_backend/Dockerfile studio/edmg-studio/python_backend
+docker build --build-arg EDMG_TORCH_EXTRA=cpu -t YOUR_REGISTRY/edmg-backend:ibm-1.0.0 -f studio/edmg-studio/python_backend/Dockerfile studio/edmg-studio/python_backend
 docker push YOUR_REGISTRY/edmg-backend:ibm-1.0.0
 cd deployment/ibm-cloud
 ```
@@ -33,6 +33,14 @@ terraform output ssh_tunnel
 
 Apply creates billable resources. No apply was run during development. Budget VSI uptime, boot storage, floating IP, bandwidth, registry and external inference charges using IBM's current estimator. No paid load balancer or managed logging service is created.
 
+### NVIDIA GPU image and activation
+
+For CUDA, build with `--build-arg EDMG_TORCH_EXTRA=cuda`, publish as a separate immutable image, and set `backend_image` to its `@sha256:` digest. The `ibm-cloud-gpu-image.yml` manual workflow builds and publishes `v1-cuda`; use the digest printed in the workflow summary. For an A100 deployment, set `region = us-east`, `zone = us-east-1`, `profile = gx3d-24x120x1a100p`, and `accelerator_profile = nvidia-compute` in a new workspace. Do not apply these values to the Dallas workspace.
+
+`nvidia-compute` uses IBM's dedicated A100 GPU profile with the full physical GPU assigned to the VM. It installs NVIDIA Container Toolkit and writes `FeatureType=4` for NVIDIA Virtual Compute Server, but intentionally leaves the driver to the customer-provided NVIDIA Linux guest package. Use the NVAIE/compute entitlement with a CLS client token. After the VM is reachable, transfer the licensed Linux driver package and token over SSH; install the `.deb` guest driver with `sudo apt-get install ./nvidia-linux-grid-580_580.178.04_amd64.deb`, reboot, and place the token at `/etc/nvidia/ClientConfigToken/client_configuration_token.tok` with root-only permissions. Keep driver packages and token out of Git, the container image, Terraform variables/state, and chat. The backend service is gated on both the NVIDIA driver (`nvidia-smi -L`) and token file, so it will restart until licensing setup is complete. After setup run `sudo systemctl restart edmg`, check `nvidia-smi`, then verify `torch.cuda.is_available()` inside the backend container. IBM Cloud GPU use is BYOL; the customer supplies the NVIDIA license. See https://docs.nvidia.com/vgpu/faq/latest/nls.html and https://docs.nvidia.com/vgpu/latest/grid-licensing-user-guide/configuring-nls-licensed-client.html.
+
+GPU bootstrap also installs a host-side lease coordinator and configures the backend to use its Unix socket. It is safe on deployments with no resident Director container. If a container named `nemotron-vllm` is present, a render lease stops it before Hunyuan starts, requires at least 60 GiB of free GPU memory, and restores it when the render completes or fails. The backend container never receives Docker-socket access. The CUDA image includes `gcc` and `libc6-dev` so Triton compilation during the first Hunyuan inference does not fail for lack of a C compiler.
+
 ## Windows connectivity and verification
 
 Verify the SSH host fingerprint through the IBM console. Run the emitted tunnel command, adding `-i` for your private key if needed. In WinUI Settings choose external backend, URL `https://127.0.0.1:17863`. Securely retrieve the token from `/etc/edmg/backend.env` over SSH and save it in the native backend token setting (Windows Credential Locker). Keep it out of command history and logs.
@@ -41,7 +49,7 @@ Check `/health` through the tunnel, then verify a protected endpoint rejects an 
 
 ## Capabilities and operations
 
-The frozen backend CPU/core/audio/ASR/internal-video/AWS dependency profile is reused unchanged. CPU mode is explicit and rule-based planning is the default. GPU video generation is unavailable in this variation. For an external Studio-compatible AI service, set `EDMG_AI_MODE=http` and `EDMG_AI_BASE_URL` in the root-only environment file and restart edmg. This is the Studio AI API contract, not an arbitrary OpenAI URL. Provider-specific settings are also supported by the existing backend. External inference remains untested.
+The frozen backend CPU/core/audio/ASR/internal-video/AWS dependency profile is reused unchanged. CPU mode remains explicit and rule-based planning is the default. CUDA/A100 deployments can run the qualified isolated Hunyuan motion-video lane after its companion assets and runtime have passed real-inference qualification. For an external Studio-compatible AI service, set `EDMG_AI_MODE=http` and `EDMG_AI_BASE_URL` in the root-only environment file and restart edmg. This is the Studio AI API contract, not an arbitrary OpenAI URL. Provider-specific settings are also supported by the existing backend.
 
 Use `systemctl status edmg`, `journalctl -u edmg`, `docker logs edmg`, and `/var/log/cloud-init-output.log` for troubleshooting. Check image access, DNS/HTTPS egress, disk and memory. Initial cloud-init can race floating-IP association; package installation retries up to 60 times. If retries are exhausted, inspect connectivity before retrying failed bootstrap steps without regenerating the token.
 
@@ -53,10 +61,10 @@ For cleanup, export and verify data first, review `terraform plan -destroy`, the
 
 Run Terraform fmt/init/validate, manifest checks and container smoke tests. IBM manifest schema validation and a real private-catalog deployment are still required. JSON parsing alone is not schema validation. No tag should be created until available checks pass and the runtime is qualified.
 
-Package the repository-root ibm_catalog.json with deployment/ibm-cloud under a single archive root. Terraform working directory is `deployment/ibm-cloud`; the root manifest is authoritative and the local copy must match. Recommended variation: **EDMG Studio Backend - Standard**. Recommended version: **1.0.0**.
+Package the repository-root ibm_catalog.json with deployment/ibm-cloud under a single archive root. Terraform working directory is `deployment/ibm-cloud`; the root manifest is authoritative and the local copy must match. Recommended variation: **EDMG Studio Backend - Standard**. Recommended version: **1.0.2**.
 
-After qualification and release approval, create/push `ibm-v1.0.0`, download its archive, inspect its structure and repeat validation from the extracted working directory. Intended URL, not yet submission-ready:
-`https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio/archive/refs/tags/ibm-v1.0.0.tar.gz`
+After qualification and release approval, create/push `ibm-v1.0.2`, download its archive, inspect its structure and repeat validation from the extracted working directory. Intended URL, not yet submission-ready:
+`https://github.com/DWCTEDMG/DWCTGenerativeSoundStudio/archive/refs/tags/ibm-v1.0.2.tar.gz`
 
 1. Create/select an IBM private catalog.
 2. Import a Terraform deployable architecture from the verified tag archive.

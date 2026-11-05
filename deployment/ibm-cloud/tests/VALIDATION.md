@@ -15,4 +15,8 @@ Validated locally on 2026-10-29 from base 3ec838476e94d78e271aea6200e6cfe88b2b3e
 - Catalog JSON is based on IBM's documented product/flavor structure. Full IBM manifest schema validation, imported input/IAM metadata and onboarding review remain outstanding.
 - No release tag or public release created. Version 1.0.0 is a candidate designation.
 
-The deployment does not yet satisfy every requested acceptance criterion. Optional COS/separate volumes, managed monitoring and GPU support are deferred. The source archive is infrastructure-only and requires a customer-built immutable backend image.
+The deployment does not yet satisfy every requested acceptance criterion. Optional COS/separate volumes and managed monitoring are deferred. The source archive is infrastructure-only and requires a customer-built immutable backend image.
+
+## A100 GPU default update (2026-10-31)
+
+New workspace defaults now target IBM Cloud `us-east-1`, profile `gx3d-24x120x1a100p`, `nvidia-compute`, and the public CUDA image pinned by digest. The existing Dallas CPU workspace must remain separate. This is configuration evidence only; no Terraform plan or A100 runtime validation has been performed for this update.
