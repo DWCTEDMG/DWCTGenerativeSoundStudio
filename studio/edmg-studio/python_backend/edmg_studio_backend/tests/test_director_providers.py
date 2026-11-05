@@ -52,6 +52,48 @@ def test_local_cosmos_uses_conditional_generation_head_and_offline_loading(monke
     assert calls[0][1]["device_map"] == "auto"
 
 
+def test_local_multimodal_processor_normalizes_plain_message_content(monkeypatch, tmp_path):
+    (tmp_path / "config.json").write_text('{"model_type":"nemotron_h"}')
+    captured = {}
+
+    class Output:
+        def __getitem__(self, _slice):
+            return self
+
+    model = SimpleNamespace(
+        eval=lambda: model,
+        parameters=lambda: iter([SimpleNamespace(device="cuda:0")]),
+        generate=lambda **_kwargs: Output(),
+    )
+
+    def apply_chat_template(messages, **_kwargs):
+        captured["messages"] = messages
+        return {"input_ids": SimpleNamespace(shape=(1, 3))}
+
+    processor = SimpleNamespace(
+        apply_chat_template=apply_chat_template,
+        batch_decode=lambda *args, **kwargs: ['{"status":"ok"}'],
+    )
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_bf16_supported=lambda: True), bfloat16="bf16", float16="fp16",
+        inference_mode=nullcontext))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoConfig=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(model_type="nemotron_h")),
+        AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+        AutoModel=SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        AutoModelForImageTextToText=SimpleNamespace(from_pretrained=lambda *a, **k: model)))
+
+    director_providers._local_transformers_json(
+        str(tmp_path),
+        [{"role": "system", "content": "Return JSON"},
+         {"role": "user", "content": [{"type": "text", "text": "Direct"}]}],
+        device_map="auto", max_new_tokens=4,
+    )
+    assert captured["messages"][0]["content"] == [{"type": "text", "text": "Return JSON"}]
+    assert captured["messages"][1]["content"] == [{"type": "text", "text": "Direct"}]
+
+
 def _document(intent: str = "Original") -> dict:
     return {
         "version": 1,
@@ -212,6 +254,30 @@ def test_advanced_job_degrades_when_cosmos_is_unavailable(monkeypatch):
     assert result["status"] == "draft"
     assert result["provenance"]["specialist"]["status"] == "unavailable"
     assert result["provenance"]["plan_validation"] == "passed"
+
+
+def test_advanced_job_degrades_on_unexpected_cosmos_adapter_error(monkeypatch):
+    class Nemotron:
+        def __init__(self, _path, **_kwargs): pass
+        def plan(self, **_kwargs): return DirectorPlan.model_validate(_plan())
+
+    class Cosmos:
+        def __init__(self, _path, **_kwargs): pass
+        def analyze(self, _request): raise TypeError("processor contract mismatch")
+
+    monkeypatch.setattr(director_providers, "LocalNemotronProvider", Nemotron)
+    monkeypatch.setattr(director_providers, "LocalCosmosProvider", Cosmos)
+    result = director_providers.run_nemotron_director_job({
+        "document": _document(), "instruction": "Direct", "source_revision": 4,
+        "director_quality": "advanced", "video_assets": ["reference.mp4"],
+        "director_provider_settings": {
+            "primary_model_path": "C:/models/nemotron", "specialist_model_path": "C:/models/cosmos",
+            "specialist_enabled": True, "specialist_routing": "automatic",
+        },
+    })
+    assert result["status"] == "draft"
+    assert result["provenance"]["specialist"]["status"] == "unavailable"
+    assert result["provenance"]["specialist"]["error"] == "processor contract mismatch"
 
 
 def test_runtime_settings_default_to_nemotron_and_sanitize_routing(tmp_path):

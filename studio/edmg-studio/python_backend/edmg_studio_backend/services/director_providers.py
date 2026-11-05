@@ -384,8 +384,22 @@ def _local_transformers_json(
             model = AutoModel.from_pretrained(str(path), **load_options).eval()
         except (ValueError, TypeError):
             model = AutoModelForCausalLM.from_pretrained(str(path), **load_options).eval()
+    # Multimodal processors iterate every message content item and expect a
+    # typed block.  Transformers' text-only processors also accept this shape,
+    # so normalize plain system/assistant strings at this shared boundary.
+    normalized_messages = [
+        {
+            **message,
+            "content": (
+                [{"type": "text", "text": message["content"]}]
+                if isinstance(message.get("content"), str)
+                else message.get("content", [])
+            ),
+        }
+        for message in messages
+    ]
     inputs = processor.apply_chat_template(
-        messages, tokenize=True, add_generation_prompt=True,
+        normalized_messages, tokenize=True, add_generation_prompt=True,
         return_dict=True, return_tensors="pt",
     )
     first_device = next(model.parameters()).device
@@ -500,7 +514,11 @@ def run_nemotron_director_job(
                 context=_compact_server_context(context) if specialist_server else context,
             )))
             cosmos_status = "used"
-        except (requests.RequestException, UserFacingError, ValueError, ValidationError, KeyError) as exc:
+        # Cosmos is advisory. Any ordinary adapter/model failure must be
+        # recorded as unavailable without aborting the authoritative Nemotron
+        # plan. BaseException remains intentionally uncaught for cancellation
+        # and process termination.
+        except Exception as exc:
             cosmos_status, cosmos_error = "unavailable", str(exc)
     if progress_fn:
         progress_fn("generating", "Generating the authoritative Nemotron DirectorPlan")
