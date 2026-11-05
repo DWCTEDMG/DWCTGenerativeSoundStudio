@@ -516,7 +516,7 @@ def run_nemotron_director_job(
         "provenance": {
             "provider": "nemotron", "model_id": primary_model,
             "execution": "server" if primary_server else "local",
-            "audio_input": provider.audio_input if primary_server else "local_audio",
+            "audio_input": getattr(provider, "audio_input", "analyzed_evidence") if primary_server else "local_audio",
             "correlation_id": correlation_id, "mode": mode, "plan_validation": "passed",
             "specialist": {"model_id": settings.get("specialist_server_model") if settings.get("specialist_execution") == "server" else settings.get("specialist_model", COSMOS_MODEL_ID),
                            "execution": settings.get("specialist_execution") or "local",
