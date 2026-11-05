@@ -41,6 +41,16 @@ RUN uv lock --check \
     && uv sync --frozen --no-dev \
         --extra "$EDMG_TORCH_EXTRA" --extra core --extra audio --extra asr \
         --extra internal-video --extra aws
+         --extra "$EDMG_TORCH_EXTRA" \
+         --extra core \
+         --extra audio \
+         --extra asr \
+         --extra internal-video \
+         --extra aws \
+     && if [ "$EDMG_TORCH_EXTRA" = cuda ]; then \
+          uv run --frozen --no-sync python -c \
+            "import torch; assert torch.version.cuda is not None, 'ERROR: CPU-only PyTorch installed'; print('CUDA-enabled PyTorch:', torch.version.cuda)"; \
+        fi
 
 RUN mkdir -p /studio/data /studio/models /studio/cache /studio/logs /studio/external \
     && chown -R edmg:edmg /studio /home/edmg
