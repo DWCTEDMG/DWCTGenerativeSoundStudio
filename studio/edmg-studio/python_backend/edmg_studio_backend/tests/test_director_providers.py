@@ -50,6 +50,7 @@ def test_local_cosmos_uses_conditional_generation_head_and_offline_loading(monke
     assert director_providers._local_transformers_json(str(tmp_path), [], device_map="auto", max_new_tokens=4) == '{"status":"ok"}'
     assert calls[0][1]["local_files_only"] is True
     assert calls[0][1]["device_map"] == "auto"
+    assert calls[0][1]["attn_implementation"] == "eager"
 
 
 def test_local_multimodal_processor_normalizes_plain_message_content(monkeypatch, tmp_path):
@@ -341,6 +342,39 @@ def test_local_job_keeps_native_audio_path_for_local_provider(monkeypatch):
     assert len(calls) == 1
     assert result["provenance"]["execution"] == "local"
     assert result["provenance"]["audio_input"] == "local_audio"
+
+
+def test_local_nemotron_compacts_evidence_and_merges_partial_scene_edits(monkeypatch):
+    source = _document()
+    source["scenes"].append({
+        "scene_id": "scene-2", "start_sample": "48000", "end_sample": "96000",
+        "intent": "Keep", "renderer_hints": {"custom": "preserved"},
+    })
+    captured = {}
+
+    def generate(_path, messages, **kwargs):
+        captured["request"] = json.loads(messages[1]["content"][-1]["text"])
+        captured["max_new_tokens"] = kwargs["max_new_tokens"]
+        return json.dumps(_plan("Changed"))
+
+    monkeypatch.setattr(director_providers, "_local_transformers_json", generate)
+    provider = director_providers.LocalNemotronProvider(
+        "C:/models/nemotron", model_id="managed-nemotron", device_map="auto",
+    )
+    plan = provider.plan(
+        context={
+            "source_document": source,
+            "audio_path": "C:/studio/song.wav",
+            "audio_evidence": {"features": {"energy": list(range(10000))}},
+        },
+        instruction="Direct", mode="standard", specialist_results=[], correlation_id="corr-1",
+    )
+
+    assert "audio_path" not in captured["request"]["context"]
+    assert len(captured["request"]["context"]["audio_evidence"]["features"]["energy"]["samples"]) == 24
+    assert captured["max_new_tokens"] == 4096
+    assert [scene.scene_id for scene in plan.document.scenes] == ["scene-1", "scene-2"]
+    assert plan.document.scenes[1].renderer_hints["custom"] == "preserved"
 
 
 def test_server_cosmos_and_local_nemotron_can_coexist(monkeypatch):

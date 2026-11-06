@@ -7750,15 +7750,40 @@ def _job_in_subprocess_enabled() -> bool:
     return True
 
 
-def _render_worker_command(project_id: str, job_id: str, *, attempt: int | None = None) -> list[str]:
+def _render_worker_command(
+    project_id: str,
+    job_id: str,
+    *,
+    attempt: int | None = None,
+    dependency_overlays: tuple[str, ...] = (),
+) -> list[str]:
     """Build the CLI command for an isolated render worker.
 
     Source launches need Python's module selector. A PyInstaller-frozen backend
     executable already enters ``edmg_studio_backend.cli`` directly, so passing
     ``-m edmg_studio_backend`` would be parsed as invalid CLI arguments.
     """
-    cmd = [sys.executable]
-    if not getattr(sys, "frozen", False):
+    frozen = bool(getattr(sys, "frozen", False))
+    if dependency_overlays and not frozen:
+        configured_uv = os.getenv("EDMG_UV_BIN", "").strip()
+        user_uv = Path.home() / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+        uv = configured_uv or shutil.which("uv") or (str(user_uv) if user_uv.is_file() else "")
+        if not uv:
+            raise RuntimeError("The isolated Director runtime requires uv, but uv is unavailable")
+        cmd = [
+            uv,
+            "run",
+            "--project",
+            str(Path(__file__).resolve().parents[1]),
+            "--frozen",
+            "--no-sync",
+        ]
+        for requirement in dependency_overlays:
+            cmd.extend(["--with", requirement])
+        cmd.append("python")
+    else:
+        cmd = [sys.executable]
+    if not frozen:
         cmd.extend(["-m", "edmg_studio_backend"])
     cmd.extend(["run-job", "--project", project_id, "--job", job_id])
     if attempt is not None:
@@ -7797,7 +7822,17 @@ def _run_job_in_subprocess(job) -> None:
     """
     if not _job_attempt_active(job):
         return
-    cmd = _render_worker_command(job.project_id, job.id, attempt=job.attempt)
+    overlays = (
+        ("transformers==5.6.0",)
+        if job.type == "qwen_director" and (job.payload or {}).get("provider") == "nemotron"
+        else ()
+    )
+    cmd = _render_worker_command(
+        job.project_id,
+        job.id,
+        attempt=job.attempt,
+        dependency_overlays=overlays,
+    )
     jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
     from .automatic_gpu_admission import worker_environment
     popen_kwargs: dict[str, Any] = {"env": worker_environment()}

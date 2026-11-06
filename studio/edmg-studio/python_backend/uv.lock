@@ -1019,10 +1019,12 @@ gradio = [
 internal-video = [
     { name = "accelerate" },
     { name = "diffusers" },
+    { name = "open-clip-torch" },
     { name = "qwen-omni-utils" },
     { name = "safetensors" },
     { name = "sentencepiece" },
     { name = "tensorboard" },
+    { name = "timm" },
     { name = "transformers" },
 ]
 parakeet = [
@@ -1085,6 +1087,7 @@ requires-dist = [
     { name = "nvidia-modelopt", marker = "extra == 'cuda'", specifier = "==0.47.0" },
     { name = "onnx", marker = "extra == 'cuda'", specifier = ">=1.16,<2" },
     { name = "onnxruntime-directml", marker = "sys_platform == 'win32' and extra == 'directml'", specifier = ">=1.18.0,<2" },
+    { name = "open-clip-torch", marker = "extra == 'internal-video'", specifier = "==3.2.0" },
     { name = "openai-codex", marker = "extra == 'codex'" },
     { name = "openai-whisper", marker = "extra == 'asr'", specifier = ">=20240930" },
     { name = "opencv-python-headless", marker = "extra == 'advanced'", specifier = ">=4.10,<5" },
@@ -1112,6 +1115,7 @@ requires-dist = [
     { name = "tensorrt-cu13-bindings", marker = "extra == 'cuda'", specifier = "==10.15.1.29", index = "https://pypi.nvidia.com/", conflict = { package = "edmg-studio-backend", extra = "cuda" } },
     { name = "tensorrt-cu13-libs", marker = "extra == 'cuda'", specifier = "==10.15.1.29", index = "https://pypi.nvidia.com/", conflict = { package = "edmg-studio-backend", extra = "cuda" } },
     { name = "textblob", marker = "extra == 'core'", specifier = ">=0.17,<1" },
+    { name = "timm", marker = "extra == 'internal-video'", specifier = "==1.0.22" },
     { name = "torch", marker = "extra == 'cpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "edmg-studio-backend", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "edmg-studio-backend", extra = "cuda" } },
     { name = "torch", marker = "extra == 'directml'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "edmg-studio-backend", extra = "directml" } },
@@ -1282,6 +1286,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/10/a1/ae4e3e5003468d6391d2c77b6fa1cd73bd5d13511d81c642d7b28ac90ed4/fsspec-2026.6.0.tar.gz", hash = "sha256:f5bac145310fe30e16e1471bd6840b2d990d609e872251d7e674241822abf01a", size = 313646, upload-time = "2026-06-16T01:57:28.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
+]
+
+[[package]]
+name = "ftfy"
+version = "6.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/d3/8650919bc3c7c6e90ee3fa7fd618bf373cbbe55dff043bd67353dbb20cd8/ftfy-6.3.1.tar.gz", hash = "sha256:9b3c3d90f84fb267fe64d375a07b7f8912d817cf86009ae134aa03e1819506ec", size = 308927, upload-time = "2024-10-26T00:50:35.149Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/6e/81d47999aebc1b155f81eca4477a616a70f238a2549848c38983f3c22a82/ftfy-6.3.1-py3-none-any.whl", hash = "sha256:7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083", size = 44821, upload-time = "2024-10-26T00:50:33.425Z" },
 ]
 
 [[package]]
@@ -2965,6 +2981,29 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/ea/33814eb0ec96775eda4c1d30b0d86e91d7d2cd0d84c66d3915aef0e06fa3/onnxruntime_directml-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:f2ecb68b7b7b259d2ef3112ae760149f9b5a1e7c0fbb73d539da6250a648a614", size = 25111930, upload-time = "2026-03-17T21:47:18.419Z" },
+]
+
+[[package]]
+name = "open-clip-torch"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ftfy" },
+    { name = "huggingface-hub" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "timm" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torchvision", version = "0.26.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/30/46/fb8be250fa7fcfc56fbeb41583645e18d868268f67fbbbeb8ed62a8ff18a/open_clip_torch-3.2.0.tar.gz", hash = "sha256:62b7743012ccc40fb7c64819fa762fba0a13dd74585ac733babe58c2974c2506", size = 1502853, upload-time = "2025-09-21T17:32:08.289Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/91/397327cc1597fa317942cc15bef414175eee4b3c2263b34407c57f3521f9/open_clip_torch-3.2.0-py3-none-any.whl", hash = "sha256:e1f5b3ecbadb6d8ea64b1f887db23efee9739e7c0d0075a8a2a3cabae8fed8d1", size = 1546677, upload-time = "2025-09-21T17:32:06.269Z" },
 ]
 
 [[package]]
@@ -4714,6 +4753,26 @@ wheels = [
 ]
 
 [[package]]
+name = "timm"
+version = "1.0.22"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torchvision", version = "0.26.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/9d/e4670765d1c033f97096c760b3b907eeb659cf80f3678640e5f060b04c6c/timm-1.0.22.tar.gz", hash = "sha256:14fd74bcc17db3856b1a47d26fb305576c98579ab9d02b36714a5e6b25cde422", size = 2382998, upload-time = "2025-11-05T04:06:09.377Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/14/fc04d491527b774ec7479897f5861959209de1480e4c4cd32ed098ff8bea/timm-1.0.22-py3-none-any.whl", hash = "sha256:888981753e65cbaacfc07494370138b1700a27b1f0af587f4f9b47bc024161d0", size = 2530238, upload-time = "2025-11-05T04:06:06.823Z" },
+]
+
+[[package]]
 name = "tokenizers"
 version = "0.22.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4937,9 +4996,9 @@ resolution-markers = [
     "platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", marker = "platform_machine != 'x86_64' and sys_platform == 'darwin'" },
-    { name = "pillow", marker = "platform_machine != 'x86_64' and sys_platform == 'darwin'" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine != 'x86_64' and sys_platform == 'darwin'" },
+    { name = "numpy", marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "pillow", marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine != 'x86_64' and sys_platform == 'darwin' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.26.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c409e1c3fdebec7a3834465086dbda8bf7680eff79abf7fd2f10c6b59520a7a4", upload-time = "2026-03-23T15:36:09Z" },
@@ -4957,9 +5016,9 @@ resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", marker = "platform_machine == 'x86_64' or sys_platform != 'darwin'" },
-    { name = "pillow", marker = "platform_machine == 'x86_64' or sys_platform != 'darwin'" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' or sys_platform != 'darwin'" },
+    { name = "numpy", marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "pillow", marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu') or (platform_machine == 'x86_64' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-cuda') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (platform_machine != 'x86_64' and extra == 'extra-19-edmg-studio-backend-cuda' and extra == 'extra-19-edmg-studio-backend-directml') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-cpu') or (sys_platform != 'darwin' and extra == 'extra-19-edmg-studio-backend-directml')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.26.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:17f0b542331fc94230b4214c6d123f038af7330fd81019608c0d2402f3bc3079", upload-time = "2026-03-23T15:36:09Z" },
@@ -4980,9 +5039,9 @@ resolution-markers = [
     "platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
+    { name = "numpy", marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
+    { name = "pillow", marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
+    { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-19-edmg-studio-backend-cuda' or (extra == 'extra-19-edmg-studio-backend-cpu' and extra == 'extra-19-edmg-studio-backend-directml') or (extra != 'extra-19-edmg-studio-backend-cpu' and extra != 'extra-19-edmg-studio-backend-directml')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu130/torchvision-0.26.0%2Bcu130-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:e2b39db78be674ee4ce7e921f54b70e5c281594c9267d981c061684ed38df936", upload-time = "2026-03-23T15:36:26Z" },
