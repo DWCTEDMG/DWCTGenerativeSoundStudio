@@ -53,8 +53,8 @@ def test_local_cosmos_uses_conditional_generation_head_and_offline_loading(monke
     assert calls[0][1]["attn_implementation"] == "eager"
 
 
-def test_local_multimodal_processor_normalizes_plain_message_content(monkeypatch, tmp_path):
-    (tmp_path / "config.json").write_text('{"model_type":"nemotron_h"}')
+def test_local_cosmos_processor_normalizes_plain_message_content(monkeypatch, tmp_path):
+    (tmp_path / "config.json").write_text('{"model_type":"qwen3_vl"}')
     captured = {}
 
     class Output:
@@ -75,11 +75,16 @@ def test_local_multimodal_processor_normalizes_plain_message_content(monkeypatch
         apply_chat_template=apply_chat_template,
         batch_decode=lambda *args, **kwargs: ['{"status":"ok"}'],
     )
+    monkeypatch.setattr(
+        director_providers,
+        "_install_nemotron_dispatched_cache_hooks",
+        lambda loaded: captured.setdefault("cache_hook_model", loaded) and 0,
+    )
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
         cuda=SimpleNamespace(is_bf16_supported=lambda: True), bfloat16="bf16", float16="fp16",
         inference_mode=nullcontext))
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
-        AutoConfig=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(model_type="nemotron_h")),
+        AutoConfig=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(model_type="qwen3_vl")),
         AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **k: processor),
         AutoModel=SimpleNamespace(from_pretrained=lambda *a, **k: model),
         AutoModelForCausalLM=SimpleNamespace(from_pretrained=lambda *a, **k: model),
@@ -93,6 +98,100 @@ def test_local_multimodal_processor_normalizes_plain_message_content(monkeypatch
     )
     assert captured["messages"][0]["content"] == [{"type": "text", "text": "Return JSON"}]
     assert captured["messages"][1]["content"] == [{"type": "text", "text": "Direct"}]
+    assert captured["cache_hook_model"] is model
+
+
+def test_local_nemotron_preserves_plain_system_message(monkeypatch, tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"NemotronH_Nano_Omni_Reasoning_V3"}'
+    )
+    captured = {}
+
+    class Output:
+        def __getitem__(self, _slice):
+            return self
+
+    model = SimpleNamespace(
+        eval=lambda: model,
+        parameters=lambda: iter([SimpleNamespace(device="cuda:0")]),
+        generate=lambda **_kwargs: Output(),
+    )
+
+    def apply_chat_template(messages, **_kwargs):
+        captured["messages"] = messages
+        return {"input_ids": SimpleNamespace(shape=(1, 3))}
+
+    processor = SimpleNamespace(
+        apply_chat_template=lambda *_a, **_k: pytest.fail(
+            "multimodal processor used for text-only Nemotron"
+        ),
+        tokenizer=SimpleNamespace(apply_chat_template=apply_chat_template),
+        batch_decode=lambda *args, **kwargs: ['{"status":"ok"}'],
+    )
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_bf16_supported=lambda: True), bfloat16="bf16", float16="fp16",
+        inference_mode=nullcontext))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoConfig=SimpleNamespace(from_pretrained=lambda *a, **k: SimpleNamespace(
+            model_type="NemotronH_Nano_Omni_Reasoning_V3"
+        )),
+        AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **k: processor),
+        AutoModel=SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=lambda *a, **k: model),
+        AutoModelForImageTextToText=SimpleNamespace(from_pretrained=lambda *a, **k: model)))
+    monkeypatch.setattr(
+        director_providers, "_install_nemotron_dispatched_cache_hooks", lambda _model: 0,
+    )
+
+    director_providers._local_transformers_json(
+        str(tmp_path), [{"role": "system", "content": "/no_think\nReturn JSON"}],
+        device_map="auto", max_new_tokens=4,
+    )
+
+    assert captured["messages"][0]["content"] == "/no_think\nReturn JSON"
+
+
+def test_nemotron_dispatched_cache_follows_each_layer_device():
+    class Tensor:
+        def __init__(self, device):
+            self.device = device
+
+        def to(self, device):
+            return Tensor(device)
+
+    class Layer:
+        def __init__(self, device):
+            self.device = device
+            self.hook = None
+
+        def parameters(self):
+            return iter([SimpleNamespace(device=self.device)])
+
+        def register_forward_pre_hook(self, hook, *, with_kwargs):
+            assert with_kwargs is True
+            self.hook = hook
+            return SimpleNamespace(remove=lambda: None)
+
+    layers = [Layer("cuda:1"), Layer("cuda:2")]
+    model = SimpleNamespace(
+        language_model=SimpleNamespace(backbone=SimpleNamespace(layers=layers)),
+    )
+    cache = SimpleNamespace(
+        conv_states={0: Tensor("cuda:1"), 1: Tensor("cuda:1")},
+        ssm_states={0: Tensor("cuda:1"), 1: Tensor("cuda:1")},
+        key_cache=[Tensor("cuda:1"), Tensor("cuda:1")],
+        value_cache=[Tensor("cuda:1"), Tensor("cuda:1")],
+    )
+
+    assert director_providers._install_nemotron_dispatched_cache_hooks(model) == 2
+    args, kwargs = layers[1].hook(layers[1], (), {"past_key_values": cache})
+
+    assert args == ()
+    assert kwargs["past_key_values"] is cache
+    for entries in (cache.conv_states, cache.ssm_states, cache.key_cache, cache.value_cache):
+        assert entries[0].device == "cuda:1"
+        assert entries[1].device == "cuda:2"
+    assert director_providers._install_nemotron_dispatched_cache_hooks(model) == 0
 
 
 def _document(intent: str = "Original") -> dict:
@@ -103,6 +202,13 @@ def _document(intent: str = "Original") -> dict:
             "intent": intent,
         }],
     }
+
+
+def test_director_json_object_extracts_json_from_model_prose():
+    parsed = director_providers._director_json_object(
+        'Here is the requested patch:\n```json\n{"scenes":[{"scene_id":"scene-1"}]}\n```'
+    )
+    assert parsed == {"scenes": [{"scene_id": "scene-1"}]}
 
 
 def _plan(intent: str = "Directed") -> dict:
@@ -316,19 +422,20 @@ def test_server_job_does_not_load_local_weights_or_send_local_audio_path(monkeyp
     assert result["provenance"]["model_id"] == "served-nemotron"
 
 
-def test_local_job_keeps_native_audio_path_for_local_provider(monkeypatch):
+def test_local_job_uses_analyzed_audio_evidence_by_default(monkeypatch):
     calls = []
 
     class Local:
-        accepts_local_audio_path = True
-        audio_input = "local_audio"
+        accepts_local_audio_path = False
+        audio_input = "analyzed_evidence"
 
         def __init__(self, *_args, **_kwargs):
             pass
 
         def plan(self, **kwargs):
             calls.append(kwargs)
-            assert kwargs["context"]["audio_path"] == "C:/studio/song.wav"
+            assert "audio_path" not in kwargs["context"]
+            assert kwargs["context"]["audio_evidence"]["sections"] == ["intro"]
             return DirectorPlan.model_validate(_plan())
 
     monkeypatch.setattr(director_providers, "LocalNemotronProvider", Local)
@@ -341,7 +448,16 @@ def test_local_job_keeps_native_audio_path_for_local_provider(monkeypatch):
     })
     assert len(calls) == 1
     assert result["provenance"]["execution"] == "local"
-    assert result["provenance"]["audio_input"] == "local_audio"
+    assert result["provenance"]["audio_input"] == "analyzed_evidence"
+
+
+def test_local_nemotron_native_audio_is_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("EDMG_NEMOTRON_NATIVE_AUDIO", "1")
+    provider = director_providers.LocalNemotronProvider(
+        "C:/models/nemotron", model_id="managed-nemotron", device_map="auto",
+    )
+    assert provider.accepts_local_audio_path is True
+    assert provider.audio_input == "local_audio"
 
 
 def test_local_nemotron_compacts_evidence_and_merges_partial_scene_edits(monkeypatch):
@@ -354,6 +470,7 @@ def test_local_nemotron_compacts_evidence_and_merges_partial_scene_edits(monkeyp
 
     def generate(_path, messages, **kwargs):
         captured["request"] = json.loads(messages[1]["content"][-1]["text"])
+        captured["system"] = messages[0]["content"]
         captured["max_new_tokens"] = kwargs["max_new_tokens"]
         return json.dumps(_plan("Changed"))
 
@@ -371,8 +488,12 @@ def test_local_nemotron_compacts_evidence_and_merges_partial_scene_edits(monkeyp
     )
 
     assert "audio_path" not in captured["request"]["context"]
-    assert len(captured["request"]["context"]["audio_evidence"]["features"]["energy"]["samples"]) == 24
-    assert captured["max_new_tokens"] == 4096
+    assert "energy" not in captured["request"]["context"]["audio_evidence"]["features"]
+    assert captured["system"].startswith("/no_think\n")
+    assert len(json.dumps(captured["request"])) < 20000
+    assert captured["max_new_tokens"] == 2048
+    assert "response_schema" not in captured["request"]
+    assert captured["request"]["response_contract"]["scenes"][0]["changed_fields"] == "only"
     assert [scene.scene_id for scene in plan.document.scenes] == ["scene-1", "scene-2"]
     assert plan.document.scenes[1].renderer_hints["custom"] == "preserved"
 
